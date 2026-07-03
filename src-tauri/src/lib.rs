@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use senju_core::sessions::{SessionInfo, SshSecrets};
 use senju_core::template;
-use senju_core::{SessionManager, Settings, SshHost, Stores, Workflow};
+use senju_core::{LocalSpec, Profile, SessionManager, Settings, SshHost, Stores, Workflow};
 
 struct AppState {
     stores: Stores,
@@ -48,11 +48,29 @@ type CmdResult<T> = Result<T, String>;
 // -- Sessions -----------------------------------------------------------------
 
 #[tauri::command]
-fn create_local_session(state: State<AppState>, cols: u16, rows: u16) -> CmdResult<SessionInfo> {
-    let shell = state.stores.settings().shell;
+fn create_local_session(
+    state: State<AppState>,
+    profile_id: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> CmdResult<SessionInfo> {
+    // Resolve the requested profile (or the configured default). Fall back to
+    // the legacy `settings.shell` override when no profiles exist at all.
+    let spec = match state.stores.resolve_profile(profile_id.as_deref()) {
+        Some(p) => LocalSpec {
+            command: p.command,
+            args: p.args,
+            cwd: p.cwd,
+            title: p.name,
+        },
+        None => LocalSpec {
+            command: state.stores.settings().shell,
+            ..Default::default()
+        },
+    };
     state
         .sessions
-        .create_local(&shell, cols, rows)
+        .create_local(&spec, cols, rows)
         .map_err(|e| e.to_string())
 }
 
@@ -153,6 +171,23 @@ fn delete_ssh_host(state: State<AppState>, id: String) -> CmdResult<()> {
     state.stores.delete_ssh_host(&id).map_err(|e| e.to_string())
 }
 
+// -- Terminal profiles --------------------------------------------------------------
+
+#[tauri::command]
+fn list_profiles(state: State<AppState>) -> Vec<Profile> {
+    state.stores.list_profiles()
+}
+
+#[tauri::command]
+fn save_profile(state: State<AppState>, profile: Profile) -> CmdResult<Profile> {
+    state.stores.save_profile(profile).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_profile(state: State<AppState>, id: String) -> CmdResult<()> {
+    state.stores.delete_profile(&id).map_err(|e| e.to_string())
+}
+
 // -- Settings -----------------------------------------------------------------------
 
 #[tauri::command]
@@ -203,6 +238,9 @@ pub fn run() {
             list_ssh_hosts,
             save_ssh_host,
             delete_ssh_host,
+            list_profiles,
+            save_profile,
+            delete_profile,
             get_settings,
             save_settings
         ])

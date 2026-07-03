@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
-use super::{EventSink, SessionError, SessionMap};
+use super::{EventSink, LocalSpec, SessionError, SessionMap};
 
 pub(crate) struct LocalSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
@@ -17,16 +17,16 @@ pub(crate) struct LocalSession {
 impl LocalSession {
     pub fn spawn(
         id: &str,
-        shell_override: &str,
+        spec: &LocalSpec,
         cols: u16,
         rows: u16,
         sink: Arc<dyn EventSink>,
         sessions: SessionMap,
     ) -> Result<(Self, String), SessionError> {
-        let shell = if shell_override.is_empty() {
+        let shell = if spec.command.is_empty() {
             default_shell()
         } else {
-            shell_override.to_string()
+            spec.command.clone()
         };
 
         let pty = native_pty_system();
@@ -40,10 +40,14 @@ impl LocalSession {
             .map_err(|e| SessionError::Pty(e.to_string()))?;
 
         let mut cmd = CommandBuilder::new(&shell);
+        for arg in &spec.args {
+            cmd.arg(arg);
+        }
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "senju-term");
-        if let Some(home) = dirs::home_dir() {
-            cmd.cwd(home);
+        let cwd = expand_home(&spec.cwd).or_else(|| dirs::home_dir());
+        if let Some(dir) = cwd {
+            cmd.cwd(dir);
         }
 
         let mut child = pair
@@ -78,11 +82,11 @@ impl LocalSession {
             sink.exit(&sid, code);
         });
 
-        let title = shell
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(&shell)
-            .to_string();
+        let title = if spec.title.is_empty() {
+            shell.rsplit(['/', '\\']).next().unwrap_or(&shell).to_string()
+        } else {
+            spec.title.clone()
+        };
         Ok((
             Self {
                 master: Mutex::new(pair.master),
@@ -127,4 +131,19 @@ fn default_shell() -> String {
     } else {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())
     }
+}
+
+/// Expands a leading `~` to the home directory. Returns `None` for an empty
+/// path so the caller can fall back to the home directory.
+fn expand_home(path: &str) -> Option<std::path::PathBuf> {
+    if path.is_empty() {
+        return None;
+    }
+    if let Some(rest) = path.strip_prefix('~') {
+        if let Some(home) = dirs::home_dir() {
+            let rest = rest.strip_prefix(['/', '\\']).unwrap_or(rest);
+            return Some(home.join(rest));
+        }
+    }
+    Some(std::path::PathBuf::from(path))
 }
