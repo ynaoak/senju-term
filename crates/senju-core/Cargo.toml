@@ -12,7 +12,10 @@ uuid.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 portable-pty = "0.9"
-russh = "0.54"
+# Use the `ring` crypto backend instead of the default `aws-lc-rs`, whose
+# `aws-lc-sys` C build requires NASM on Windows. `ring` needs no NASM, so a
+# stock Rust toolchain builds Senju on Windows/macOS/Linux out of the box.
+russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 dirs = "6"
 
 [dev-dependencies]
