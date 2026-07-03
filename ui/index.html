@@ -13,17 +13,28 @@
 <body>
   <div id="app">
     <header id="topbar">
+      <button id="toggle-threadbar" class="icon-btn" title="スレッド一覧を切替">☰</button>
       <div id="brand">⌘ Senju</div>
-      <div id="tabs"></div>
-      <button id="new-tab" class="icon-btn" title="新しいタブ (Ctrl+Shift+T)">＋</button>
       <div class="spacer"></div>
+      <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)">⬒ 分割</button>
       <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)">⌕ パレット <kbd>Ctrl⇧P</kbd></button>
-      <button id="toggle-sidebar" class="icon-btn" title="サイドバー切替">☰</button>
+      <button id="toggle-sidebar" class="icon-btn" title="ツールパネルを切替">🛠</button>
     </header>
 
     <div id="body">
+      <!-- 左: スレッド一覧 -->
+      <aside id="threadbar">
+        <div class="threadbar-head">
+          <span class="threadbar-title">スレッド</span>
+          <button id="new-thread" class="accent-btn" title="新しいローカルスレッド (Ctrl+Shift+T)">＋ 新規</button>
+        </div>
+        <ul id="thread-list"></ul>
+      </aside>
+
+      <!-- 中央: ペイン (上下分割可能) -->
       <main id="terminals"></main>
 
+      <!-- 右: ワークフロー / SSH / 設定 -->
       <aside id="sidebar">
         <nav id="sidebar-tabs">
           <button data-panel="workflows" class="active">Workflows</button>
@@ -62,6 +73,9 @@
       </aside>
     </div>
   </div>
+
+  <!-- 非表示スレッドの DOM 退避先 -->
+  <div id="thread-parking"></div>
 
   <!-- コマンドパレット -->
   <div id="palette" class="overlay hidden">
