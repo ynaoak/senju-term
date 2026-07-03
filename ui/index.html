@@ -9,6 +9,7 @@
   <script src="vendor/xterm.js"></script>
   <script src="vendor/addon-fit.js"></script>
   <script src="vendor/addon-web-links.js"></script>
+  <script src="vendor/addon-search.js"></script>
 </head>
 <body>
   <div id="app">
@@ -22,7 +23,7 @@
         <button class="win-btn max" data-win="maximize" title="最大化"></button>
       </div>
       <button id="toggle-threadbar" class="icon-btn" title="スレッド一覧を切替">☰</button>
-      <div id="brand" data-tauri-drag-region>⌘ Senju</div>
+      <div id="brand" data-tauri-drag-region>❯ Senju</div>
       <div class="spacer" data-tauri-drag-region></div>
       <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)">⬒ 分割</button>
       <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)">⌕ パレット <kbd>Ctrl⇧P</kbd></button>
@@ -52,7 +53,15 @@
       </aside>
 
       <!-- 中央: ペイン (上下分割可能) -->
-      <main id="terminals"></main>
+      <main id="terminals">
+        <!-- ターミナル内検索バー (Ctrl+Shift+F) -->
+        <div id="term-search" class="term-search hidden">
+          <input id="term-search-input" type="text" placeholder="検索…" autocomplete="off" />
+          <button id="term-search-prev" class="icon-btn" title="前を検索 (Shift+Enter)">↑</button>
+          <button id="term-search-next" class="icon-btn" title="次を検索 (Enter)">↓</button>
+          <button id="term-search-close" class="icon-btn" title="閉じる (Esc)">✕</button>
+        </div>
+      </main>
 
       <!-- 右: ワークフロー / SSH / プロファイル / 設定 -->
       <aside id="sidebar">
@@ -91,6 +100,12 @@
           <form id="settings-form" class="form">
             <label>フォントサイズ
               <input name="font_size" type="number" min="8" max="32" />
+            </label>
+            <label>フォントファミリー (空欄 = 既定)
+              <input name="font_family" type="text" placeholder='"JetBrains Mono", monospace' />
+            </label>
+            <label>スクロールバック行数
+              <input name="scrollback" type="number" min="1000" max="100000" />
             </label>
             <label>既定のターミナルプロファイル
               <select name="default_profile_id"></select>

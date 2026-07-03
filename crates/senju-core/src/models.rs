@@ -76,10 +76,20 @@ pub struct Settings {
     /// Id of the profile launched for new local threads when none is chosen.
     #[serde(default)]
     pub default_profile_id: String,
+    /// Terminal font family override. Empty means the built-in default stack.
+    #[serde(default)]
+    pub font_family: String,
+    /// Terminal scrollback size, in lines.
+    #[serde(default = "default_scrollback")]
+    pub scrollback: u32,
 }
 
 fn default_font_size() -> u16 {
     14
+}
+
+fn default_scrollback() -> u32 {
+    10000
 }
 
 impl Default for Settings {
@@ -88,6 +98,8 @@ impl Default for Settings {
             font_size: default_font_size(),
             shell: String::new(),
             default_profile_id: String::new(),
+            font_family: String::new(),
+            scrollback: default_scrollback(),
         }
     }
 }

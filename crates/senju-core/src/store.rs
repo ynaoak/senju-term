@@ -339,6 +339,8 @@ mod tests {
             font_size: 16,
             shell: "/bin/zsh".into(),
             default_profile_id: "abc".into(),
+            font_family: "\"JetBrains Mono\", monospace".into(),
+            scrollback: 5000,
         };
         s.save_settings(&new).unwrap();
         assert_eq!(s.settings(), new);

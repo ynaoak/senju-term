@@ -152,6 +152,7 @@ input:focus, select:focus, textarea:focus {
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  position: relative;
 }
 
 #thread-parking { display: none; }
@@ -216,7 +217,23 @@ input:focus, select:focus, textarea:focus {
 
 .thread-item .kind { font-size: 0.72rem; color: var(--violet); min-width: 2em; }
 .thread-item.local .kind { color: var(--accent-dim); }
+.thread-item .activity-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+.thread-item.activity .activity-dot { display: inline-block; }
 .thread-item .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-item .title-input {
+  flex: 1;
+  width: auto;
+  padding: 1px 4px;
+  font-size: inherit;
+  color: inherit;
+}
 .thread-item .pane-mark { color: var(--accent); font-size: 0.72rem; min-width: 1em; }
 .thread-item .pin,
 .thread-item .close {
@@ -254,6 +271,7 @@ input:focus, select:focus, textarea:focus {
 }
 
 .pane.focused .pane-head { box-shadow: inset 2px 0 0 var(--accent); }
+.pane.focused { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
 .pane-head .pane-thread {
   width: auto;
@@ -280,6 +298,29 @@ input:focus, select:focus, textarea:focus {
   gap: 12px;
   color: var(--text-dim);
 }
+
+/* ---------- in-terminal search bar (Ctrl+Shift+F) ---------- */
+.term-search {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+.term-search.hidden { display: none; }
+.term-search input {
+  width: 200px;
+  padding: 3px 8px;
+  font-size: 0.85rem;
+}
+.term-search .icon-btn { padding: 3px 8px; font-size: 0.8rem; }
 
 .splitter {
   height: 8px;
@@ -474,8 +515,9 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 #toast {
   position: fixed;
   bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
+  right: 18px;
+  left: auto;
+  transform: none;
   background: var(--bg-raised);
   border: 1px solid var(--border);
   border-radius: var(--radius);

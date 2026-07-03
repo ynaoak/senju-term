@@ -15,13 +15,14 @@ const appWindow = window.__TAURI__.window.getCurrentWindow();
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
-  threads: [],         // { id, title, kind, pinned, term, fit, hostEl }
+  threads: [],         // { id, title, kind, pinned, term, fit, hostEl, search, customTitle, activity }
   panes: [],           // { root, head, select, kindEl, closeBtn, body, threadId }
   focusedPane: 0,
   workflows: [],
   hosts: [],
   profiles: [],
-  settings: { font_size: 14, shell: '', default_profile_id: '' },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000 },
+  renaming: null,      // thread id currently being renamed inline in the sidebar
 };
 
 /* ---------------- terminal threads ---------------- */
@@ -38,6 +39,16 @@ const TERM_THEME = {
   brightYellow: '#e3b341', brightBlue: '#79c0ff', brightMagenta: '#d2a8ff',
   brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
 };
+
+const DEFAULT_FONT_STACK =
+  '"Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans Mono CJK JP", monospace';
+
+/** The custom font (if set) goes first so it takes priority, falling back to
+ * the built-in stack when it's unavailable. */
+function fontFamilyStack() {
+  const custom = (state.settings.font_family || '').trim();
+  return custom ? `${custom}, ${DEFAULT_FONT_STACK}` : DEFAULT_FONT_STACK;
+}
 
 function b64ToBytes(b64) {
   const bin = atob(b64);
@@ -99,22 +110,30 @@ function createThread(info, paneIdx) {
 
   const term = new Terminal({
     fontSize: state.settings.font_size,
-    fontFamily: '"Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans Mono CJK JP", monospace',
+    fontFamily: fontFamilyStack(),
     theme: TERM_THEME,
     cursorBlink: true,
     allowProposedApi: true,
-    scrollback: 10000,
+    scrollback: state.settings.scrollback,
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  const search = new SearchAddon.SearchAddon();
+  term.loadAddon(search);
   // App-level shortcuts must win over the shell (Ctrl+K etc. stay usable
   // inside the terminal, so app shortcuts all use Ctrl+Shift). Returning
   // false keeps xterm from consuming the event; the actual action runs in
   // the window-level keydown handler the event bubbles up to.
   term.attachCustomKeyEventHandler((ev) => {
     const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
-    return !(mod && ['p', 't', 'w', 'd', 'arrowup', 'arrowdown'].includes(ev.key.toLowerCase()));
+    const key = ev.key.toLowerCase();
+    if (!mod) return true;
+    // Ctrl+Shift+C only leaves the terminal (for the app to copy) when there
+    // is a selection; with nothing selected it's commonly a shell shortcut
+    // (e.g. SIGINT-like copy fallback), so let it through untouched.
+    if (key === 'c') return !term.hasSelection();
+    return !['p', 't', 'w', 'd', 'v', 'f', 'arrowup', 'arrowdown'].includes(key);
   });
   term.open(hostEl);
 
@@ -122,7 +141,17 @@ function createThread(info, paneIdx) {
   term.onResize(({ cols, rows }) =>
     invoke('session_resize', { id: info.id, cols, rows }).catch(() => {}));
 
-  const thread = { id: info.id, title: info.title, kind: info.kind, pinned: false, term, fit, hostEl };
+  const thread = {
+    id: info.id, title: info.title, kind: info.kind, pinned: false,
+    term, fit, hostEl, search, customTitle: false, activity: false,
+  };
+  // OSC-2 title changes (`\e]0;...\a`) rename the thread automatically,
+  // unless the user gave it a custom name (task 2).
+  term.onTitleChange((title) => {
+    if (thread.customTitle || !title) return;
+    thread.title = title;
+    renderThreads();
+  });
   state.threads.push(thread);
   assignThread(paneIdx, info.id);
   renderThreads();
@@ -162,7 +191,7 @@ function createPane() {
       <select class="pane-thread" title="このペインに表示するスレッド"></select>
       <span class="pane-kind"></span>
       <div class="spacer"></div>
-      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">▬</button>
+      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">✕</button>
     </div>
     <div class="pane-body"></div>`;
   const pane = {
@@ -203,16 +232,19 @@ function setPaneThread(paneIdx, threadId) {
     if (!thread || child !== thread.hostEl) child.remove();
   }
   if (thread) {
+    thread.activity = false; // now visible, so activity no longer pending
     pane.body.appendChild(thread.hostEl);
     requestAnimationFrame(() => {
       thread.fit.fit();
       thread.term.refresh(0, thread.term.rows - 1);
-      if (paneIdx === state.focusedPane) thread.term.focus();
+      // Don't steal focus from the sidebar's inline rename input — this rAF
+      // fires one frame after the click that may have started a rename.
+      if (paneIdx === state.focusedPane && !state.renaming) thread.term.focus();
     });
   } else {
     const empty = document.createElement('div');
     empty.className = 'pane-empty';
-    empty.innerHTML = '<p>表示するスレッドがありません</p>';
+    empty.innerHTML = '<p>スレッドがありません — 新しく作成するか、左の一覧から選択してください</p>';
     const btn = document.createElement('button');
     btn.className = 'accent-btn';
     btn.textContent = '＋ 新しいスレッド';
@@ -329,7 +361,79 @@ function togglePin(id) {
   }
 }
 
+// Rename triggers on a double click, detected manually: the first click
+// switches the pane's thread, which re-renders the list and replaces the
+// <li> — WebKit then resets its click counter, so a native dblclick never
+// fires. Two clicks on the same thread within 400ms count instead.
+const listClick = { id: null, time: 0 };
+$('#thread-list').addEventListener('click', (ev) => {
+  if (ev.target.closest('button, input')) return;
+  const li = ev.target.closest('.thread-item');
+  if (!li) return;
+  const now = Date.now();
+  if (listClick.id === li.dataset.id && now - listClick.time < 400) {
+    listClick.id = null;
+    const t = threadById(li.dataset.id);
+    // The li from this event may already be detached by the re-render the
+    // first click caused — rename the live element for this thread instead.
+    const liveLi = document.querySelector(`.thread-item[data-id="${li.dataset.id}"]`);
+    if (t && liveLi) startRename(t, liveLi);
+    return;
+  }
+  listClick.id = li.dataset.id;
+  listClick.time = now;
+});
+
+/** Swaps a thread-item's title span for an inline `<input>`; Enter commits,
+ * Escape cancels, blur commits. Empty text clears the custom title so
+ * auto-titling (task 1) resumes. */
+function startRename(t, li) {
+  if (state.renaming) return;
+  state.renaming = t.id;
+  const titleEl = li.querySelector('.title');
+  const input = document.createElement('input');
+  input.className = 'title-input';
+  input.value = t.title;
+  input.autocomplete = 'off';
+  let done = false;
+  const finish = (commit) => {
+    if (done) return;
+    done = true;
+    state.renaming = null;
+    if (commit) {
+      const trimmed = input.value.trim();
+      if (trimmed) {
+        t.title = trimmed;
+        t.customTitle = true;
+      } else {
+        t.customTitle = false;
+      }
+    }
+    renderThreads();
+  };
+  input.addEventListener('mousedown', (ev) => ev.stopPropagation());
+  input.addEventListener('click', (ev) => ev.stopPropagation());
+  input.addEventListener('keydown', (ev) => {
+    ev.stopPropagation();
+    if (ev.key === 'Enter') {
+      ev.preventDefault();
+      finish(true);
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener('blur', () => finish(true));
+  titleEl.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
 function renderThreads() {
+  // A rename is in progress: its inline <input> lives outside the normal
+  // render cycle, so skip re-rendering (it would otherwise wipe the input
+  // out from under the user on every unrelated state change).
+  if (state.renaming) return;
   const list = $('#thread-list');
   list.innerHTML = '';
   if (!state.threads.length) {
@@ -339,9 +443,11 @@ function renderThreads() {
     const li = document.createElement('li');
     const paneIdx = state.panes.findIndex((p) => p.threadId === t.id);
     const isFocused = paneIdx === state.focusedPane && paneIdx >= 0;
-    li.className = `thread-item ${t.kind}${paneIdx >= 0 ? ' shown' : ''}${isFocused ? ' focused' : ''}${t.pinned ? ' pinned' : ''}`;
+    li.className = `thread-item ${t.kind}${paneIdx >= 0 ? ' shown' : ''}${isFocused ? ' focused' : ''}${t.pinned ? ' pinned' : ''}${t.activity ? ' activity' : ''}`;
+    li.dataset.id = t.id;
     li.innerHTML = `
       <span class="kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>
+      <span class="activity-dot" title="新しい出力があります"></span>
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
       <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${t.pinned ? '📌' : '📍'}</button>
@@ -693,7 +799,10 @@ function renderProfileSettingOptions() {
 
 async function loadSettings() {
   state.settings = await invoke('get_settings');
-  $('#settings-form').elements.font_size.value = state.settings.font_size;
+  const f = $('#settings-form').elements;
+  f.font_size.value = state.settings.font_size;
+  f.font_family.value = state.settings.font_family;
+  f.scrollback.value = state.settings.scrollback;
 }
 
 $('#settings-form').addEventListener('submit', async (ev) => {
@@ -703,10 +812,14 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     ...state.settings,
     font_size: parseInt(f.elements.font_size.value, 10) || 14,
     default_profile_id: f.elements.default_profile_id.value,
+    font_family: f.elements.font_family.value.trim(),
+    scrollback: parseInt(f.elements.scrollback.value, 10) || 10000,
   };
   await invoke('save_settings', { settings: state.settings });
   for (const t of state.threads) {
     t.term.options.fontSize = state.settings.font_size;
+    t.term.options.fontFamily = fontFamilyStack();
+    t.term.options.scrollback = state.settings.scrollback;
     t.fit.fit();
   }
   renderProfiles();
@@ -1119,6 +1232,15 @@ window.addEventListener('keydown', (ev) => {
   } else if (mod && key === 'd') {
     ev.preventDefault();
     toggleSplit();
+  } else if (mod && key === 'c') {
+    ev.preventDefault();
+    copyFocusedSelection();
+  } else if (mod && key === 'v') {
+    ev.preventDefault();
+    pasteIntoFocused();
+  } else if (mod && key === 'f') {
+    ev.preventDefault();
+    termSearch.open ? closeTermSearch() : openTermSearch();
   } else if (mod && key === 'arrowup') {
     ev.preventDefault();
     focusPane(0);
@@ -1127,14 +1249,92 @@ window.addEventListener('keydown', (ev) => {
     focusPane(state.panes.length - 1);
   } else if (ev.key === 'Escape' && palette.open) {
     closePalette();
+  } else if (ev.key === 'Escape' && termSearch.open) {
+    closeTermSearch();
   }
 });
+
+/* ---------------- copy & paste ---------------- */
+
+async function copyFocusedSelection() {
+  const thread = focusedThread();
+  const sel = thread?.term.getSelection();
+  if (!sel) return;
+  try {
+    await navigator.clipboard.writeText(sel);
+    toast('コピーしました');
+  } catch (e) {
+    toast(`コピーに失敗: ${e}`, true);
+  }
+}
+
+async function pasteIntoFocused() {
+  const thread = focusedThread();
+  if (!thread) return;
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) await invoke('session_write', { id: thread.id, data: text });
+  } catch (e) {
+    toast(`貼り付けに失敗: ${e}`, true);
+  }
+}
+
+/* ---------------- in-terminal search (Ctrl+Shift+F) ---------------- */
+
+const termSearch = { open: false };
+
+function openTermSearch() {
+  termSearch.open = true;
+  $('#term-search').classList.remove('hidden');
+  const input = $('#term-search-input');
+  input.focus();
+  input.select();
+}
+
+function closeTermSearch() {
+  termSearch.open = false;
+  $('#term-search').classList.add('hidden');
+  focusedThread()?.term.focus();
+}
+
+function termFindNext(incremental) {
+  const thread = focusedThread();
+  thread?.search.findNext($('#term-search-input').value, { incremental });
+}
+
+function termFindPrevious() {
+  const thread = focusedThread();
+  thread?.search.findPrevious($('#term-search-input').value, { incremental: false });
+}
+
+$('#term-search-input').addEventListener('input', () => termFindNext(true));
+$('#term-search-input').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    closeTermSearch();
+  } else if (ev.key === 'Enter') {
+    ev.preventDefault();
+    if (ev.shiftKey) termFindPrevious();
+    else termFindNext(false);
+  }
+});
+$('#term-search-prev').addEventListener('click', () => termFindPrevious());
+$('#term-search-next').addEventListener('click', () => termFindNext(false));
+$('#term-search-close').addEventListener('click', closeTermSearch);
 
 /* ---------------- backend events & boot ---------------- */
 
 listen('session:data', (ev) => {
   const { id, data } = ev.payload;
-  threadById(id)?.term.write(b64ToBytes(data));
+  const thread = threadById(id);
+  if (!thread) return;
+  thread.term.write(b64ToBytes(data));
+  // Flag activity only for threads not currently shown in any pane; avoid a
+  // re-render on every single chunk once the flag is already set.
+  if (!thread.activity && !state.panes.some((p) => p.threadId === id)) {
+    thread.activity = true;
+    renderThreads();
+  }
 });
 
 listen('session:exit', (ev) => {
