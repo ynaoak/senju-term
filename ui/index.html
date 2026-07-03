@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Senju Term</title>
+  <link rel="stylesheet" href="vendor/xterm.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-web-links.js"></script>
+</head>
+<body>
+  <div id="app">
+    <header id="topbar">
+      <div id="brand">⌘ Senju</div>
+      <div id="tabs"></div>
+      <button id="new-tab" class="icon-btn" title="新しいタブ (Ctrl+Shift+T)">＋</button>
+      <div class="spacer"></div>
+      <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)">⌕ パレット <kbd>Ctrl⇧P</kbd></button>
+      <button id="toggle-sidebar" class="icon-btn" title="サイドバー切替">☰</button>
+    </header>
+
+    <div id="body">
+      <main id="terminals"></main>
+
+      <aside id="sidebar">
+        <nav id="sidebar-tabs">
+          <button data-panel="workflows" class="active">Workflows</button>
+          <button data-panel="hosts">SSH</button>
+          <button data-panel="settings">設定</button>
+        </nav>
+
+        <section id="panel-workflows" class="panel active">
+          <div class="panel-head">
+            <input id="wf-search" type="search" placeholder="コマンドを検索…" />
+            <button id="wf-add" class="accent-btn">＋ 登録</button>
+          </div>
+          <ul id="wf-list" class="card-list"></ul>
+        </section>
+
+        <section id="panel-hosts" class="panel">
+          <div class="panel-head">
+            <input id="host-search" type="search" placeholder="ホストを検索…" />
+            <button id="host-add" class="accent-btn">＋ 登録</button>
+          </div>
+          <ul id="host-list" class="card-list"></ul>
+        </section>
+
+        <section id="panel-settings" class="panel">
+          <form id="settings-form" class="form">
+            <label>フォントサイズ
+              <input name="font_size" type="number" min="8" max="32" />
+            </label>
+            <label>シェル (空欄 = OS 既定)
+              <input name="shell" type="text" placeholder="/bin/zsh" />
+            </label>
+            <button type="submit" class="accent-btn">保存</button>
+          </form>
+          <p class="hint">設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。</p>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <!-- コマンドパレット -->
+  <div id="palette" class="overlay hidden">
+    <div class="palette-box">
+      <input id="palette-input" type="text" placeholder="コマンド・ワークフロー・SSH ホストを検索…" autocomplete="off" />
+      <ul id="palette-results"></ul>
+    </div>
+  </div>
+
+  <!-- 汎用モーダル -->
+  <div id="modal" class="overlay hidden">
+    <div class="modal-box">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="ghost-btn">キャンセル</button>
+        <button id="modal-ok" class="accent-btn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

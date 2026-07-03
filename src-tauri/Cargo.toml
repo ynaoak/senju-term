@@ -1,0 +1,20 @@
+[package]
+name = "senju-term"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A Warp-inspired terminal with built-in custom command (workflow) management and SSH connection management."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+senju-core = { path = "../crates/senju-core" }
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
+
+[lib]
+name = "senju_term_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
