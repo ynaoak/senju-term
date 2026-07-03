@@ -180,9 +180,23 @@ async fn authenticate_with_agent(
     handle: &mut Handle<Client>,
     host: &SshHost,
 ) -> Result<(), SessionError> {
+    #[cfg(unix)]
     let mut agent = russh::keys::agent::client::AgentClient::connect_env()
         .await
         .map_err(|e| SessionError::Ssh(format!("cannot reach ssh-agent: {e}")))?;
+    // On Windows, OpenSSH's ssh-agent service listens on a named pipe rather
+    // than a unix socket, so russh has no connect_env there.
+    #[cfg(windows)]
+    let mut agent = {
+        let pipe_name = std::env::var("SSH_AUTH_SOCK")
+            .unwrap_or_else(|_| r"\\.\pipe\openssh-ssh-agent".to_string());
+        let pipe = tokio::net::windows::named_pipe::ClientOptions::new()
+            .open(&pipe_name)
+            .map_err(|e| {
+                SessionError::Ssh(format!("cannot reach ssh-agent at {pipe_name}: {e}"))
+            })?;
+        russh::keys::agent::client::AgentClient::connect(pipe)
+    };
     let identities = agent
         .request_identities()
         .await

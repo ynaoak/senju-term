@@ -1,6 +1,11 @@
-/* Senju Term frontend: tabs + xterm.js rendering, workflow (custom command)
- * management, SSH host management, command palette. Talks to the Rust
- * backend exclusively through Tauri invoke/events. */
+/* Senju Term frontend.
+ *
+ * Terminal sessions ("threads") live independently of where they are shown:
+ * the left sidebar lists every thread, the center area holds one or two
+ * stacked panes, and each pane chooses which thread it displays — Warp-style
+ * session management. Workflows (custom commands), SSH hosts and settings
+ * live in the right sidebar. Talks to the Rust backend exclusively through
+ * Tauri invoke/events. */
 'use strict';
 
 const { invoke } = window.__TAURI__.core;
@@ -9,14 +14,15 @@ const { listen } = window.__TAURI__.event;
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
-  tabs: [],            // { id, title, kind, term, fit, hostEl }
-  activeId: null,
+  threads: [],         // { id, title, kind, term, fit, hostEl }
+  panes: [],           // { root, head, select, kindEl, closeBtn, body, threadId }
+  focusedPane: 0,
   workflows: [],
   hosts: [],
   settings: { font_size: 14, shell: '' },
 };
 
-/* ---------------- terminal tabs ---------------- */
+/* ---------------- terminal threads ---------------- */
 
 const TERM_THEME = {
   background: '#0d1117',
@@ -38,31 +44,37 @@ function b64ToBytes(b64) {
   return bytes;
 }
 
-function measureCells(hostEl) {
-  // Rough initial size; the fit addon corrects it right after mount.
-  const w = hostEl.clientWidth || 800;
-  const h = hostEl.clientHeight || 500;
+function threadById(id) {
+  return state.threads.find((t) => t.id === id);
+}
+
+function focusedThread() {
+  const pane = state.panes[state.focusedPane];
+  return pane ? threadById(pane.threadId) : undefined;
+}
+
+function measureCells() {
+  const pane = state.panes[state.focusedPane];
+  const w = pane?.body.clientWidth || 800;
+  const h = pane?.body.clientHeight || 500;
   const px = state.settings.font_size;
   return { cols: Math.max(20, Math.floor(w / (px * 0.62))), rows: Math.max(5, Math.floor(h / (px * 1.4))) };
 }
 
-async function openLocalTab() {
-  const hostEl = createTermHost();
-  const { cols, rows } = measureCells(hostEl);
+async function newLocalThread({ paneIdx = state.focusedPane } = {}) {
+  const { cols, rows } = measureCells();
   try {
     const info = await invoke('create_local_session', { cols, rows });
-    mountTab(info, hostEl);
+    createThread(info, paneIdx);
   } catch (e) {
-    hostEl.remove();
     toast(`シェルの起動に失敗: ${e}`, true);
   }
 }
 
-async function openSshTab(host) {
+async function newSshThread(host) {
   const secrets = await promptSshSecrets(host);
   if (secrets === null) return; // cancelled
-  const hostEl = createTermHost();
-  const { cols, rows } = measureCells(hostEl);
+  const { cols, rows } = measureCells();
   toast(`${host.name || host.host} へ接続中…`);
   try {
     const info = await invoke('create_ssh_session', {
@@ -71,22 +83,18 @@ async function openSshTab(host) {
       passphrase: secrets.passphrase ?? null,
       cols, rows,
     });
-    mountTab(info, hostEl);
+    createThread(info, state.focusedPane);
     toast('接続しました');
   } catch (e) {
-    hostEl.remove();
     toast(`SSH 接続失敗: ${e}`, true);
   }
 }
 
-function createTermHost() {
-  const el = document.createElement('div');
-  el.className = 'term-host';
-  $('#terminals').appendChild(el);
-  return el;
-}
+function createThread(info, paneIdx) {
+  const hostEl = document.createElement('div');
+  hostEl.className = 'term-host';
+  $('#thread-parking').appendChild(hostEl);
 
-function mountTab(info, hostEl) {
   const term = new Terminal({
     fontSize: state.settings.font_size,
     fontFamily: '"Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans Mono CJK JP", monospace',
@@ -104,7 +112,7 @@ function mountTab(info, hostEl) {
   // the window-level keydown handler the event bubbles up to.
   term.attachCustomKeyEventHandler((ev) => {
     const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
-    return !(mod && ['p', 't', 'w'].includes(ev.key.toLowerCase()));
+    return !(mod && ['p', 't', 'w', 'd', 'arrowup', 'arrowdown'].includes(ev.key.toLowerCase()));
   });
   term.open(hostEl);
 
@@ -112,76 +120,245 @@ function mountTab(info, hostEl) {
   term.onResize(({ cols, rows }) =>
     invoke('session_resize', { id: info.id, cols, rows }).catch(() => {}));
 
-  const tab = { id: info.id, title: info.title, kind: info.kind, term, fit, hostEl };
-  state.tabs.push(tab);
-  activateTab(info.id);
-  renderTabs();
+  const thread = { id: info.id, title: info.title, kind: info.kind, term, fit, hostEl };
+  state.threads.push(thread);
+  assignThread(paneIdx, info.id);
+  renderThreads();
 }
 
-function activateTab(id) {
-  state.activeId = id;
-  for (const t of state.tabs) {
-    t.hostEl.classList.toggle('active', t.id === id);
-  }
-  const tab = tabById(id);
-  if (tab) {
-    requestAnimationFrame(() => {
-      tab.fit.fit();
-      tab.term.focus();
-    });
-  }
-  renderTabs();
-}
-
-function tabById(id) {
-  return state.tabs.find((t) => t.id === id);
-}
-
-function closeTab(id, { kill = true } = {}) {
-  const idx = state.tabs.findIndex((t) => t.id === id);
+function closeThread(id, { kill = true } = {}) {
+  const idx = state.threads.findIndex((t) => t.id === id);
   if (idx < 0) return;
-  const [tab] = state.tabs.splice(idx, 1);
+  const [thread] = state.threads.splice(idx, 1);
   if (kill) invoke('session_kill', { id }).catch(() => {});
-  tab.term.dispose();
-  tab.hostEl.remove();
-  if (state.activeId === id) {
-    const next = state.tabs[Math.max(0, idx - 1)];
-    if (next) activateTab(next.id);
-    else state.activeId = null;
+  thread.term.dispose();
+  thread.hostEl.remove();
+  // Any pane that showed this thread falls back to a thread that is not
+  // already displayed elsewhere, or goes empty.
+  for (let i = 0; i < state.panes.length; i++) {
+    if (state.panes[i].threadId === id) {
+      const shown = new Set(state.panes.map((p) => p.threadId));
+      const fallback = state.threads.find((t) => !shown.has(t.id));
+      setPaneThread(i, fallback ? fallback.id : null);
+    }
   }
-  renderTabs();
+  renderThreads();
 }
 
-function renderTabs() {
-  const box = $('#tabs');
-  box.innerHTML = '';
-  for (const t of state.tabs) {
-    const el = document.createElement('div');
-    el.className = `tab ${t.kind}${t.id === state.activeId ? ' active' : ''}`;
-    el.innerHTML = `<span class="kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>` +
-      `<span class="title"></span><span class="close" title="閉じる">✕</span>`;
-    el.querySelector('.title').textContent = t.title;
-    el.addEventListener('click', (ev) => {
-      if (ev.target.classList.contains('close')) closeTab(t.id);
-      else activateTab(t.id);
+/* ---------------- panes (vertical split) ---------------- */
+
+function createPane() {
+  const root = document.createElement('div');
+  root.className = 'pane';
+  root.innerHTML = `
+    <div class="pane-head">
+      <select class="pane-thread" title="このペインに表示するスレッド"></select>
+      <span class="pane-kind"></span>
+      <div class="spacer"></div>
+      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">▬</button>
+    </div>
+    <div class="pane-body"></div>`;
+  const pane = {
+    root,
+    select: root.querySelector('.pane-thread'),
+    kindEl: root.querySelector('.pane-kind'),
+    closeBtn: root.querySelector('.pane-close'),
+    body: root.querySelector('.pane-body'),
+    threadId: null,
+  };
+  pane.select.addEventListener('change', () => {
+    focusPane(state.panes.indexOf(pane));
+    assignThread(state.panes.indexOf(pane), pane.select.value || null);
+  });
+  pane.closeBtn.addEventListener('click', () => removePane(state.panes.indexOf(pane)));
+  root.addEventListener('mousedown', () => focusPane(state.panes.indexOf(pane)));
+  new ResizeObserver(() => {
+    const t = threadById(pane.threadId);
+    if (t) t.fit.fit();
+  }).observe(pane.body);
+  return pane;
+}
+
+function setPaneThread(paneIdx, threadId) {
+  const pane = state.panes[paneIdx];
+  if (!pane) return;
+  // Park the previously shown thread's DOM (it keeps running) — but only if
+  // it is still in this pane; during swaps it may already live elsewhere.
+  const prev = threadById(pane.threadId);
+  if (prev && prev.hostEl.parentElement === pane.body) {
+    $('#thread-parking').appendChild(prev.hostEl);
+  }
+  pane.threadId = threadId;
+  const thread = threadById(threadId);
+  // Clear leftovers (empty-state placeholder) without touching a hostEl that
+  // was already moved to another pane.
+  for (const child of [...pane.body.children]) {
+    if (!thread || child !== thread.hostEl) child.remove();
+  }
+  if (thread) {
+    pane.body.appendChild(thread.hostEl);
+    requestAnimationFrame(() => {
+      thread.fit.fit();
+      thread.term.refresh(0, thread.term.rows - 1);
+      if (paneIdx === state.focusedPane) thread.term.focus();
     });
-    box.appendChild(el);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'pane-empty';
+    empty.innerHTML = '<p>表示するスレッドがありません</p>';
+    const btn = document.createElement('button');
+    btn.className = 'accent-btn';
+    btn.textContent = '＋ 新しいスレッド';
+    btn.addEventListener('click', () => newLocalThread({ paneIdx }));
+    empty.appendChild(btn);
+    pane.body.appendChild(empty);
   }
+  renderThreads();
 }
 
-function activeTab() {
-  return tabById(state.activeId);
+/** Shows `threadId` in the pane; if another pane already shows it, the two
+ * panes swap so a thread is never displayed twice. */
+function assignThread(paneIdx, threadId) {
+  const pane = state.panes[paneIdx];
+  if (!pane) return;
+  if (threadId) {
+    const otherIdx = state.panes.findIndex((p, i) => i !== paneIdx && p.threadId === threadId);
+    if (otherIdx >= 0) setPaneThread(otherIdx, pane.threadId);
+  }
+  setPaneThread(paneIdx, threadId);
 }
 
-/** Sends text to the active terminal; `run` appends Enter. */
+function focusPane(idx) {
+  if (idx < 0 || idx >= state.panes.length) return;
+  state.focusedPane = idx;
+  state.panes.forEach((p, i) => p.root.classList.toggle('focused', i === idx));
+  threadById(state.panes[idx].threadId)?.term.focus();
+  renderThreads();
+}
+
+function addPane() {
+  if (state.panes.length >= 2) return;
+  const pane = createPane();
+  const splitter = document.createElement('div');
+  splitter.className = 'splitter';
+  enableSplitterDrag(splitter);
+  $('#terminals').appendChild(splitter);
+  $('#terminals').appendChild(pane.root);
+  state.panes.push(pane);
+
+  // Show a thread that isn't displayed yet, or open a fresh local shell.
+  const shown = new Set(state.panes.map((p) => p.threadId));
+  const hidden = state.threads.find((t) => !shown.has(t.id));
+  const idx = state.panes.length - 1;
+  if (hidden) assignThread(idx, hidden.id);
+  else {
+    setPaneThread(idx, null);
+    newLocalThread({ paneIdx: idx });
+  }
+  focusPane(idx);
+  updateSplitUi();
+}
+
+function removePane(idx) {
+  if (state.panes.length <= 1) return;
+  const [pane] = state.panes.splice(idx, 1);
+  const prev = threadById(pane.threadId);
+  if (prev) $('#thread-parking').appendChild(prev.hostEl); // thread keeps running
+  pane.root.remove();
+  $('#terminals').querySelector('.splitter')?.remove();
+  state.panes[0].root.style.flex = '';
+  focusPane(Math.min(state.focusedPane, state.panes.length - 1));
+  updateSplitUi();
+  renderThreads();
+}
+
+function toggleSplit() {
+  if (state.panes.length < 2) addPane();
+  else removePane(1);
+}
+
+function updateSplitUi() {
+  const split = state.panes.length >= 2;
+  $('#split-toggle').textContent = split ? '⬓ 分割解除' : '⬒ 分割';
+  document.querySelectorAll('.pane-close').forEach((b) => (b.style.display = split ? '' : 'none'));
+}
+
+function enableSplitterDrag(splitter) {
+  splitter.addEventListener('mousedown', (ev) => {
+    ev.preventDefault();
+    document.body.classList.add('row-resizing');
+    const box = $('#terminals').getBoundingClientRect();
+    const move = (e) => {
+      const ratio = Math.min(0.85, Math.max(0.15, (e.clientY - box.top) / box.height));
+      state.panes[0].root.style.flex = `0 0 calc(${(ratio * 100).toFixed(1)}% - 4px)`;
+    };
+    const up = () => {
+      document.body.classList.remove('row-resizing');
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+}
+
+/* ---------------- left thread list ---------------- */
+
+const PANE_MARK = ['▲', '▼'];
+
+function renderThreads() {
+  const list = $('#thread-list');
+  list.innerHTML = '';
+  if (!state.threads.length) {
+    list.innerHTML = '<li class="empty">スレッドがありません</li>';
+  }
+  for (const t of state.threads) {
+    const li = document.createElement('li');
+    const paneIdx = state.panes.findIndex((p) => p.threadId === t.id);
+    const isFocused = paneIdx === state.focusedPane && paneIdx >= 0;
+    li.className = `thread-item ${t.kind}${paneIdx >= 0 ? ' shown' : ''}${isFocused ? ' focused' : ''}`;
+    li.innerHTML = `
+      <span class="kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>
+      <span class="title"></span>
+      <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
+      <span class="close" title="スレッドを終了">✕</span>`;
+    li.querySelector('.title').textContent = t.title;
+    li.addEventListener('click', (ev) => {
+      if (ev.target.classList.contains('close')) closeThread(t.id);
+      else assignThread(state.focusedPane, t.id);
+    });
+    list.appendChild(li);
+  }
+  // Keep every pane's dropdown in sync with the thread list.
+  state.panes.forEach((pane) => {
+    pane.select.innerHTML = '';
+    for (const t of state.threads) {
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = `${t.kind === 'ssh' ? '[SSH] ' : ''}${t.title}`;
+      pane.select.appendChild(o);
+    }
+    if (!state.threads.length) {
+      const o = document.createElement('option');
+      o.value = '';
+      o.textContent = '(スレッドなし)';
+      pane.select.appendChild(o);
+    }
+    pane.select.value = pane.threadId || '';
+    const t = threadById(pane.threadId);
+    pane.kindEl.textContent = t ? (t.kind === 'ssh' ? 'SSH' : 'ローカル') : '';
+  });
+}
+
+/** Sends text to the focused pane's thread; `run` appends Enter. */
 function sendToActive(text, run) {
-  const tab = activeTab();
-  if (!tab) {
+  const thread = focusedThread();
+  if (!thread) {
     toast('アクティブなターミナルがありません', true);
     return;
   }
-  invoke('session_write', { id: tab.id, data: run ? text + '\r' : text }).catch((e) => toast(String(e), true));
-  tab.term.focus();
+  invoke('session_write', { id: thread.id, data: run ? text + '\r' : text }).catch((e) => toast(String(e), true));
+  thread.term.focus();
 }
 
 /* ---------------- workflows ---------------- */
@@ -232,7 +409,7 @@ function renderWorkflows() {
 }
 
 /** Fills placeholders (prompting the user when the template has any) and
- * sends the command to the active terminal. */
+ * sends the command to the focused pane's thread. */
 async function runWorkflow(w, run) {
   const placeholders = await invoke('workflow_placeholders', { command: w.command });
   let values = {};
@@ -319,7 +496,7 @@ function renderHosts() {
     li.querySelector('h4').textContent = h.name || `${h.username}@${h.host}`;
     li.querySelector('.meta').textContent =
       `${h.username}@${h.host}:${h.port} · ${AUTH_LABEL[h.auth_method] || h.auth_method}`;
-    li.querySelector('.connect').addEventListener('click', () => openSshTab(h));
+    li.querySelector('.connect').addEventListener('click', () => newSshThread(h));
     li.querySelector('.edit').addEventListener('click', () => editHost(h));
     li.querySelector('.del').addEventListener('click', async () => {
       if (!(await confirmModal(`「${h.name || h.host}」を削除しますか?`))) return;
@@ -400,11 +577,11 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     shell: f.elements.shell.value.trim(),
   };
   await invoke('save_settings', { settings: state.settings });
-  for (const t of state.tabs) {
+  for (const t of state.threads) {
     t.term.options.fontSize = state.settings.font_size;
     t.fit.fit();
   }
-  toast('設定を保存しました (シェル変更は新しいタブから)');
+  toast('設定を保存しました (シェル変更は新しいスレッドから)');
 });
 
 /* ---------------- command palette ---------------- */
@@ -417,16 +594,30 @@ const palette = {
 
 function paletteEntries() {
   const entries = [
-    { kind: 'action', label: '新しいローカルタブ', detail: 'Ctrl+Shift+T', run: openLocalTab },
+    { kind: 'action', label: '新しいローカルスレッド', detail: 'Ctrl+Shift+T', run: () => newLocalThread() },
+    {
+      kind: 'action',
+      label: state.panes.length < 2 ? 'ペインを上下分割' : 'ペイン分割を解除',
+      detail: 'Ctrl+Shift+D',
+      run: toggleSplit,
+    },
     { kind: 'action', label: 'ワークフローを登録', detail: '', run: () => editWorkflow(null) },
     { kind: 'action', label: 'SSH ホストを登録', detail: '', run: () => editHost(null) },
   ];
+  for (const t of state.threads) {
+    entries.push({
+      kind: 'thread',
+      label: `表示: ${t.title}`,
+      detail: t.kind === 'ssh' ? 'SSH スレッド' : 'ローカルスレッド',
+      run: () => assignThread(state.focusedPane, t.id),
+    });
+  }
   for (const h of state.hosts) {
     entries.push({
       kind: 'ssh',
       label: `SSH: ${h.name || h.host}`,
       detail: `${h.username}@${h.host}:${h.port}`,
-      run: () => openSshTab(h),
+      run: () => newSshThread(h),
     });
   }
   for (const w of state.workflows) {
@@ -471,7 +662,7 @@ function openPalette() {
 function closePalette() {
   palette.open = false;
   $('#palette').classList.add('hidden');
-  activeTab()?.term.focus();
+  focusedThread()?.term.focus();
 }
 
 function updatePalette() {
@@ -493,7 +684,7 @@ function renderPalette() {
     const li = document.createElement('li');
     li.className = i === palette.selected ? 'selected' : '';
     li.innerHTML = `<span class="kind-badge ${e.kind}">${
-      { wf: 'CMD', ssh: 'SSH', action: 'ACT' }[e.kind]
+      { wf: 'CMD', ssh: 'SSH', action: 'ACT', thread: 'THR' }[e.kind]
     }</span><span class="label"></span><span class="detail"></span>`;
     li.querySelector('.label').textContent = e.label;
     li.querySelector('.detail').textContent = e.detail;
@@ -591,7 +782,7 @@ function closeModal(cancelled) {
   if (cancelled && modalCtx?.onCancel) modalCtx.onCancel();
   modalCtx = null;
   $('#modal').classList.add('hidden');
-  activeTab()?.term.focus();
+  focusedThread()?.term.focus();
 }
 
 async function submitModal() {
@@ -653,7 +844,7 @@ function toast(message, isError = false) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), isError ? 5000 : 2500);
 }
 
-/* ---------------- sidebar & shortcuts ---------------- */
+/* ---------------- sidebars & shortcuts ---------------- */
 
 for (const btn of document.querySelectorAll('#sidebar-tabs button')) {
   btn.addEventListener('click', () => {
@@ -666,10 +857,14 @@ for (const btn of document.querySelectorAll('#sidebar-tabs button')) {
 
 $('#toggle-sidebar').addEventListener('click', () => {
   $('#sidebar').classList.toggle('hidden');
-  activeTab()?.fit.fit();
 });
 
-$('#new-tab').addEventListener('click', openLocalTab);
+$('#toggle-threadbar').addEventListener('click', () => {
+  $('#threadbar').classList.toggle('hidden');
+});
+
+$('#new-thread').addEventListener('click', () => newLocalThread());
+$('#split-toggle').addEventListener('click', toggleSplit);
 $('#palette-btn').addEventListener('click', openPalette);
 $('#wf-add').addEventListener('click', () => editWorkflow(null));
 $('#host-add').addEventListener('click', () => editHost(null));
@@ -684,33 +879,44 @@ window.addEventListener('keydown', (ev) => {
     palette.open ? closePalette() : openPalette();
   } else if (mod && key === 't') {
     ev.preventDefault();
-    openLocalTab();
+    newLocalThread();
   } else if (mod && key === 'w') {
     ev.preventDefault();
-    if (state.activeId) closeTab(state.activeId);
+    const t = focusedThread();
+    if (t) closeThread(t.id);
+  } else if (mod && key === 'd') {
+    ev.preventDefault();
+    toggleSplit();
+  } else if (mod && key === 'arrowup') {
+    ev.preventDefault();
+    focusPane(0);
+  } else if (mod && key === 'arrowdown') {
+    ev.preventDefault();
+    focusPane(state.panes.length - 1);
   } else if (ev.key === 'Escape' && palette.open) {
     closePalette();
   }
 });
 
-window.addEventListener('resize', () => activeTab()?.fit.fit());
-
-new ResizeObserver(() => activeTab()?.fit.fit()).observe($('#terminals'));
-
 /* ---------------- backend events & boot ---------------- */
 
 listen('session:data', (ev) => {
   const { id, data } = ev.payload;
-  tabById(id)?.term.write(b64ToBytes(data));
+  threadById(id)?.term.write(b64ToBytes(data));
 });
 
 listen('session:exit', (ev) => {
   const { id } = ev.payload;
-  if (tabById(id)) closeTab(id, { kill: false });
+  if (threadById(id)) closeThread(id, { kill: false });
 });
 
 (async function boot() {
   await loadSettings();
   await Promise.all([refreshWorkflows(), refreshHosts()]);
-  await openLocalTab();
+  const pane = createPane();
+  $('#terminals').appendChild(pane.root);
+  state.panes.push(pane);
+  focusPane(0);
+  updateSplitUi();
+  await newLocalThread();
 })();
