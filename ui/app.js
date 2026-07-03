@@ -99,16 +99,12 @@ function mountTab(info, hostEl) {
   term.loadAddon(fit);
   term.loadAddon(new WebLinksAddon.WebLinksAddon());
   // App-level shortcuts must win over the shell (Ctrl+K etc. stay usable
-  // inside the terminal, so app shortcuts all use Ctrl+Shift).
+  // inside the terminal, so app shortcuts all use Ctrl+Shift). Returning
+  // false keeps xterm from consuming the event; the actual action runs in
+  // the window-level keydown handler the event bubbles up to.
   term.attachCustomKeyEventHandler((ev) => {
-    if (ev.type !== 'keydown') return true;
     const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
-    if (!mod) return true;
-    const key = ev.key.toLowerCase();
-    if (key === 'p') { openPalette(); return false; }
-    if (key === 't') { openLocalTab(); return false; }
-    if (key === 'w') { closeTab(state.activeId); return false; }
-    return true;
+    return !(mod && ['p', 't', 'w'].includes(ev.key.toLowerCase()));
   });
   term.open(hostEl);
 
@@ -682,12 +678,16 @@ $('#host-search').addEventListener('input', renderHosts);
 
 window.addEventListener('keydown', (ev) => {
   const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
-  if (mod && ev.key.toLowerCase() === 'p') {
+  const key = ev.key.toLowerCase();
+  if (mod && key === 'p') {
     ev.preventDefault();
     palette.open ? closePalette() : openPalette();
-  } else if (mod && ev.key.toLowerCase() === 't') {
+  } else if (mod && key === 't') {
     ev.preventDefault();
     openLocalTab();
+  } else if (mod && key === 'w') {
+    ev.preventDefault();
+    if (state.activeId) closeTab(state.activeId);
   } else if (ev.key === 'Escape' && palette.open) {
     closePalette();
   }
