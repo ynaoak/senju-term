@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::models::{Settings, SshHost, Workflow};
+use crate::models::{Profile, Settings, SshHost, Workflow};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -80,6 +80,44 @@ impl Stores {
         self.write("ssh-hosts", &items)
     }
 
+    // -- Terminal profiles ----------------------------------------------------
+
+    pub fn list_profiles(&self) -> Vec<Profile> {
+        self.read("profiles", default_profiles)
+    }
+
+    pub fn save_profile(&self, mut profile: Profile) -> Result<Profile, StoreError> {
+        if profile.id.is_empty() {
+            profile.id = uuid::Uuid::new_v4().to_string();
+        }
+        let _g = self.lock.lock().unwrap();
+        let mut items = self.read("profiles", default_profiles);
+        upsert(&mut items, profile.clone(), |p| &p.id);
+        self.write("profiles", &items)?;
+        Ok(profile)
+    }
+
+    pub fn delete_profile(&self, id: &str) -> Result<(), StoreError> {
+        let _g = self.lock.lock().unwrap();
+        let mut items = self.read("profiles", default_profiles);
+        items.retain(|p| p.id != id);
+        self.write("profiles", &items)
+    }
+
+    /// Resolves the profile to launch, trying in order: the requested id, the
+    /// configured default, then the first profile. `None` only if no profiles
+    /// exist. An unknown requested id falls through to the default.
+    pub fn resolve_profile(&self, requested_id: Option<&str>) -> Option<Profile> {
+        let profiles = self.list_profiles();
+        let default_id = self.settings().default_profile_id;
+        let pick = |id: &str| profiles.iter().find(|p| p.id == id).cloned();
+        requested_id
+            .filter(|s| !s.is_empty())
+            .and_then(pick)
+            .or_else(|| (!default_id.is_empty()).then(|| pick(&default_id)).flatten())
+            .or_else(|| profiles.first().cloned())
+    }
+
     // -- Settings -------------------------------------------------------------
 
     pub fn settings(&self) -> Settings {
@@ -120,6 +158,38 @@ fn upsert<T, F: Fn(&T) -> &String>(items: &mut Vec<T>, item: T, id_of: F) {
         Some(slot) => *slot = item,
         None => items.push(item),
     }
+}
+
+/// Seeded on first launch. The first entry ("System default") launches the
+/// OS default shell; the rest are common shells detected per platform, à la
+/// Windows Terminal's auto-generated profiles.
+fn default_profiles() -> Vec<Profile> {
+    // Ids are stable strings (not random UUIDs) so the seeded set is
+    // consistent across reads before it is ever persisted — the same reason
+    // Windows Terminal gives its auto-generated profiles fixed GUIDs.
+    let profile = |id: &str, name: &str, command: &str| Profile {
+        id: format!("builtin:{id}"),
+        name: name.into(),
+        command: command.into(),
+        args: Vec::new(),
+        cwd: String::new(),
+    };
+    let mut out = vec![profile("default", "システム既定シェル", "")];
+    if cfg!(windows) {
+        out.push(profile("powershell", "PowerShell", "powershell.exe"));
+        out.push(profile("cmd", "コマンド プロンプト", "cmd.exe"));
+    } else {
+        for (id, name, path) in [
+            ("bash", "bash", "/bin/bash"),
+            ("zsh", "zsh", "/bin/zsh"),
+            ("fish", "fish", "/usr/bin/fish"),
+        ] {
+            if std::path::Path::new(path).exists() {
+                out.push(profile(id, name, path));
+            }
+        }
+    }
+    out
 }
 
 /// Seeded on first launch so the workflows panel isn't empty.
@@ -187,6 +257,49 @@ mod tests {
     }
 
     #[test]
+    fn seeds_profiles_and_resolves_default() {
+        let (_d, s) = stores();
+        let profiles = s.list_profiles();
+        assert!(!profiles.is_empty());
+        // The first seeded profile launches the OS default shell.
+        assert_eq!(profiles[0].command, "");
+
+        // With no default set, resolve falls back to the first profile.
+        assert_eq!(s.resolve_profile(None).unwrap().id, profiles[0].id);
+
+        // An explicit request wins over the default.
+        let last = profiles.last().unwrap().clone();
+        assert_eq!(s.resolve_profile(Some(&last.id)).unwrap().id, last.id);
+
+        // A configured default is honored when nothing is requested.
+        let mut settings = s.settings();
+        settings.default_profile_id = last.id.clone();
+        s.save_settings(&settings).unwrap();
+        assert_eq!(s.resolve_profile(None).unwrap().id, last.id);
+
+        // An unknown request id falls through to the default.
+        assert_eq!(s.resolve_profile(Some("nope")).unwrap().id, last.id);
+    }
+
+    #[test]
+    fn profile_crud_roundtrip() {
+        let (_d, s) = stores();
+        let saved = s
+            .save_profile(Profile {
+                id: String::new(),
+                name: "custom".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-l".into()],
+                cwd: "~/work".into(),
+            })
+            .unwrap();
+        assert!(!saved.id.is_empty());
+        assert!(s.list_profiles().iter().any(|p| p.id == saved.id));
+        s.delete_profile(&saved.id).unwrap();
+        assert!(!s.list_profiles().iter().any(|p| p.id == saved.id));
+    }
+
+    #[test]
     fn updates_existing_workflow_in_place() {
         let (_d, s) = stores();
         let mut wf = s.list_workflows().remove(0);
@@ -225,6 +338,7 @@ mod tests {
         let new = Settings {
             font_size: 16,
             shell: "/bin/zsh".into(),
+            default_profile_id: "abc".into(),
         };
         s.save_settings(&new).unwrap();
         assert_eq!(s.settings(), new);

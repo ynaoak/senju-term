@@ -12,13 +12,28 @@
 </head>
 <body>
   <div id="app">
-    <header id="topbar">
+    <!-- Custom native-like titlebar: the whole bar drags the window; buttons
+         inside stay clickable. Native OS chrome is disabled (decorations:false). -->
+    <header id="topbar" data-tauri-drag-region>
+      <!-- macOS: native-style traffic-light window controls sit on the left -->
+      <div id="win-controls-mac" class="win-controls mac">
+        <button class="win-btn close" data-win="close" title="閉じる"></button>
+        <button class="win-btn min" data-win="minimize" title="最小化"></button>
+        <button class="win-btn max" data-win="maximize" title="最大化"></button>
+      </div>
       <button id="toggle-threadbar" class="icon-btn" title="スレッド一覧を切替">☰</button>
-      <div id="brand">⌘ Senju</div>
-      <div class="spacer"></div>
+      <div id="brand" data-tauri-drag-region>⌘ Senju</div>
+      <div class="spacer" data-tauri-drag-region></div>
       <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)">⬒ 分割</button>
       <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)">⌕ パレット <kbd>Ctrl⇧P</kbd></button>
       <button id="toggle-sidebar" class="icon-btn" title="ツールパネルを切替">🛠</button>
+      <!-- Windows / Linux: window controls on the right. Plain Unicode glyphs
+           so they render without the Segoe icon font (absent on Linux). -->
+      <div id="win-controls" class="win-controls">
+        <button class="win-btn" data-win="minimize" title="最小化">&#x2212;</button>
+        <button class="win-btn" data-win="maximize" title="最大化">&#x25A1;</button>
+        <button class="win-btn close" data-win="close" title="閉じる">&#x2715;</button>
+      </div>
     </header>
 
     <div id="body">
@@ -26,7 +41,12 @@
       <aside id="threadbar">
         <div class="threadbar-head">
           <span class="threadbar-title">スレッド</span>
-          <button id="new-thread" class="accent-btn" title="新しいローカルスレッド (Ctrl+Shift+T)">＋ 新規</button>
+          <!-- Split button: click launches the default profile; ▾ opens a
+               Windows-Terminal-style menu of all profiles. -->
+          <div class="new-thread-group">
+            <button id="new-thread" class="accent-btn" title="新しいスレッド (既定プロファイル / Ctrl+Shift+T)">＋ 新規</button>
+            <button id="new-thread-menu" class="accent-btn caret" title="プロファイルを選択">▾</button>
+          </div>
         </div>
         <ul id="thread-list"></ul>
       </aside>
@@ -34,11 +54,12 @@
       <!-- 中央: ペイン (上下分割可能) -->
       <main id="terminals"></main>
 
-      <!-- 右: ワークフロー / SSH / 設定 -->
+      <!-- 右: ワークフロー / SSH / プロファイル / 設定 -->
       <aside id="sidebar">
         <nav id="sidebar-tabs">
           <button data-panel="workflows" class="active">Workflows</button>
           <button data-panel="hosts">SSH</button>
+          <button data-panel="profiles">端末</button>
           <button data-panel="settings">設定</button>
         </nav>
 
@@ -58,13 +79,21 @@
           <ul id="host-list" class="card-list"></ul>
         </section>
 
+        <section id="panel-profiles" class="panel">
+          <div class="panel-head">
+            <span class="panel-note">起動するシェルを選べます。★ が既定です。</span>
+            <button id="profile-add" class="accent-btn">＋ 追加</button>
+          </div>
+          <ul id="profile-list" class="card-list"></ul>
+        </section>
+
         <section id="panel-settings" class="panel">
           <form id="settings-form" class="form">
             <label>フォントサイズ
               <input name="font_size" type="number" min="8" max="32" />
             </label>
-            <label>シェル (空欄 = OS 既定)
-              <input name="shell" type="text" placeholder="/bin/zsh" />
+            <label>既定のターミナルプロファイル
+              <select name="default_profile_id"></select>
             </label>
             <button type="submit" class="accent-btn">保存</button>
           </form>
@@ -76,6 +105,9 @@
 
   <!-- 非表示スレッドの DOM 退避先 -->
   <div id="thread-parking"></div>
+
+  <!-- プロファイル選択メニュー (新規スレッドの ▾) -->
+  <div id="profile-menu" class="popup-menu hidden"></div>
 
   <!-- コマンドパレット -->
   <div id="palette" class="overlay hidden">

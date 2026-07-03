@@ -10,16 +10,18 @@
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
+const appWindow = window.__TAURI__.window.getCurrentWindow();
 
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
-  threads: [],         // { id, title, kind, term, fit, hostEl }
+  threads: [],         // { id, title, kind, pinned, term, fit, hostEl }
   panes: [],           // { root, head, select, kindEl, closeBtn, body, threadId }
   focusedPane: 0,
   workflows: [],
   hosts: [],
-  settings: { font_size: 14, shell: '' },
+  profiles: [],
+  settings: { font_size: 14, shell: '', default_profile_id: '' },
 };
 
 /* ---------------- terminal threads ---------------- */
@@ -61,10 +63,10 @@ function measureCells() {
   return { cols: Math.max(20, Math.floor(w / (px * 0.62))), rows: Math.max(5, Math.floor(h / (px * 1.4))) };
 }
 
-async function newLocalThread({ paneIdx = state.focusedPane } = {}) {
+async function newLocalThread({ paneIdx = state.focusedPane, profileId = null } = {}) {
   const { cols, rows } = measureCells();
   try {
-    const info = await invoke('create_local_session', { cols, rows });
+    const info = await invoke('create_local_session', { profileId, cols, rows });
     createThread(info, paneIdx);
   } catch (e) {
     toast(`シェルの起動に失敗: ${e}`, true);
@@ -120,15 +122,20 @@ function createThread(info, paneIdx) {
   term.onResize(({ cols, rows }) =>
     invoke('session_resize', { id: info.id, cols, rows }).catch(() => {}));
 
-  const thread = { id: info.id, title: info.title, kind: info.kind, term, fit, hostEl };
+  const thread = { id: info.id, title: info.title, kind: info.kind, pinned: false, term, fit, hostEl };
   state.threads.push(thread);
   assignThread(paneIdx, info.id);
   renderThreads();
 }
 
-function closeThread(id, { kill = true } = {}) {
+async function closeThread(id, { kill = true } = {}) {
   const idx = state.threads.findIndex((t) => t.id === id);
   if (idx < 0) return;
+  // Guard pinned threads against accidental user-initiated closes. A natural
+  // shell exit (kill:false) always removes the thread without prompting.
+  if (kill && state.threads[idx].pinned) {
+    if (!(await confirmModal(`固定中の「${state.threads[idx].title}」を終了しますか?`))) return;
+  }
   const [thread] = state.threads.splice(idx, 1);
   if (kill) invoke('session_kill', { id }).catch(() => {});
   thread.term.dispose();
@@ -306,36 +313,58 @@ function enableSplitterDrag(splitter) {
 
 const PANE_MARK = ['▲', '▼'];
 
+/** Pinned threads first (in pin order), then the rest in creation order. */
+function orderedThreads() {
+  return state.threads
+    .map((t, i) => ({ t, i }))
+    .sort((a, b) => (b.t.pinned - a.t.pinned) || (a.i - b.i))
+    .map((x) => x.t);
+}
+
+function togglePin(id) {
+  const t = threadById(id);
+  if (t) {
+    t.pinned = !t.pinned;
+    renderThreads();
+  }
+}
+
 function renderThreads() {
   const list = $('#thread-list');
   list.innerHTML = '';
   if (!state.threads.length) {
     list.innerHTML = '<li class="empty">スレッドがありません</li>';
   }
-  for (const t of state.threads) {
+  for (const t of orderedThreads()) {
     const li = document.createElement('li');
     const paneIdx = state.panes.findIndex((p) => p.threadId === t.id);
     const isFocused = paneIdx === state.focusedPane && paneIdx >= 0;
-    li.className = `thread-item ${t.kind}${paneIdx >= 0 ? ' shown' : ''}${isFocused ? ' focused' : ''}`;
+    li.className = `thread-item ${t.kind}${paneIdx >= 0 ? ' shown' : ''}${isFocused ? ' focused' : ''}${t.pinned ? ' pinned' : ''}`;
     li.innerHTML = `
       <span class="kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
-      <span class="close" title="スレッドを終了">✕</span>`;
+      <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${t.pinned ? '📌' : '📍'}</button>
+      <button class="close" title="スレッドを終了">✕</button>`;
     li.querySelector('.title').textContent = t.title;
-    li.addEventListener('click', (ev) => {
-      if (ev.target.classList.contains('close')) closeThread(t.id);
-      else assignThread(state.focusedPane, t.id);
+    li.querySelector('.pin').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      togglePin(t.id);
     });
+    li.querySelector('.close').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      closeThread(t.id);
+    });
+    li.addEventListener('click', () => assignThread(state.focusedPane, t.id));
     list.appendChild(li);
   }
   // Keep every pane's dropdown in sync with the thread list.
   state.panes.forEach((pane) => {
     pane.select.innerHTML = '';
-    for (const t of state.threads) {
+    for (const t of orderedThreads()) {
       const o = document.createElement('option');
       o.value = t.id;
-      o.textContent = `${t.kind === 'ssh' ? '[SSH] ' : ''}${t.title}`;
+      o.textContent = `${t.pinned ? '📌 ' : ''}${t.kind === 'ssh' ? '[SSH] ' : ''}${t.title}`;
       pane.select.appendChild(o);
     }
     if (!state.threads.length) {
@@ -560,28 +589,128 @@ function promptSshSecrets(host) {
   });
 }
 
+/* ---------------- terminal profiles (Windows Terminal style) ---------------- */
+
+async function refreshProfiles() {
+  state.profiles = await invoke('list_profiles');
+  renderProfiles();
+  renderProfileSettingOptions();
+}
+
+function isDefaultProfile(p) {
+  const def = state.settings.default_profile_id;
+  // With no explicit default, the first profile is effectively the default.
+  return def ? p.id === def : state.profiles[0]?.id === p.id;
+}
+
+function renderProfiles() {
+  const list = $('#profile-list');
+  list.innerHTML = '';
+  if (!state.profiles.length) {
+    list.innerHTML = '<li class="empty">プロファイルがありません</li>';
+    return;
+  }
+  for (const p of state.profiles) {
+    const li = document.createElement('li');
+    li.className = 'card';
+    const def = isDefaultProfile(p);
+    li.innerHTML = `
+      <h4><span class="star"></span><span class="pname"></span></h4>
+      <div class="meta"></div>
+      <div class="row">
+        <button class="accent-btn launch">▶ 起動</button>
+        <button class="ghost-btn setdefault">★ 既定に</button>
+        <button class="ghost-btn edit">編集</button>
+        <button class="danger-btn del">削除</button>
+      </div>`;
+    li.querySelector('.star').textContent = def ? '★ ' : '';
+    li.querySelector('.pname').textContent = p.name;
+    const cmd = p.command || 'システム既定シェル';
+    const argsText = (p.args || []).length ? ' ' + p.args.join(' ') : '';
+    li.querySelector('.meta').textContent = cmd + argsText + (p.cwd ? `  ·  ${p.cwd}` : '');
+    li.querySelector('.launch').addEventListener('click', () => newLocalThread({ profileId: p.id }));
+    const setDefaultBtn = li.querySelector('.setdefault');
+    setDefaultBtn.disabled = def;
+    setDefaultBtn.addEventListener('click', () => setDefaultProfile(p.id));
+    li.querySelector('.edit').addEventListener('click', () => editProfile(p));
+    li.querySelector('.del').addEventListener('click', async () => {
+      if (state.profiles.length <= 1) return toast('最後のプロファイルは削除できません', true);
+      if (!(await confirmModal(`プロファイル「${p.name}」を削除しますか?`))) return;
+      await invoke('delete_profile', { id: p.id });
+      refreshProfiles();
+    });
+    list.appendChild(li);
+  }
+}
+
+async function setDefaultProfile(id) {
+  state.settings = { ...state.settings, default_profile_id: id };
+  await invoke('save_settings', { settings: state.settings });
+  renderProfiles();
+  renderProfileSettingOptions();
+  toast('既定のプロファイルを変更しました');
+}
+
+function editProfile(p) {
+  const isNew = !p;
+  openModal({
+    title: isNew ? 'プロファイルを追加' : 'プロファイルを編集',
+    okLabel: '保存',
+    body: [
+      field('表示名', 'name', p?.name || '', { required: true }),
+      field('実行ファイル (空欄 = OS 既定シェル)', 'command', p?.command || '', { placeholder: '/bin/zsh, powershell.exe …' }),
+      field('引数 (スペース区切り)', 'args', (p?.args || []).join(' ')),
+      field('作業ディレクトリ (空欄 = ホーム)', 'cwd', p?.cwd || '', { placeholder: '~/work' }),
+    ],
+    onOk: async (values) => {
+      await invoke('save_profile', {
+        profile: {
+          id: p?.id || '',
+          name: values.name.trim(),
+          command: values.command.trim(),
+          args: values.args.trim() ? values.args.trim().split(/\s+/) : [],
+          cwd: values.cwd.trim(),
+        },
+      });
+      refreshProfiles();
+    },
+  });
+}
+
 /* ---------------- settings ---------------- */
+
+function renderProfileSettingOptions() {
+  const sel = $('#settings-form').elements.default_profile_id;
+  sel.innerHTML = '';
+  for (const p of state.profiles) {
+    const o = document.createElement('option');
+    o.value = p.id;
+    o.textContent = p.name;
+    sel.appendChild(o);
+  }
+  sel.value = state.settings.default_profile_id || state.profiles[0]?.id || '';
+}
 
 async function loadSettings() {
   state.settings = await invoke('get_settings');
-  const f = $('#settings-form');
-  f.elements.font_size.value = state.settings.font_size;
-  f.elements.shell.value = state.settings.shell;
+  $('#settings-form').elements.font_size.value = state.settings.font_size;
 }
 
 $('#settings-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const f = ev.target;
   state.settings = {
+    ...state.settings,
     font_size: parseInt(f.elements.font_size.value, 10) || 14,
-    shell: f.elements.shell.value.trim(),
+    default_profile_id: f.elements.default_profile_id.value,
   };
   await invoke('save_settings', { settings: state.settings });
   for (const t of state.threads) {
     t.term.options.fontSize = state.settings.font_size;
     t.fit.fit();
   }
-  toast('設定を保存しました (シェル変更は新しいスレッドから)');
+  renderProfiles();
+  toast('設定を保存しました');
 });
 
 /* ---------------- command palette ---------------- */
@@ -604,6 +733,14 @@ function paletteEntries() {
     { kind: 'action', label: 'ワークフローを登録', detail: '', run: () => editWorkflow(null) },
     { kind: 'action', label: 'SSH ホストを登録', detail: '', run: () => editHost(null) },
   ];
+  for (const p of state.profiles) {
+    entries.push({
+      kind: 'action',
+      label: `新規スレッド: ${p.name}`,
+      detail: p.command || 'システム既定シェル',
+      run: () => newLocalThread({ profileId: p.id }),
+    });
+  }
   for (const t of state.threads) {
     entries.push({
       kind: 'thread',
@@ -864,12 +1001,107 @@ $('#toggle-threadbar').addEventListener('click', () => {
 });
 
 $('#new-thread').addEventListener('click', () => newLocalThread());
+$('#new-thread-menu').addEventListener('click', (ev) => {
+  ev.stopPropagation();
+  toggleProfileMenu(ev.currentTarget);
+});
 $('#split-toggle').addEventListener('click', toggleSplit);
 $('#palette-btn').addEventListener('click', openPalette);
 $('#wf-add').addEventListener('click', () => editWorkflow(null));
 $('#host-add').addEventListener('click', () => editHost(null));
+$('#profile-add').addEventListener('click', () => editProfile(null));
 $('#wf-search').addEventListener('input', renderWorkflows);
 $('#host-search').addEventListener('input', renderHosts);
+
+/* ---------------- profile picker menu (new-thread ▾) ---------------- */
+
+function toggleProfileMenu(anchor) {
+  const menu = $('#profile-menu');
+  if (!menu.classList.contains('hidden')) return closeProfileMenu();
+  menu.innerHTML = '';
+  for (const p of state.profiles) {
+    const item = document.createElement('button');
+    item.className = 'popup-item';
+    item.innerHTML = `<span class="pi-name"></span><span class="pi-cmd"></span>`;
+    item.querySelector('.pi-name').textContent =
+      (isDefaultProfile(p) ? '★ ' : '') + p.name;
+    item.querySelector('.pi-cmd').textContent = p.command || 'システム既定シェル';
+    item.addEventListener('click', () => {
+      closeProfileMenu();
+      newLocalThread({ profileId: p.id });
+    });
+    menu.appendChild(item);
+  }
+  const sep = document.createElement('div');
+  sep.className = 'popup-sep';
+  menu.appendChild(sep);
+  const manage = document.createElement('button');
+  manage.className = 'popup-item muted';
+  manage.textContent = '⚙ プロファイルを管理…';
+  manage.addEventListener('click', () => {
+    closeProfileMenu();
+    openSidebarPanel('profiles');
+  });
+  menu.appendChild(manage);
+
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 4}px`;
+  menu.style.left = `${Math.max(8, r.right - 240)}px`;
+  menu.classList.remove('hidden');
+  setTimeout(() => window.addEventListener('mousedown', closeProfileMenuOnce), 0);
+}
+
+function closeProfileMenu() {
+  $('#profile-menu').classList.add('hidden');
+  window.removeEventListener('mousedown', closeProfileMenuOnce);
+}
+function closeProfileMenuOnce(ev) {
+  if (!$('#profile-menu').contains(ev.target)) closeProfileMenu();
+}
+
+function openSidebarPanel(name) {
+  $('#sidebar').classList.remove('hidden');
+  document.querySelectorAll('#sidebar-tabs button').forEach((b) =>
+    b.classList.toggle('active', b.dataset.panel === name));
+  document.querySelectorAll('.panel').forEach((p) =>
+    p.classList.toggle('active', p.id === `panel-${name}`));
+}
+
+/* ---------------- window controls (custom titlebar) ---------------- */
+
+async function refreshMaxIcon() {
+  const maxBtn = document.querySelector('#win-controls .win-btn[data-win="maximize"]');
+  if (!maxBtn) return;
+  const isMax = await appWindow.isMaximized();
+  // Restore (overlapping squares) vs maximize (single square).
+  maxBtn.textContent = isMax ? '❐' : '□';
+  maxBtn.title = isMax ? '元に戻す' : '最大化';
+}
+
+for (const btn of document.querySelectorAll('.win-btn')) {
+  btn.addEventListener('click', async () => {
+    const action = btn.dataset.win;
+    if (action === 'minimize') await appWindow.minimize();
+    else if (action === 'maximize') { await appWindow.toggleMaximize(); refreshMaxIcon(); }
+    else if (action === 'close') await appWindow.close();
+  });
+}
+
+// Double-clicking the empty part of the titlebar toggles maximize (native feel).
+$('#topbar').addEventListener('dblclick', (ev) => {
+  if (ev.target.closest('button, select, input, .win-controls')) return;
+  appWindow.toggleMaximize().then(refreshMaxIcon);
+});
+
+appWindow.onResized(() => refreshMaxIcon());
+
+// Tag the body with the OS so CSS can place window controls natively
+// (traffic lights on the left for macOS, min/max/close on the right elsewhere).
+(function detectPlatform() {
+  const ua = navigator.userAgent;
+  const os = /Mac/i.test(ua) ? 'macos' : /Win/i.test(ua) ? 'windows' : 'linux';
+  document.body.classList.add(`platform-${os}`);
+})();
 
 window.addEventListener('keydown', (ev) => {
   const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
@@ -912,11 +1144,13 @@ listen('session:exit', (ev) => {
 
 (async function boot() {
   await loadSettings();
-  await Promise.all([refreshWorkflows(), refreshHosts()]);
+  // Profiles must load before the first thread so the default profile applies.
+  await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles()]);
   const pane = createPane();
   $('#terminals').appendChild(pane.root);
   state.panes.push(pane);
   focusPane(0);
   updateSplitUi();
+  refreshMaxIcon();
   await newLocalThread();
 })();

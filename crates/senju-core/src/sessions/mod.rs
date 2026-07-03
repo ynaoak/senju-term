@@ -34,6 +34,18 @@ pub struct SshSecrets {
     pub passphrase: Option<String>,
 }
 
+/// How to launch a local shell — the resolved form of a terminal profile.
+#[derive(Debug, Default, Clone)]
+pub struct LocalSpec {
+    /// Executable; empty means the OS default shell.
+    pub command: String,
+    pub args: Vec<String>,
+    /// Working directory; empty means the home directory. `~` expands.
+    pub cwd: String,
+    /// Display title; empty derives one from the executable name.
+    pub title: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum SessionError {
     #[error("{0}")]
@@ -64,18 +76,17 @@ impl SessionManager {
         }
     }
 
-    /// Spawns a local shell. `shell_override` (from settings) wins over the
-    /// OS default.
+    /// Spawns a local shell described by `spec` (a resolved terminal profile).
     pub fn create_local(
         &self,
-        shell_override: &str,
+        spec: &LocalSpec,
         cols: u16,
         rows: u16,
     ) -> Result<SessionInfo, SessionError> {
         let id = uuid::Uuid::new_v4().to_string();
         let (session, title) = local::LocalSession::spawn(
             &id,
-            shell_override,
+            spec,
             cols,
             rows,
             self.sink.clone(),
@@ -201,11 +212,18 @@ mod tests {
         false
     }
 
+    fn sh_spec() -> LocalSpec {
+        LocalSpec {
+            command: "/bin/sh".into(),
+            ..Default::default()
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn local_session_echoes_and_exits() {
         let sink = Arc::new(Capture::default());
         let mgr = SessionManager::new(sink.clone());
-        let info = mgr.create_local("/bin/sh", 80, 24).unwrap();
+        let info = mgr.create_local(&sh_spec(), 80, 24).unwrap();
         assert_eq!(info.kind, "local");
 
         mgr.write(&info.id, b"echo senju-$((20+3))\n").await.unwrap();
@@ -231,7 +249,7 @@ mod tests {
     async fn kill_terminates_session() {
         let sink = Arc::new(Capture::default());
         let mgr = SessionManager::new(sink.clone());
-        let info = mgr.create_local("/bin/sh", 80, 24).unwrap();
+        let info = mgr.create_local(&sh_spec(), 80, 24).unwrap();
         mgr.kill(&info.id);
         assert!(wait_until(Duration::from_secs(10), || sink
             .exited
