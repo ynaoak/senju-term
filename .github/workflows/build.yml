@@ -1,0 +1,70 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Core tests (no GUI deps required)
+        run: cargo test -p senju-core
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            args: ""
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build app (and attach installers to a draft release on v* tags)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          args: ${{ matrix.args }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('Senju Term {0}', github.ref_name) || '' }}
+          releaseDraft: true
+
+      - name: Upload bundles
+        uses: actions/upload-artifact@v4
+        with:
+          name: senju-term-${{ matrix.platform }}
+          path: |
+            target/**/release/bundle/**/*.deb
+            target/**/release/bundle/**/*.rpm
+            target/**/release/bundle/**/*.AppImage
+            target/**/release/bundle/**/*.dmg
+            target/**/release/bundle/**/*.app.tar.gz
+            target/**/release/bundle/**/*.msi
+            target/**/release/bundle/**/*.exe
+          if-no-files-found: ignore

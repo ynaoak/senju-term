@@ -1,0 +1,19 @@
+[package]
+name = "senju-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GUI-independent core of Senju Term: workflow store, SSH host store, placeholder templates, and session management (local PTY + SSH)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+portable-pty = "0.9"
+russh = "0.54"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"
