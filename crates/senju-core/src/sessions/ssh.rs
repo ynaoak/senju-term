@@ -22,6 +22,13 @@ pub(crate) struct SshWriter {
 
 pub(crate) struct SshSession {
     writer: Arc<AsyncMutex<SshWriter>>,
+    /// The Tokio runtime handle captured at connect time (inside the async
+    /// context). `kill` spawns the graceful-disconnect task onto this handle
+    /// rather than the ambient runtime, so it is safe to call from a plain
+    /// thread — e.g. Tauri's window `Destroyed` handler, which runs on the
+    /// GUI thread outside any runtime. Using `tokio::spawn` there would panic
+    /// with "there is no reactor running".
+    runtime: tokio::runtime::Handle,
 }
 
 /// Outcome of the known_hosts check for the key presented during key
@@ -339,6 +346,7 @@ impl SshSession {
 
         Ok(Self {
             writer: Arc::new(AsyncMutex::new(SshWriter { write_half, handle })),
+            runtime: tokio::runtime::Handle::current(),
         })
     }
 
@@ -370,9 +378,15 @@ impl SshSession {
             .map_err(|e| SessionError::Ssh(e.to_string()))
     }
 
+    /// Sends a graceful SSH disconnect in the background. Safe to call from
+    /// any thread, including outside a Tokio runtime (e.g. the GUI thread on
+    /// window close): the disconnect is spawned onto the runtime handle
+    /// captured at connect time, not the ambient one. Even if the spawned
+    /// task never runs (e.g. the runtime is already shutting down at process
+    /// exit), dropping `writer` closes the channel and connection.
     pub fn kill(self) {
         let writer = self.writer;
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             let guard = writer.lock().await;
             let _ = guard
                 .handle

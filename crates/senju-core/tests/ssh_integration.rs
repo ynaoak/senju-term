@@ -371,3 +371,58 @@ async fn toctou_fingerprint_mismatch_is_rejected_and_not_learned() {
         );
     }
 }
+
+/// Regression test: an SSH session must be killable from a thread that is NOT
+/// inside a Tokio runtime — exactly what Tauri's window `Destroyed` handler
+/// does at app close via `SessionManager::kill_all`. Before the fix,
+/// `SshSession::kill` called `tokio::spawn`, which panics with "there is no
+/// reactor running" when invoked outside a runtime, crashing the app on exit
+/// whenever an SSH session was open. `kill` now spawns onto the runtime handle
+/// captured at connect time, so it is safe from any thread.
+///
+/// The manager is built and the session opened inside a runtime; the kill is
+/// then issued from a fresh `std::thread` with no runtime, and the test fails
+/// (panics propagate through the join) if that thread panics.
+#[test]
+#[ignore = "needs a live sshd (see module docs)"]
+fn kill_all_from_non_runtime_thread_does_not_panic() {
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = known_hosts_dir.path().join("known_hosts");
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+
+    let mgr = runtime.block_on(async {
+        let sink = Arc::new(Capture::default());
+        let mgr = SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+        let secrets = SshSecrets {
+            password: Some(env("SENJU_SSH_PASSWORD")),
+            passphrase: None,
+        };
+        let fingerprint =
+            learn_unknown_host_fingerprint(&mgr, &test_host(SshAuthMethod::Password), secrets.clone())
+                .await;
+        mgr.create_ssh(
+            &test_host(SshAuthMethod::Password),
+            secrets,
+            80,
+            24,
+            Some(fingerprint),
+        )
+        .await
+        .expect("ssh connect");
+        mgr
+    });
+
+    // Tear down from a plain OS thread — no runtime in scope — mirroring the
+    // GUI thread on window close. This must not panic.
+    std::thread::spawn(move || {
+        mgr.kill_all();
+    })
+    .join()
+    .expect("kill_all must not panic when called outside a Tokio runtime");
+
+    // Give the spawned disconnect a moment to run before the runtime is
+    // dropped, so the teardown path is actually exercised.
+    runtime.block_on(async {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    });
+}
