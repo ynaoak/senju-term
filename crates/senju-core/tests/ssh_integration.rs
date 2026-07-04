@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use senju_core::models::{SshAuthMethod, SshHost};
-use senju_core::sessions::{EventSink, SessionManager, SshSecrets};
+use senju_core::sessions::{EventSink, SessionError, SessionManager, SshSecrets};
 
 #[derive(Default)]
 struct Capture {
@@ -57,9 +57,18 @@ async fn wait_for(capture: &Capture, needle: &str) -> bool {
 
 async fn run_shell_roundtrip(auth_method: SshAuthMethod, secrets: SshSecrets) {
     let sink = Arc::new(Capture::default());
-    let mgr = SessionManager::new(sink.clone());
+    // Each test gets its own known_hosts file (not the real
+    // `~/.ssh/known_hosts`) so these roundtrip tests never depend on, or
+    // race with, the dedicated known_hosts tests below.
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::with_known_hosts_path(
+        sink.clone(),
+        Some(known_hosts_dir.path().join("known_hosts")),
+    );
     let info = mgr
-        .create_ssh(&test_host(auth_method), secrets, 80, 24)
+        // trust_host: true — these tests exercise the shell roundtrip, not
+        // host key verification, so the first connection should just work.
+        .create_ssh(&test_host(auth_method), secrets, 80, 24, true)
         .await
         .expect("ssh connect");
     assert_eq!(info.kind, "ssh");
@@ -107,7 +116,11 @@ async fn key_auth_shell_roundtrip() {
 #[ignore = "needs a live sshd (see module docs)"]
 async fn wrong_password_is_rejected() {
     let sink = Arc::new(Capture::default());
-    let mgr = SessionManager::new(sink);
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::with_known_hosts_path(
+        sink,
+        Some(known_hosts_dir.path().join("known_hosts")),
+    );
     let err = mgr
         .create_ssh(
             &test_host(SshAuthMethod::Password),
@@ -117,6 +130,7 @@ async fn wrong_password_is_rejected() {
             },
             80,
             24,
+            true,
         )
         .await
         .expect_err("auth should fail");
@@ -125,4 +139,94 @@ async fn wrong_password_is_rejected() {
         msg.contains("auth") || msg.contains("reject"),
         "unexpected error: {msg}"
     );
+}
+
+/// Known_hosts TOFU workflow against a real sshd:
+/// (a) first connection with `trust_host: false` fails with
+///     `SessionError::UnknownHostKey`;
+/// (b) retrying with `trust_host: true` succeeds and records the key;
+/// (c) reconnecting with `trust_host: false` now succeeds, since the key is
+///     recorded and matches.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live sshd (see module docs)"]
+async fn known_hosts_tofu_workflow() {
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = known_hosts_dir.path().join("known_hosts");
+    let secrets = || SshSecrets {
+        password: Some(env("SENJU_SSH_PASSWORD")),
+        passphrase: None,
+    };
+
+    // (a) unknown host, not trusted -> rejected with UnknownHostKey.
+    {
+        let sink = Arc::new(Capture::default());
+        let mgr =
+            SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+        let err = mgr
+            .create_ssh(
+                &test_host(SshAuthMethod::Password),
+                secrets(),
+                80,
+                24,
+                false,
+            )
+            .await
+            .expect_err("unknown host must be rejected");
+        match err {
+            SessionError::UnknownHostKey { key_type, fingerprint } => {
+                assert!(!key_type.is_empty());
+                assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
+            }
+            other => panic!("expected UnknownHostKey, got: {other}"),
+        }
+        assert!(
+            !known_hosts_path.exists(),
+            "known_hosts must not be written when trust_host is false"
+        );
+    }
+
+    // (b) unknown host, trusted -> connects and records the key.
+    {
+        let sink = Arc::new(Capture::default());
+        let mgr =
+            SessionManager::with_known_hosts_path(sink.clone(), Some(known_hosts_path.clone()));
+        let info = mgr
+            .create_ssh(
+                &test_host(SshAuthMethod::Password),
+                secrets(),
+                80,
+                24,
+                true,
+            )
+            .await
+            .expect("trusted first connection should succeed");
+        mgr.kill(&info.id);
+        assert!(
+            known_hosts_path.exists(),
+            "trust_host: true should have recorded the host key"
+        );
+        let contents = std::fs::read_to_string(&known_hosts_path).unwrap();
+        assert!(
+            contents.contains("ssh-"),
+            "known_hosts should contain the recorded key: {contents}"
+        );
+    }
+
+    // (c) now-known host, not trusted -> still connects (key matches).
+    {
+        let sink = Arc::new(Capture::default());
+        let mgr =
+            SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+        let info = mgr
+            .create_ssh(
+                &test_host(SshAuthMethod::Password),
+                secrets(),
+                80,
+                24,
+                false,
+            )
+            .await
+            .expect("previously-learned host key should verify");
+        mgr.kill(&info.id);
+    }
 }

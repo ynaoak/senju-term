@@ -7,6 +7,7 @@ mod local;
 mod ssh;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
@@ -54,6 +55,23 @@ pub enum SessionError {
     Ssh(String),
     #[error("unknown session: {0}")]
     UnknownSession(String),
+    /// The server's host key isn't recorded in known_hosts at all. The
+    /// message keeps the `UNKNOWN_HOST_KEY:` prefix machine-parseable (the
+    /// frontend uses it to offer a "trust and save" prompt) while still
+    /// carrying the algorithm and SHA256 fingerprint a human should verify.
+    #[error("UNKNOWN_HOST_KEY:{key_type}:{fingerprint}")]
+    UnknownHostKey { key_type: String, fingerprint: String },
+    /// The server presented a key that does NOT match the one recorded in
+    /// known_hosts for this host — a possible man-in-the-middle attack.
+    /// Always rejected, independent of any "trust this host" request.
+    #[error(
+        "known_hosts に記録された鍵と一致しません(MITM の可能性があります)。known_hosts の {line} 行目を確認してください。鍵種別={key_type} フィンガープリント={fingerprint}"
+    )]
+    HostKeyMismatch {
+        line: usize,
+        key_type: String,
+        fingerprint: String,
+    },
 }
 
 pub(crate) enum Backend {
@@ -66,13 +84,24 @@ type SessionMap = Arc<Mutex<HashMap<String, Backend>>>;
 pub struct SessionManager {
     sink: Arc<dyn EventSink>,
     sessions: SessionMap,
+    /// Overrides the known_hosts file SSH connections verify against.
+    /// `None` means the real `~/.ssh/known_hosts`; tests point this at a
+    /// tempfile so they never touch (or depend on) a real home directory.
+    known_hosts_path: Option<PathBuf>,
 }
 
 impl SessionManager {
     pub fn new(sink: Arc<dyn EventSink>) -> Self {
+        Self::with_known_hosts_path(sink, None)
+    }
+
+    /// Like [`Self::new`], but pins the known_hosts file used for SSH host
+    /// key verification to `known_hosts_path` instead of `~/.ssh/known_hosts`.
+    pub fn with_known_hosts_path(sink: Arc<dyn EventSink>, known_hosts_path: Option<PathBuf>) -> Self {
         Self {
             sink,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            known_hosts_path,
         }
     }
 
@@ -104,20 +133,34 @@ impl SessionManager {
     }
 
     /// Connects to a saved SSH host and opens a shell channel.
+    ///
+    /// `trust_host` controls what happens when the server's host key is not
+    /// yet recorded in known_hosts: `false` fails the connection with
+    /// [`SessionError::UnknownHostKey`] (the caller can offer a TOFU prompt
+    /// and retry with `true`); `true` records the key and proceeds. A key
+    /// that mismatches an *existing* known_hosts entry is always rejected
+    /// via [`SessionError::HostKeyMismatch`], regardless of `trust_host`.
     pub async fn create_ssh(
         &self,
         host: &SshHost,
         secrets: SshSecrets,
         cols: u16,
         rows: u16,
+        trust_host: bool,
     ) -> Result<SessionInfo, SessionError> {
         let id = uuid::Uuid::new_v4().to_string();
+        let known_hosts_path = self
+            .known_hosts_path
+            .clone()
+            .unwrap_or_else(ssh::default_known_hosts_path);
         let session = ssh::SshSession::connect(
             &id,
             host,
             secrets,
             cols,
             rows,
+            trust_host,
+            known_hosts_path,
             self.sink.clone(),
             self.sessions.clone(),
         )

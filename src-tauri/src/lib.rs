@@ -82,6 +82,7 @@ async fn create_ssh_session(
     passphrase: Option<String>,
     cols: u16,
     rows: u16,
+    trust_host: Option<bool>,
 ) -> CmdResult<SessionInfo> {
     let host = state
         .stores
@@ -91,7 +92,13 @@ async fn create_ssh_session(
         .ok_or_else(|| format!("unknown host: {host_id}"))?;
     state
         .sessions
-        .create_ssh(&host, SshSecrets { password, passphrase }, cols, rows)
+        .create_ssh(
+            &host,
+            SshSecrets { password, passphrase },
+            cols,
+            rows,
+            trust_host.unwrap_or(false),
+        )
         .await
         .map_err(|e| e.to_string())
 }

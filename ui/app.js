@@ -88,6 +88,15 @@ async function newSshThread(host) {
   const secrets = await promptSshSecrets(host);
   if (secrets === null) return; // cancelled
   const { cols, rows } = measureCells();
+  await connectSsh(host, secrets, cols, rows, false);
+}
+
+/** Connects, and on an "unknown host key" (TOFU) rejection, offers to trust
+ * and retry. `trustHost` is only ever escalated true->once, after explicit
+ * user confirmation — a key that actually MISMATCHES known_hosts is always
+ * rejected by the backend regardless of this flag, so there is no retry
+ * path for that case. */
+async function connectSsh(host, secrets, cols, rows, trustHost) {
   toast(`${host.name || host.host} へ接続中…`);
   try {
     const info = await invoke('create_ssh_session', {
@@ -95,12 +104,41 @@ async function newSshThread(host) {
       password: secrets.password ?? null,
       passphrase: secrets.passphrase ?? null,
       cols, rows,
+      trustHost,
     });
     createThread(info, state.focusedPane);
     toast('接続しました');
   } catch (e) {
-    toast(`SSH 接続失敗: ${e}`, true);
+    const msg = String(e);
+    const unknown = !trustHost && msg.match(/^UNKNOWN_HOST_KEY:([^:]+):(.+)$/);
+    if (unknown) {
+      const [, keyType, fingerprint] = unknown;
+      if (await confirmTrustHost(host, keyType, fingerprint)) {
+        await connectSsh(host, secrets, cols, rows, true);
+      } else {
+        toast('未知のホスト鍵のため接続を中止しました', true);
+      }
+      return;
+    }
+    toast(`SSH 接続失敗: ${msg}`, true);
   }
+}
+
+/** TOFU prompt shown the first time we connect to a host whose key isn't yet
+ * recorded in known_hosts. Approving saves the key (via `trust_host: true`
+ * on the retried connection) so future connections verify against it. */
+function confirmTrustHost(host, keyType, fingerprint) {
+  return new Promise((resolve) => {
+    openModal({
+      title:
+        `初回接続です。このホスト鍵を信頼して known_hosts に保存し、接続しますか? ` +
+        `[ホスト: ${host.name || host.host}:${host.port} / 鍵種別: ${keyType} / フィンガープリント: ${fingerprint}]`,
+      okLabel: '信頼して接続',
+      body: [],
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
 }
 
 function createThread(info, paneIdx) {
