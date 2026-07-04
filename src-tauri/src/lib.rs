@@ -212,6 +212,9 @@ fn save_settings(state: State<AppState>, settings: Settings) -> CmdResult<()> {
 
 pub fn run() {
     tauri::Builder::default()
+        // Remembers window size/position/maximized state across restarts,
+        // restoring it before the window is first shown.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let stores = Stores::new(dir)?;
