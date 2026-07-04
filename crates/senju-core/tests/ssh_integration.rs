@@ -55,6 +55,21 @@ async fn wait_for(capture: &Capture, needle: &str) -> bool {
     false
 }
 
+/// Connects once with no `expected_fingerprint`, which must fail with
+/// `SessionError::UnknownHostKey`, and returns the fingerprint it reported —
+/// i.e. simulates "the UI showed the user this fingerprint and they looked
+/// at it", the state a real approval would be based on.
+async fn learn_unknown_host_fingerprint(mgr: &SessionManager, host: &SshHost, secrets: SshSecrets) -> String {
+    let err = mgr
+        .create_ssh(host, secrets, 80, 24, None)
+        .await
+        .expect_err("host must still be unknown at this point");
+    match err {
+        SessionError::UnknownHostKey { fingerprint, .. } => fingerprint,
+        other => panic!("expected UnknownHostKey, got: {other}"),
+    }
+}
+
 async fn run_shell_roundtrip(auth_method: SshAuthMethod, secrets: SshSecrets) {
     let sink = Arc::new(Capture::default());
     // Each test gets its own known_hosts file (not the real
@@ -65,10 +80,20 @@ async fn run_shell_roundtrip(auth_method: SshAuthMethod, secrets: SshSecrets) {
         sink.clone(),
         Some(known_hosts_dir.path().join("known_hosts")),
     );
+    // These tests exercise the shell roundtrip, not host key verification:
+    // learn the real fingerprint via the expected first-contact rejection,
+    // then reconnect approving exactly that fingerprint (the TOFU-approved
+    // path), which records it and proceeds.
+    let expected_fingerprint =
+        learn_unknown_host_fingerprint(&mgr, &test_host(auth_method), secrets.clone()).await;
     let info = mgr
-        // trust_host: true — these tests exercise the shell roundtrip, not
-        // host key verification, so the first connection should just work.
-        .create_ssh(&test_host(auth_method), secrets, 80, 24, true)
+        .create_ssh(
+            &test_host(auth_method),
+            secrets,
+            80,
+            24,
+            Some(expected_fingerprint),
+        )
         .await
         .expect("ssh connect");
     assert_eq!(info.kind, "ssh");
@@ -121,6 +146,18 @@ async fn wrong_password_is_rejected() {
         sink,
         Some(known_hosts_dir.path().join("known_hosts")),
     );
+    // Get past host-key verification first (with the real, approved
+    // fingerprint) so the failure this test checks for is really about
+    // authentication, not an incidental UnknownHostKey rejection.
+    let expected_fingerprint = learn_unknown_host_fingerprint(
+        &mgr,
+        &test_host(SshAuthMethod::Password),
+        SshSecrets {
+            password: Some("definitely-wrong".into()),
+            passphrase: None,
+        },
+    )
+    .await;
     let err = mgr
         .create_ssh(
             &test_host(SshAuthMethod::Password),
@@ -130,7 +167,7 @@ async fn wrong_password_is_rejected() {
             },
             80,
             24,
-            true,
+            Some(expected_fingerprint),
         )
         .await
         .expect_err("auth should fail");
@@ -142,11 +179,13 @@ async fn wrong_password_is_rejected() {
 }
 
 /// Known_hosts TOFU workflow against a real sshd:
-/// (a) first connection with `trust_host: false` fails with
+/// (a) first connection with `expected_fingerprint: None` fails with
 ///     `SessionError::UnknownHostKey`;
-/// (b) retrying with `trust_host: true` succeeds and records the key;
-/// (c) reconnecting with `trust_host: false` now succeeds, since the key is
-///     recorded and matches.
+/// (b) retrying with `expected_fingerprint: Some(<the fingerprint that error
+///     reported>)` succeeds and records the key;
+/// (c) reconnecting with `expected_fingerprint: None` now succeeds, since the
+///     key is recorded and matches (no approval needed for an already-known
+///     host).
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a live sshd (see module docs)"]
 async fn known_hosts_tofu_workflow() {
@@ -157,8 +196,9 @@ async fn known_hosts_tofu_workflow() {
         passphrase: None,
     };
 
-    // (a) unknown host, not trusted -> rejected with UnknownHostKey.
-    {
+    // (a) unknown host, no approved fingerprint -> rejected with
+    // UnknownHostKey.
+    let real_fingerprint = {
         let sink = Arc::new(Capture::default());
         let mgr =
             SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
@@ -168,24 +208,27 @@ async fn known_hosts_tofu_workflow() {
                 secrets(),
                 80,
                 24,
-                false,
+                None,
             )
             .await
             .expect_err("unknown host must be rejected");
-        match err {
+        let fingerprint = match err {
             SessionError::UnknownHostKey { key_type, fingerprint } => {
                 assert!(!key_type.is_empty());
                 assert!(fingerprint.starts_with("SHA256:"), "{fingerprint}");
+                fingerprint
             }
             other => panic!("expected UnknownHostKey, got: {other}"),
-        }
+        };
         assert!(
             !known_hosts_path.exists(),
-            "known_hosts must not be written when trust_host is false"
+            "known_hosts must not be written when no fingerprint has been approved"
         );
-    }
+        fingerprint
+    };
 
-    // (b) unknown host, trusted -> connects and records the key.
+    // (b) unknown host, approving the SAME fingerprint the server actually
+    // presented -> connects and records the key.
     {
         let sink = Arc::new(Capture::default());
         let mgr =
@@ -196,14 +239,14 @@ async fn known_hosts_tofu_workflow() {
                 secrets(),
                 80,
                 24,
-                true,
+                Some(real_fingerprint.clone()),
             )
             .await
-            .expect("trusted first connection should succeed");
+            .expect("approving the real fingerprint should succeed");
         mgr.kill(&info.id);
         assert!(
             known_hosts_path.exists(),
-            "trust_host: true should have recorded the host key"
+            "a matching expected_fingerprint should have recorded the host key"
         );
         let contents = std::fs::read_to_string(&known_hosts_path).unwrap();
         assert!(
@@ -212,7 +255,8 @@ async fn known_hosts_tofu_workflow() {
         );
     }
 
-    // (c) now-known host, not trusted -> still connects (key matches).
+    // (c) now-known host, no expected_fingerprint supplied -> still connects
+    // (key matches the one already recorded in known_hosts).
     {
         let sink = Arc::new(Capture::default());
         let mgr =
@@ -223,10 +267,107 @@ async fn known_hosts_tofu_workflow() {
                 secrets(),
                 80,
                 24,
-                false,
+                None,
             )
             .await
             .expect("previously-learned host key should verify");
         mgr.kill(&info.id);
+    }
+}
+
+/// Regression test for the TOFU TOCTOU vulnerability: the fingerprint the
+/// user approved (from a first, failed handshake) must be checked against
+/// the key presented on the retried handshake, not accepted unconditionally.
+///
+/// (a) `expected_fingerprint: None` against an unknown host -> rejected with
+///     `UnknownHostKey`, nothing written.
+/// (b) `expected_fingerprint: Some(<the real fingerprint>)` -> connects,
+///     known_hosts is written.
+/// (c) `expected_fingerprint: Some("SHA256:" + wrong value)` against a still
+///     -unknown host -> **fails closed** with `FingerprintMismatch`, and
+///     known_hosts is NOT written. This is the exact scenario a MITM would
+///     trigger by presenting a different key on the second handshake than
+///     the one relayed (and approved) on the first.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live sshd (see module docs)"]
+async fn toctou_fingerprint_mismatch_is_rejected_and_not_learned() {
+    let secrets = || SshSecrets {
+        password: Some(env("SENJU_SSH_PASSWORD")),
+        passphrase: None,
+    };
+
+    // (a) learn the real fingerprint via the expected first-contact
+    // rejection, against a fresh known_hosts file.
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = known_hosts_dir.path().join("known_hosts");
+    let real_fingerprint = {
+        let sink = Arc::new(Capture::default());
+        let mgr =
+            SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+        learn_unknown_host_fingerprint(&mgr, &test_host(SshAuthMethod::Password), secrets()).await
+    };
+    assert!(
+        !known_hosts_path.exists(),
+        "known_hosts must not be written by the rejected first attempt"
+    );
+
+    // (c) reconnect against the SAME still-unknown host, but claim the user
+    // approved a bogus fingerprint (simulating a MITM swapping the key
+    // between the first and second handshake, or simply a stale/incorrect
+    // approval). Must fail closed and must NOT touch known_hosts.
+    {
+        let sink = Arc::new(Capture::default());
+        let mgr =
+            SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+        let bogus_fingerprint =
+            "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA".to_string();
+        assert_ne!(bogus_fingerprint, real_fingerprint);
+        let err = mgr
+            .create_ssh(
+                &test_host(SshAuthMethod::Password),
+                secrets(),
+                80,
+                24,
+                Some(bogus_fingerprint.clone()),
+            )
+            .await
+            .expect_err("a fingerprint that doesn't match the presented key must be rejected");
+        match err {
+            SessionError::FingerprintMismatch {
+                expected, actual, ..
+            } => {
+                assert_eq!(expected, bogus_fingerprint);
+                assert_eq!(actual, real_fingerprint);
+            }
+            other => panic!("expected FingerprintMismatch, got: {other}"),
+        }
+        assert!(
+            !known_hosts_path.exists(),
+            "known_hosts must NOT be written when the presented key doesn't match \
+             the fingerprint the user approved"
+        );
+    }
+
+    // (b) now reconnect approving the REAL fingerprint -> succeeds, and
+    // known_hosts is written this time.
+    {
+        let sink = Arc::new(Capture::default());
+        let mgr =
+            SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+        let info = mgr
+            .create_ssh(
+                &test_host(SshAuthMethod::Password),
+                secrets(),
+                80,
+                24,
+                Some(real_fingerprint),
+            )
+            .await
+            .expect("approving the real fingerprint should succeed");
+        mgr.kill(&info.id);
+        assert!(
+            known_hosts_path.exists(),
+            "approving the correct fingerprint should have recorded the host key"
+        );
     }
 }

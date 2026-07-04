@@ -88,15 +88,28 @@ async function newSshThread(host) {
   const secrets = await promptSshSecrets(host);
   if (secrets === null) return; // cancelled
   const { cols, rows } = measureCells();
-  await connectSsh(host, secrets, cols, rows, false);
+  await connectSsh(host, secrets, cols, rows, null);
 }
 
 /** Connects, and on an "unknown host key" (TOFU) rejection, offers to trust
- * and retry. `trustHost` is only ever escalated true->once, after explicit
- * user confirmation — a key that actually MISMATCHES known_hosts is always
- * rejected by the backend regardless of this flag, so there is no retry
- * path for that case. */
-async function connectSsh(host, secrets, cols, rows, trustHost) {
+ * and retry.
+ *
+ * `expectedFingerprint` is `null` on the first attempt. If the backend
+ * rejects with `UNKNOWN_HOST_KEY:<type>:<fingerprint>`, the modal shows the
+ * user exactly that `fingerprint` string; if they approve it, the SAME
+ * string (captured straight out of the regex match below — never
+ * re-derived, never trusted from anywhere else) is threaded back into the
+ * retry as `expectedFingerprint`. The backend only records/accepts the key
+ * on that retry if the key it sees THEN has that exact SHA256 fingerprint,
+ * which is what stops a MITM from relaying the real key on the first
+ * handshake (so the user approves a genuine fingerprint) and substituting
+ * its own key on the second.
+ *
+ * If the retry's key doesn't match (`FINGERPRINT_MISMATCH:`), this is a
+ * fail-closed rejection: warn the user and stop — no further retry loop,
+ * so an attacker can't get a second (or third) bite at the fingerprint
+ * check. */
+async function connectSsh(host, secrets, cols, rows, expectedFingerprint) {
   toast(`${host.name || host.host} へ接続中…`);
   try {
     const info = await invoke('create_ssh_session', {
@@ -104,17 +117,27 @@ async function connectSsh(host, secrets, cols, rows, trustHost) {
       password: secrets.password ?? null,
       passphrase: secrets.passphrase ?? null,
       cols, rows,
-      trustHost,
+      expectedFingerprint,
     });
     createThread(info, state.focusedPane);
     toast('接続しました');
   } catch (e) {
     const msg = String(e);
-    const unknown = !trustHost && msg.match(/^UNKNOWN_HOST_KEY:([^:]+):(.+)$/);
+    if (msg.match(/^FINGERPRINT_MISMATCH:/)) {
+      // Fail closed: do NOT retry. Retrying here would give an active MITM
+      // repeated chances to slip its key in once the user has already
+      // approved one fingerprint.
+      toast(
+        '承認した鍵と異なる鍵が提示されました。中間者攻撃の可能性があるため接続を中止しました',
+        true,
+      );
+      return;
+    }
+    const unknown = !expectedFingerprint && msg.match(/^UNKNOWN_HOST_KEY:([^:]+):(.+)$/);
     if (unknown) {
       const [, keyType, fingerprint] = unknown;
       if (await confirmTrustHost(host, keyType, fingerprint)) {
-        await connectSsh(host, secrets, cols, rows, true);
+        await connectSsh(host, secrets, cols, rows, fingerprint);
       } else {
         toast('未知のホスト鍵のため接続を中止しました', true);
       }
@@ -125,8 +148,9 @@ async function connectSsh(host, secrets, cols, rows, trustHost) {
 }
 
 /** TOFU prompt shown the first time we connect to a host whose key isn't yet
- * recorded in known_hosts. Approving saves the key (via `trust_host: true`
- * on the retried connection) so future connections verify against it. */
+ * recorded in known_hosts. Approving threads the exact fingerprint the user
+ * saw back into the retried connection as `expectedFingerprint`, so the
+ * backend only trusts a key that provably matches what was approved. */
 function confirmTrustHost(host, keyType, fingerprint) {
   return new Promise((resolve) => {
     openModal({

@@ -37,6 +37,17 @@ enum HostKeyOutcome {
         key_type: String,
         fingerprint: String,
     },
+    /// The host is still unknown, and the caller supplied a fingerprint the
+    /// user approved during a *previous* handshake (the first TOFU prompt
+    /// round-trip), but the key presented THIS handshake doesn't match it.
+    /// This is exactly the TOCTOU window a MITM could exploit by relaying the
+    /// real key on the first handshake and substituting its own on the
+    /// second — so it is never learned and never accepted.
+    FingerprintMismatch {
+        key_type: String,
+        expected: String,
+        actual: String,
+    },
     /// known_hosts could not be read/parsed/written for some other reason.
     VerifyError(String),
 }
@@ -61,6 +72,64 @@ fn check_host_key(host: &str, port: u16, pubkey: &PublicKey, known_hosts_path: &
     }
 }
 
+/// Result of resolving a `HostKeyCheck::Unknown` host against an
+/// `expected_fingerprint` (or the lack of one). This is the crux of the
+/// TOCTOU fix: it is a plain, synchronous function — independent of russh's
+/// async `Handler` plumbing — so the fingerprint-matching logic itself can
+/// be unit tested directly against a temp known_hosts file, with no fake SSH
+/// server required.
+#[derive(Debug, PartialEq)]
+enum UnknownHostResolution {
+    /// The presented key's own SHA256 fingerprint matched
+    /// `expected_fingerprint` exactly; it has been learned into known_hosts.
+    Learned,
+    /// No `expected_fingerprint` was supplied at all: report the key back to
+    /// the caller (typically to show a TOFU confirmation prompt) rather than
+    /// auto-trusting it.
+    ReportUnknown { key_type: String, fingerprint: String },
+    /// An `expected_fingerprint` was supplied but did NOT match the key
+    /// actually presented. **Fail closed**: nothing is learned or accepted.
+    /// This is exactly the case a MITM hits by relaying the real key on a
+    /// first handshake (which the user approves) and substituting its own
+    /// key on the second.
+    FingerprintMismatch {
+        key_type: String,
+        expected: String,
+        actual: String,
+    },
+    /// known_hosts could not be written.
+    WriteError(String),
+}
+
+fn resolve_unknown_host(
+    host: &str,
+    port: u16,
+    pubkey: &PublicKey,
+    known_hosts_path: &Path,
+    expected_fingerprint: Option<&str>,
+) -> UnknownHostResolution {
+    let (key_type, actual_fingerprint) = describe_key(pubkey);
+    match expected_fingerprint {
+        Some(expected) if expected == actual_fingerprint => {
+            match learn_known_hosts_path(host, port, pubkey, known_hosts_path) {
+                Ok(()) => UnknownHostResolution::Learned,
+                Err(e) => UnknownHostResolution::WriteError(format!(
+                    "known_hosts への書き込みに失敗しました: {e}"
+                )),
+            }
+        }
+        Some(expected) => UnknownHostResolution::FingerprintMismatch {
+            key_type,
+            expected: expected.to_string(),
+            actual: actual_fingerprint,
+        },
+        None => UnknownHostResolution::ReportUnknown {
+            key_type,
+            fingerprint: actual_fingerprint,
+        },
+    }
+}
+
 /// `ssh-ed25519` style algorithm name and `SHA256:...` fingerprint, the same
 /// shorthand OpenSSH prints when it meets an unfamiliar host key.
 fn describe_key(pubkey: &PublicKey) -> (String, String) {
@@ -81,7 +150,14 @@ pub(crate) fn default_known_hosts_path() -> PathBuf {
 struct Client {
     host: String,
     port: u16,
-    trust_host: bool,
+    /// `Some(fp)` means: the host was unknown on a *prior* handshake, the UI
+    /// showed the user fingerprint `fp`, and the user approved it. The key
+    /// presented on THIS handshake is only trusted (and learned) if its own
+    /// SHA256 fingerprint matches `fp` exactly — this is what closes the
+    /// TOCTOU gap between "user looked at a fingerprint" and "we saved a
+    /// key". `None` means no prior approval exists; an unknown host must be
+    /// reported back to the UI instead of being auto-trusted.
+    expected_fingerprint: Option<String>,
     known_hosts_path: PathBuf,
     outcome: Arc<StdMutex<Option<HostKeyOutcome>>>,
 }
@@ -92,10 +168,18 @@ impl client::Handler for Client {
     /// OpenSSH-compatible known_hosts (TOFU) verification:
     /// - key matches the recorded entry → accept
     /// - key present under a different key → **always** reject (possible
-    ///   MITM), regardless of `trust_host`
-    /// - host not recorded at all → accept only if `trust_host` is set (and
-    ///   then record it), otherwise reject with enough detail (algorithm +
-    ///   SHA256 fingerprint) for the caller to prompt the user
+    ///   MITM), regardless of `expected_fingerprint`
+    /// - host not recorded at all:
+    ///   - `expected_fingerprint` is `Some(fp)` and the presented key's own
+    ///     SHA256 fingerprint equals `fp` exactly → learn it and accept
+    ///     (the key the user approved is provably the key we are about to
+    ///     trust)
+    ///   - `expected_fingerprint` is `Some(fp)` but the fingerprints differ →
+    ///     **fail closed**: never learn, never accept. This is the case a
+    ///     MITM would hit by presenting a different key on the second
+    ///     handshake than the one relayed (and approved) on the first.
+    ///   - `expected_fingerprint` is `None` → reject with enough detail
+    ///     (algorithm + SHA256 fingerprint) for the caller to prompt the user
     async fn check_server_key(
         &mut self,
         server_public_key: &russh::keys::PublicKey,
@@ -115,29 +199,41 @@ impl client::Handler for Client {
                 *self.outcome.lock().unwrap() = Some(HostKeyOutcome::VerifyError(msg));
                 Ok(false)
             }
-            HostKeyCheck::Unknown => {
-                if self.trust_host {
-                    if let Err(e) = learn_known_hosts_path(
-                        &self.host,
-                        self.port,
-                        server_public_key,
-                        &self.known_hosts_path,
-                    ) {
-                        *self.outcome.lock().unwrap() = Some(HostKeyOutcome::VerifyError(format!(
-                            "known_hosts への書き込みに失敗しました: {e}"
-                        )));
-                        return Err(russh::Error::from(e));
-                    }
-                    Ok(true)
-                } else {
-                    let (key_type, fingerprint) = describe_key(server_public_key);
+            HostKeyCheck::Unknown => match resolve_unknown_host(
+                &self.host,
+                self.port,
+                server_public_key,
+                &self.known_hosts_path,
+                self.expected_fingerprint.as_deref(),
+            ) {
+                UnknownHostResolution::Learned => Ok(true),
+                UnknownHostResolution::FingerprintMismatch {
+                    key_type,
+                    expected,
+                    actual,
+                } => {
+                    // The key presented now does NOT match the fingerprint
+                    // the user approved earlier. Never learn it, never
+                    // accept it — no `Ok(true)` fallback here.
+                    *self.outcome.lock().unwrap() = Some(HostKeyOutcome::FingerprintMismatch {
+                        key_type,
+                        expected,
+                        actual,
+                    });
+                    Ok(false)
+                }
+                UnknownHostResolution::ReportUnknown { key_type, fingerprint } => {
                     *self.outcome.lock().unwrap() = Some(HostKeyOutcome::Unknown {
                         key_type,
                         fingerprint,
                     });
                     Ok(false)
                 }
-            }
+                UnknownHostResolution::WriteError(msg) => {
+                    *self.outcome.lock().unwrap() = Some(HostKeyOutcome::VerifyError(msg.clone()));
+                    Err(russh::Error::from(std::io::Error::other(msg)))
+                }
+            },
         }
     }
 }
@@ -160,6 +256,15 @@ fn host_key_error(e: russh::Error, outcome: &StdMutex<Option<HostKeyOutcome>>) -
             key_type,
             fingerprint,
         },
+        Some(HostKeyOutcome::FingerprintMismatch {
+            key_type,
+            expected,
+            actual,
+        }) => SessionError::FingerprintMismatch {
+            key_type,
+            expected,
+            actual,
+        },
         Some(HostKeyOutcome::VerifyError(msg)) => {
             SessionError::Ssh(format!("known_hosts の検証に失敗しました: {msg}"))
         }
@@ -175,7 +280,7 @@ impl SshSession {
         secrets: SshSecrets,
         cols: u16,
         rows: u16,
-        trust_host: bool,
+        expected_fingerprint: Option<String>,
         known_hosts_path: PathBuf,
         sink: Arc<dyn EventSink>,
         sessions: SessionMap,
@@ -189,7 +294,7 @@ impl SshSession {
         let handler = Client {
             host: host.host.clone(),
             port: host.port,
-            trust_host,
+            expected_fingerprint,
             known_hosts_path,
             outcome: outcome.clone(),
         };
@@ -472,6 +577,89 @@ mod known_hosts_tests {
         assert_eq!(
             check_host_key("example.com", 22, &key(KEY_B), &path),
             HostKeyCheck::Mismatch { line: 2 }
+        );
+    }
+
+    // -- TOFU TOCTOU fix: `resolve_unknown_host` ----------------------------
+    //
+    // These exercise the exact logic `Client::check_server_key` delegates to
+    // for an unknown host, against a real (temp-file) known_hosts, without
+    // needing a fake SSH server: does supplying the fingerprint the user
+    // approved cause the key to be learned only when it truly matches what
+    // was presented, and does a mismatch leave known_hosts untouched?
+
+    #[test]
+    fn expected_fingerprint_matching_learns_and_accepts() {
+        let (_dir, path) = known_hosts_with("");
+        let (_key_type, fingerprint) = describe_key(&key(KEY_A));
+
+        let resolution =
+            resolve_unknown_host("example.com", 22, &key(KEY_A), &path, Some(&fingerprint));
+        assert_eq!(resolution, UnknownHostResolution::Learned);
+
+        // The key must actually have been written and now verifies as a
+        // match on a fresh check.
+        assert_eq!(
+            check_host_key("example.com", 22, &key(KEY_A), &path),
+            HostKeyCheck::Match
+        );
+    }
+
+    #[test]
+    fn expected_fingerprint_mismatch_never_learns_or_accepts() {
+        let (_dir, path) = known_hosts_with("");
+        // `expected` is the fingerprint of KEY_A (what the user approved,
+        // e.g. from a prior UNKNOWN_HOST_KEY prompt) but the server
+        // presents KEY_B on this handshake — the TOCTOU/MITM scenario.
+        let (_key_type, expected_fingerprint) = describe_key(&key(KEY_A));
+        let (key_b_type, key_b_fingerprint) = describe_key(&key(KEY_B));
+
+        let resolution = resolve_unknown_host(
+            "example.com",
+            22,
+            &key(KEY_B),
+            &path,
+            Some(&expected_fingerprint),
+        );
+        assert_eq!(
+            resolution,
+            UnknownHostResolution::FingerprintMismatch {
+                key_type: key_b_type,
+                expected: expected_fingerprint,
+                actual: key_b_fingerprint,
+            }
+        );
+
+        // Nothing must have been written to known_hosts: the file must
+        // either not exist, or (if it does) still report the host as
+        // unknown rather than matching/mismatching a learned entry.
+        assert!(
+            !path.exists() || std::fs::read_to_string(&path).unwrap().trim().is_empty(),
+            "known_hosts must not be written on a fingerprint mismatch"
+        );
+        assert_eq!(
+            check_host_key("example.com", 22, &key(KEY_B), &path),
+            HostKeyCheck::Unknown,
+            "a rejected key must not have been learned"
+        );
+    }
+
+    #[test]
+    fn no_expected_fingerprint_reports_unknown_without_learning() {
+        let (_dir, path) = known_hosts_with("");
+        let (key_type, fingerprint) = describe_key(&key(KEY_A));
+
+        let resolution = resolve_unknown_host("example.com", 22, &key(KEY_A), &path, None);
+        assert_eq!(
+            resolution,
+            UnknownHostResolution::ReportUnknown {
+                key_type,
+                fingerprint,
+            }
+        );
+        assert!(
+            std::fs::read_to_string(&path).unwrap().trim().is_empty(),
+            "known_hosts must not be written when no fingerprint has been approved yet"
         );
     }
 }

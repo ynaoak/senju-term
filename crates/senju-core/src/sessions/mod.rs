@@ -72,6 +72,24 @@ pub enum SessionError {
         key_type: String,
         fingerprint: String,
     },
+    /// The host was still unknown, the UI had already shown the user a
+    /// fingerprint from a *previous* handshake and the user approved it, but
+    /// the key presented on THIS (re-)connection has a different SHA256
+    /// fingerprint. This is the TOFU TOCTOU window a MITM could exploit by
+    /// relaying the real key on the first handshake (so the user approves a
+    /// genuine fingerprint) and substituting its own key on the second. The
+    /// key is never learned and the connection is always rejected — there is
+    /// no fallback that accepts it. The `FINGERPRINT_MISMATCH:` prefix keeps
+    /// the message machine-parseable for the frontend, same convention as
+    /// `UnknownHostKey`.
+    #[error(
+        "FINGERPRINT_MISMATCH:{key_type}:{actual}:承認したホスト鍵(フィンガープリント={expected})とは異なる鍵が提示されました。中間者攻撃(MITM)の可能性があるため接続を中止しました。known_hosts への保存は行っていません。"
+    )]
+    FingerprintMismatch {
+        key_type: String,
+        expected: String,
+        actual: String,
+    },
 }
 
 pub(crate) enum Backend {
@@ -134,19 +152,29 @@ impl SessionManager {
 
     /// Connects to a saved SSH host and opens a shell channel.
     ///
-    /// `trust_host` controls what happens when the server's host key is not
-    /// yet recorded in known_hosts: `false` fails the connection with
-    /// [`SessionError::UnknownHostKey`] (the caller can offer a TOFU prompt
-    /// and retry with `true`); `true` records the key and proceeds. A key
-    /// that mismatches an *existing* known_hosts entry is always rejected
-    /// via [`SessionError::HostKeyMismatch`], regardless of `trust_host`.
+    /// `expected_fingerprint` controls what happens when the server's host
+    /// key is not yet recorded in known_hosts:
+    /// - `None` fails the connection with [`SessionError::UnknownHostKey`]
+    ///   (the caller can show the fingerprint in a TOFU prompt and, if the
+    ///   user approves it, retry with `Some(that_fingerprint)`);
+    /// - `Some(fp)` only records the key and proceeds if the key presented
+    ///   during THIS handshake has a SHA256 fingerprint exactly equal to
+    ///   `fp`. If it doesn't match, the connection fails with
+    ///   [`SessionError::FingerprintMismatch`] and nothing is written to
+    ///   known_hosts — this closes the TOCTOU gap where a MITM could relay
+    ///   the real key on the first handshake (so the user approves a genuine
+    ///   fingerprint) and substitute its own key on the second.
+    ///
+    /// A key that mismatches an *existing* known_hosts entry is always
+    /// rejected via [`SessionError::HostKeyMismatch`], regardless of
+    /// `expected_fingerprint`.
     pub async fn create_ssh(
         &self,
         host: &SshHost,
         secrets: SshSecrets,
         cols: u16,
         rows: u16,
-        trust_host: bool,
+        expected_fingerprint: Option<String>,
     ) -> Result<SessionInfo, SessionError> {
         let id = uuid::Uuid::new_v4().to_string();
         let known_hosts_path = self
@@ -159,7 +187,7 @@ impl SessionManager {
             secrets,
             cols,
             rows,
-            trust_host,
+            expected_fingerprint,
             known_hosts_path,
             self.sink.clone(),
             self.sessions.clone(),
