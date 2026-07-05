@@ -6,6 +6,8 @@
 mod local;
 mod ssh;
 
+pub use ssh::SshTestReport;
+
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -206,6 +208,21 @@ impl SessionManager {
             },
             kind: "ssh".into(),
         })
+    }
+
+    /// Probes an SSH host (reachability, host key, credentials) without
+    /// creating a persistent session or learning the host key. Backs the
+    /// pre-save "test connection" button in the host editor.
+    pub async fn test_ssh(
+        &self,
+        host: &SshHost,
+        secrets: SshSecrets,
+    ) -> Result<SshTestReport, SessionError> {
+        let known_hosts_path = self
+            .known_hosts_path
+            .clone()
+            .unwrap_or_else(ssh::default_known_hosts_path);
+        ssh::test_connection(host, secrets, known_hosts_path).await
     }
 
     pub async fn write(&self, id: &str, data: &[u8]) -> Result<(), SessionError> {

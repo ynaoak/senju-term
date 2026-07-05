@@ -248,9 +248,19 @@ async function closeThread(id, { kill = true } = {}) {
 function createPane() {
   const root = document.createElement('div');
   root.className = 'pane';
+  // A custom dropdown (not a native <select>) so each row can render the
+  // inline Material push_pin SVG, matching the thread list — native <option>
+  // elements can only hold text.
   root.innerHTML = `
     <div class="pane-head">
-      <select class="pane-thread" title="このペインに表示するスレッド"></select>
+      <div class="pane-thread-dd">
+        <button type="button" class="pane-thread-btn" title="このペインに表示するスレッド">
+          <span class="ptd-icon"></span>
+          <span class="ptd-label"></span>
+          <span class="ptd-caret">▾</span>
+        </button>
+        <ul class="pane-thread-menu hidden" role="listbox"></ul>
+      </div>
       <span class="pane-kind"></span>
       <div class="spacer"></div>
       <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">✕</button>
@@ -258,16 +268,32 @@ function createPane() {
     <div class="pane-body"></div>`;
   const pane = {
     root,
-    select: root.querySelector('.pane-thread'),
+    dd: root.querySelector('.pane-thread-dd'),
+    ddBtn: root.querySelector('.pane-thread-btn'),
+    ddMenu: root.querySelector('.pane-thread-menu'),
+    ddIcon: root.querySelector('.ptd-icon'),
+    ddLabel: root.querySelector('.ptd-label'),
     kindEl: root.querySelector('.pane-kind'),
     closeBtn: root.querySelector('.pane-close'),
     body: root.querySelector('.pane-body'),
     threadId: null,
   };
-  pane.select.addEventListener('change', () => {
+  pane.ddBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
     focusPane(state.panes.indexOf(pane));
-    assignThread(state.panes.indexOf(pane), pane.select.value || null);
+    togglePaneMenu(pane);
   });
+  pane.ddBtn.addEventListener('keydown', (ev) => {
+    if (['ArrowDown', 'Enter', ' '].includes(ev.key)) {
+      ev.preventDefault();
+      if (pane.ddMenu.classList.contains('hidden')) togglePaneMenu(pane);
+    }
+  });
+  // Interactions inside the dropdown must not bubble to the pane's root
+  // mousedown handler below — that fires focusPane() → renderThreads(), which
+  // rebuilds the open menu and detaches the row mid-click, swallowing the
+  // selection. The dropdown's own handlers call focusPane() explicitly.
+  pane.dd.addEventListener('mousedown', (ev) => ev.stopPropagation());
   pane.closeBtn.addEventListener('click', () => removePane(state.panes.indexOf(pane)));
   root.addEventListener('mousedown', () => focusPane(state.panes.indexOf(pane)));
   new ResizeObserver(() => {
@@ -275,6 +301,71 @@ function createPane() {
     if (t) t.fit.fit();
   }).observe(pane.body);
   return pane;
+}
+
+/** Closes every pane's thread menu (only one is ever open at a time). */
+function closeAllPaneMenus() {
+  for (const p of state.panes) {
+    p.ddMenu.classList.add('hidden');
+    p.dd.classList.remove('open');
+  }
+  window.removeEventListener('mousedown', paneMenuOutsideClick);
+}
+
+function paneMenuOutsideClick(ev) {
+  if (!ev.target.closest('.pane-thread-dd')) closeAllPaneMenus();
+}
+
+function togglePaneMenu(pane) {
+  const wasOpen = !pane.ddMenu.classList.contains('hidden');
+  closeAllPaneMenus();
+  if (wasOpen) return;
+  buildPaneMenu(pane);
+  pane.ddMenu.classList.remove('hidden');
+  pane.dd.classList.add('open');
+  // Focus the current (or first) row so arrow keys work immediately.
+  const sel = pane.ddMenu.querySelector('.ptd-item.selected') || pane.ddMenu.querySelector('.ptd-item');
+  sel?.focus();
+  setTimeout(() => window.addEventListener('mousedown', paneMenuOutsideClick), 0);
+}
+
+/** Builds the custom dropdown list for a pane. Each row carries the inline
+ * Material push_pin SVG for pinned threads, matching the sidebar. */
+function buildPaneMenu(pane) {
+  pane.ddMenu.innerHTML = '';
+  if (!state.threads.length) {
+    const li = document.createElement('li');
+    li.className = 'ptd-item empty';
+    li.textContent = '(スレッドなし)';
+    pane.ddMenu.appendChild(li);
+    return;
+  }
+  for (const t of orderedThreads()) {
+    const li = document.createElement('li');
+    li.className = 'ptd-item' + (t.id === pane.threadId ? ' selected' : '');
+    li.dataset.id = t.id;
+    li.tabIndex = 0;
+    li.setAttribute('role', 'option');
+    li.innerHTML = `
+      <span class="ptd-pin">${t.pinned ? pinIcon(true) : ''}</span>
+      <span class="ptd-kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>
+      <span class="ptd-name"></span>`;
+    li.querySelector('.ptd-name').textContent = t.title;
+    const choose = () => {
+      const idx = state.panes.indexOf(pane);
+      closeAllPaneMenus();
+      focusPane(idx);
+      assignThread(idx, t.id);
+    };
+    li.addEventListener('click', choose);
+    li.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); li.nextElementSibling?.focus(); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); li.previousElementSibling?.focus(); }
+      else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); choose(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); closeAllPaneMenus(); pane.ddBtn.focus(); }
+    });
+    pane.ddMenu.appendChild(li);
+  }
 }
 
 function setPaneThread(paneIdx, threadId) {
@@ -407,6 +498,24 @@ function enableSplitterDrag(splitter) {
 
 const PANE_MARK = ['▲', '▼'];
 
+// Google Material Symbols "push_pin" (filled when pinned, outlined otherwise),
+// inlined as SVG so it works offline with no webfont/CDN dependency.
+const PIN_PATH = {
+  filled:
+    'M16 9V4l1 0c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1l1 0v5c0 ' +
+    '1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z',
+  outlined:
+    'M14 4v5c0 1.12.37 2.16 1 3H9c.65-.86 1-1.9 1-3V4h4m3-2H7c-.55 0-1 .45-1 1s.45 ' +
+    '1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3V4h1c.55 ' +
+    '0 1-.45 1-1s-.45-1-1-1z',
+};
+
+function pinIcon(pinned) {
+  return `<svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><path d="${
+    pinned ? PIN_PATH.filled : PIN_PATH.outlined
+  }"/></svg>`;
+}
+
 /** Pinned threads first (in pin order), then the rest in creation order. */
 function orderedThreads() {
   return state.threads
@@ -512,7 +621,7 @@ function renderThreads() {
       <span class="activity-dot" title="新しい出力があります"></span>
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
-      <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${t.pinned ? '📌' : '📍'}</button>
+      <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${pinIcon(t.pinned)}</button>
       <button class="close" title="スレッドを終了">✕</button>`;
     li.querySelector('.title').textContent = t.title;
     li.querySelector('.pin').addEventListener('click', (ev) => {
@@ -526,24 +635,14 @@ function renderThreads() {
     li.addEventListener('click', () => assignThread(state.focusedPane, t.id));
     list.appendChild(li);
   }
-  // Keep every pane's dropdown in sync with the thread list.
+  // Keep every pane's dropdown button in sync with the thread list; rebuild
+  // the open menu (if any) so it reflects the latest threads/pins.
   state.panes.forEach((pane) => {
-    pane.select.innerHTML = '';
-    for (const t of orderedThreads()) {
-      const o = document.createElement('option');
-      o.value = t.id;
-      o.textContent = `${t.pinned ? '📌 ' : ''}${t.kind === 'ssh' ? '[SSH] ' : ''}${t.title}`;
-      pane.select.appendChild(o);
-    }
-    if (!state.threads.length) {
-      const o = document.createElement('option');
-      o.value = '';
-      o.textContent = '(スレッドなし)';
-      pane.select.appendChild(o);
-    }
-    pane.select.value = pane.threadId || '';
     const t = threadById(pane.threadId);
+    pane.ddIcon.innerHTML = t && t.pinned ? pinIcon(true) : '';
+    pane.ddLabel.textContent = t ? t.title : (state.threads.length ? '' : '(スレッドなし)');
     pane.kindEl.textContent = t ? (t.kind === 'ssh' ? 'SSH' : 'ローカル') : '';
+    if (!pane.ddMenu.classList.contains('hidden')) buildPaneMenu(pane);
   });
 }
 
@@ -706,6 +805,17 @@ function renderHosts() {
 
 function editHost(h) {
   const isNew = !h;
+  // Builds an SshHost from the form (the test-only secret field is excluded,
+  // so it is never persisted).
+  const hostFrom = (values) => ({
+    id: h?.id || '',
+    name: values.name.trim(),
+    host: values.host.trim(),
+    port: parseInt(values.port, 10) || 22,
+    username: values.username.trim(),
+    auth_method: values.auth_method,
+    key_path: values.key_path.trim(),
+  });
   openModal({
     title: isNew ? 'SSH ホストを登録' : 'SSH ホストを編集',
     okLabel: '保存',
@@ -718,19 +828,39 @@ function editHost(h) {
         ['password', 'パスワード'], ['key', '秘密鍵ファイル'], ['agent', 'ssh-agent'],
       ]),
       field('秘密鍵パス (認証方式: 秘密鍵)', 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
+      field('接続テスト用パスワード / パスフレーズ (保存されません)', 'test_secret', '', { type: 'password' }),
     ],
+    extraActions: [{
+      label: '接続テスト',
+      className: 'ghost-btn',
+      onClick: async ({ values, setStatus, btn }) => {
+        if (!values.host.trim() || !values.username.trim()) {
+          setStatus('ホストとユーザー名を入力してください', 'err');
+          return;
+        }
+        const host = hostFrom(values);
+        const secret = values.test_secret || '';
+        const args = { host };
+        if (host.auth_method === 'key') args.passphrase = secret || null;
+        else if (host.auth_method === 'password') args.password = secret || null;
+        // 'agent' needs no secret.
+        btn.disabled = true;
+        setStatus('接続テスト中…', '');
+        try {
+          const rep = await invoke('test_ssh_connection', args);
+          const key = rep.host_key_known
+            ? '既知のホスト鍵と一致'
+            : `新しいホスト鍵(未登録・保存なし): ${rep.key_type} ${rep.fingerprint}`;
+          setStatus(`✓ 接続成功・認証OK / ${key}`, 'ok');
+        } catch (e) {
+          setStatus(`✗ 接続テスト失敗: ${String(e)}`, 'err');
+        } finally {
+          btn.disabled = false;
+        }
+      },
+    }],
     onOk: async (values) => {
-      await invoke('save_ssh_host', {
-        host: {
-          id: h?.id || '',
-          name: values.name.trim(),
-          host: values.host.trim(),
-          port: parseInt(values.port, 10) || 22,
-          username: values.username.trim(),
-          auth_method: values.auth_method,
-          key_path: values.key_path.trim(),
-        },
-      });
+      await invoke('save_ssh_host', { host: hostFrom(values) });
       refreshHosts();
     },
   });
@@ -1048,7 +1178,16 @@ function fieldSelect(label, name, value, options) {
   return { label, name, value, tag: 'select', options };
 }
 
-function openModal({ title, okLabel, body, onOk, onCancel }) {
+/** Reads the current value of every field in the modal body. */
+function collectModalValues() {
+  const values = {};
+  for (const el of $('#modal-body').querySelectorAll('input, textarea, select')) {
+    values[el.name] = el.value;
+  }
+  return values;
+}
+
+function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
   $('#modal-title').textContent = title;
   $('#modal-ok').textContent = okLabel || 'OK';
   const box = $('#modal-body');
@@ -1083,6 +1222,27 @@ function openModal({ title, okLabel, body, onOk, onCancel }) {
   const err = document.createElement('div');
   err.className = 'modal-error';
   box.appendChild(err);
+  const status = document.createElement('div');
+  status.className = 'modal-status';
+  box.appendChild(status);
+  const setStatus = (msg, kind) => {
+    status.textContent = msg || '';
+    status.className = 'modal-status' + (kind ? ` ${kind}` : '');
+  };
+
+  // Extra action buttons (e.g. "接続テスト") live in the action bar, pushed to
+  // the left of Cancel/OK. Rebuilt each open.
+  const actions = $('#modal .modal-actions');
+  actions.querySelectorAll('.modal-extra').forEach((b) => b.remove());
+  for (const a of extraActions || []) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `modal-extra ${a.className || 'ghost-btn'}`;
+    btn.textContent = a.label;
+    btn.addEventListener('click', () =>
+      a.onClick({ values: collectModalValues(), setStatus, btn }));
+    actions.insertBefore(btn, actions.firstChild);
+  }
 
   modalCtx = { onOk, onCancel, err };
   $('#modal').classList.remove('hidden');
@@ -1099,10 +1259,9 @@ function closeModal(cancelled) {
 
 async function submitModal() {
   if (!modalCtx) return;
-  const values = {};
+  const values = collectModalValues();
   let valid = true;
   for (const el of $('#modal-body').querySelectorAll('input, textarea, select')) {
-    values[el.name] = el.value;
     if (el.required && !el.value.trim()) valid = false;
   }
   if (!valid) {

@@ -142,6 +142,16 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent-dim);
 }
 
+/* Hide the native number spinners — their default chrome clashes with the
+   dark theme. Values are still adjustable by typing or arrow keys. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 /* ---------- layout ---------- */
 #body { display: flex; flex: 1; min-height: 0; }
 
@@ -252,6 +262,12 @@ input:focus, select:focus, textarea:focus {
 .thread-item .pin:hover { opacity: 1; }
 .thread-item .close:hover { opacity: 1; color: var(--danger); }
 
+/* Inline Google Material Symbol (push_pin). Inherits currentColor so it
+   picks up the button's dim/accent state. */
+.thread-item .pin { display: inline-flex; align-items: center; }
+.thread-item .pin .mi { width: 15px; height: 15px; fill: currentColor; }
+.thread-item.pinned .pin { color: var(--accent); }
+
 /* ---------- panes ---------- */
 .pane {
   flex: 1;
@@ -273,15 +289,67 @@ input:focus, select:focus, textarea:focus {
 .pane.focused .pane-head { box-shadow: inset 2px 0 0 var(--accent); }
 .pane.focused { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
-.pane-head .pane-thread {
-  width: auto;
+/* Custom thread dropdown (replaces a native <select> so rows can hold the
+   inline Material push_pin SVG). Black-based with white text so the thread
+   name reads clearly against the raised header. */
+.pane-head .pane-thread-dd { position: relative; }
+.pane-head .pane-thread-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   max-width: 320px;
+  font: inherit;
   font-size: 0.82rem;
-  padding: 2px 6px;
-  background: transparent;
-  border-color: transparent;
+  padding: 2px 8px;
+  background: #000;
+  color: #fff;
+  border: 1px solid #000;
+  border-radius: var(--radius);
+  cursor: pointer;
 }
-.pane-head .pane-thread:hover { border-color: var(--border); }
+.pane-head .pane-thread-btn:hover,
+.pane-thread-dd.open .pane-thread-btn { border-color: var(--accent-dim); }
+.pane-thread-btn .ptd-icon { display: inline-flex; align-items: center; }
+.pane-thread-btn .ptd-icon .mi { width: 13px; height: 13px; fill: var(--accent); }
+.pane-thread-btn .ptd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-thread-btn .ptd-caret { color: var(--text-dim); font-size: 0.7rem; margin-left: 2px; }
+
+.pane-thread-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 210px;
+  max-width: 340px;
+  max-height: 320px;
+  overflow-y: auto;
+  list-style: none;
+  background: #000;
+  color: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  padding: 4px;
+  z-index: 40;
+}
+.pane-thread-menu.hidden { display: none; }
+.pane-thread-menu .ptd-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pane-thread-menu .ptd-item:hover,
+.pane-thread-menu .ptd-item:focus { background: var(--bg-raised); outline: none; }
+.pane-thread-menu .ptd-item.selected { background: var(--bg-raised); }
+.pane-thread-menu .ptd-item.empty { color: var(--text-dim); cursor: default; }
+.pane-thread-menu .ptd-pin { width: 14px; display: inline-flex; align-items: center; }
+.pane-thread-menu .ptd-pin .mi { width: 14px; height: 14px; fill: var(--accent); }
+.pane-thread-menu .ptd-kind { color: var(--violet); font-size: 0.72rem; min-width: 1.4em; }
+.pane-thread-menu .ptd-name { overflow: hidden; text-overflow: ellipsis; }
+
 .pane-head .pane-kind { color: var(--text-dim); font-size: 0.72rem; }
 .pane-head .pane-close { border: none; padding: 1px 7px; font-size: 0.8rem; color: var(--text-dim); }
 .pane-head .pane-close:hover { color: var(--danger); }
@@ -509,7 +577,12 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 #modal-body label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
 #modal-body textarea { font-family: Consolas, monospace; min-height: 64px; resize: vertical; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+/* An extra action button (e.g. 接続テスト) sits left of Cancel/OK. */
+.modal-actions .modal-extra:first-child { margin-right: auto; }
 .modal-error { color: var(--danger); font-size: 0.85rem; min-height: 1em; }
+.modal-status { font-size: 0.85rem; min-height: 1em; margin-top: 6px; color: var(--text-dim); word-break: break-all; }
+.modal-status.ok { color: var(--accent); }
+.modal-status.err { color: var(--danger); }
 
 /* ---------- toast ---------- */
 #toast {

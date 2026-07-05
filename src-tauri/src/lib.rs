@@ -5,7 +5,7 @@ use base64::Engine;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use senju_core::sessions::{SessionInfo, SshSecrets};
+use senju_core::sessions::{SessionInfo, SshSecrets, SshTestReport};
 use senju_core::template;
 use senju_core::{LocalSpec, Profile, SessionManager, Settings, SshHost, Stores, Workflow};
 
@@ -105,6 +105,24 @@ async fn create_ssh_session(
             rows,
             expected_fingerprint,
         )
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Pre-save connection probe for the SSH host editor. Takes the host fields
+/// directly (the host may not be saved yet) plus test-only secrets, and
+/// verifies reachability + credentials without opening a persistent session
+/// or recording the host key.
+#[tauri::command]
+async fn test_ssh_connection(
+    state: State<'_, AppState>,
+    host: SshHost,
+    password: Option<String>,
+    passphrase: Option<String>,
+) -> CmdResult<SshTestReport> {
+    state
+        .sessions
+        .test_ssh(&host, SshSecrets { password, passphrase })
         .await
         .map_err(|e| e.to_string())
 }
@@ -243,6 +261,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             create_local_session,
             create_ssh_session,
+            test_ssh_connection,
             session_write,
             session_resize,
             session_kill,
