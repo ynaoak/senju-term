@@ -396,8 +396,10 @@ impl SshSession {
     }
 }
 
-async fn authenticate(
-    handle: &mut Handle<Client>,
+// Generic over the handler so both the real session (`Client`) and the
+// pre-save connection test (`TestClient`) share one authentication path.
+async fn authenticate<H: client::Handler>(
+    handle: &mut Handle<H>,
     host: &SshHost,
     secrets: &SshSecrets,
 ) -> Result<(), SessionError> {
@@ -437,8 +439,8 @@ async fn authenticate(
     }
 }
 
-async fn authenticate_with_agent(
-    handle: &mut Handle<Client>,
+async fn authenticate_with_agent<H: client::Handler>(
+    handle: &mut Handle<H>,
     host: &SshHost,
 ) -> Result<(), SessionError> {
     #[cfg(unix)]
@@ -491,6 +493,130 @@ fn expand_home(path: &str) -> String {
         }
     }
     path.to_string()
+}
+
+/// Diagnostic result of a pre-save "test connection", surfaced to the SSH host
+/// editor so the user can confirm reachability, credentials and the host key
+/// before committing the host.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SshTestReport {
+    /// The server host key's algorithm (e.g. `ssh-ed25519`).
+    pub key_type: String,
+    /// The server host key's `SHA256:...` fingerprint.
+    pub fingerprint: String,
+    /// True if this key already matched a known_hosts entry; false if the host
+    /// is new (the test does NOT record it — that only happens on a real
+    /// connect after the user approves the TOFU prompt).
+    pub host_key_known: bool,
+}
+
+/// Host-key handler used only for the pre-save connection test. Unlike the
+/// real [`Client`], an *unknown* host key is accepted for the probe (nothing
+/// is ever written to known_hosts) so that authentication can be exercised;
+/// the observed key is recorded for reporting. A key that mismatches an
+/// EXISTING known_hosts entry still fails — that's a genuine MITM signal the
+/// test must surface rather than hide.
+struct TestClient {
+    host: String,
+    port: u16,
+    known_hosts_path: PathBuf,
+    observed: Arc<StdMutex<Option<(String, String, bool)>>>,
+    mismatch: Arc<StdMutex<Option<usize>>>,
+}
+
+impl client::Handler for TestClient {
+    type Error = russh::Error;
+
+    async fn check_server_key(
+        &mut self,
+        server_public_key: &PublicKey,
+    ) -> Result<bool, Self::Error> {
+        let (key_type, fingerprint) = describe_key(server_public_key);
+        match check_host_key(&self.host, self.port, server_public_key, &self.known_hosts_path) {
+            HostKeyCheck::Match => {
+                *self.observed.lock().unwrap() = Some((key_type, fingerprint, true));
+                Ok(true)
+            }
+            // Accept for the probe only; never learn during a test.
+            HostKeyCheck::Unknown => {
+                *self.observed.lock().unwrap() = Some((key_type, fingerprint, false));
+                Ok(true)
+            }
+            HostKeyCheck::Mismatch { line } => {
+                *self.observed.lock().unwrap() = Some((key_type, fingerprint, false));
+                *self.mismatch.lock().unwrap() = Some(line);
+                Err(russh::Error::KeyChanged { line })
+            }
+            // known_hosts unreadable: still let the probe proceed so auth can
+            // be tested, and report the key as not-yet-known.
+            HostKeyCheck::VerifyError(_) => {
+                *self.observed.lock().unwrap() = Some((key_type, fingerprint, false));
+                Ok(true)
+            }
+        }
+    }
+}
+
+/// Probes a host WITHOUT creating a persistent session or learning the host
+/// key: connects, authenticates, opens a session channel, then disconnects.
+/// Backs the "接続テスト" button in the SSH host editor.
+pub async fn test_connection(
+    host: &SshHost,
+    secrets: SshSecrets,
+    known_hosts_path: PathBuf,
+) -> Result<SshTestReport, SessionError> {
+    let config = Arc::new(client::Config {
+        keepalive_interval: Some(std::time::Duration::from_secs(30)),
+        ..Default::default()
+    });
+    let observed = Arc::new(StdMutex::new(None));
+    let mismatch = Arc::new(StdMutex::new(None));
+    let handler = TestClient {
+        host: host.host.clone(),
+        port: host.port,
+        known_hosts_path,
+        observed: observed.clone(),
+        mismatch: mismatch.clone(),
+    };
+
+    let mut handle = client::connect(config, (host.host.as_str(), host.port), handler)
+        .await
+        .map_err(|e| match mismatch.lock().unwrap().take() {
+            Some(line) => {
+                let (key_type, fingerprint) = observed
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .map(|(k, f, _)| (k, f))
+                    .unwrap_or_default();
+                SessionError::HostKeyMismatch {
+                    line,
+                    key_type,
+                    fingerprint,
+                }
+            }
+            None => SessionError::Ssh(format!("接続に失敗しました: {e}")),
+        })?;
+
+    authenticate(&mut handle, host, &secrets).await?;
+
+    // Confirm a shell channel can actually be opened, then disconnect — the
+    // test leaves no session behind.
+    handle
+        .channel_open_session()
+        .await
+        .map_err(|e| SessionError::Ssh(format!("チャネルを開けませんでした: {e}")))?;
+    let _ = handle
+        .disconnect(Disconnect::ByApplication, "connection test", "")
+        .await;
+
+    let (key_type, fingerprint, host_key_known) =
+        observed.lock().unwrap().clone().unwrap_or_default();
+    Ok(SshTestReport {
+        key_type,
+        fingerprint,
+        host_key_known,
+    })
 }
 
 #[cfg(test)]

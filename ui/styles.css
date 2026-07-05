@@ -577,7 +577,12 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 #modal-body label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
 #modal-body textarea { font-family: Consolas, monospace; min-height: 64px; resize: vertical; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+/* An extra action button (e.g. 接続テスト) sits left of Cancel/OK. */
+.modal-actions .modal-extra:first-child { margin-right: auto; }
 .modal-error { color: var(--danger); font-size: 0.85rem; min-height: 1em; }
+.modal-status { font-size: 0.85rem; min-height: 1em; margin-top: 6px; color: var(--text-dim); word-break: break-all; }
+.modal-status.ok { color: var(--accent); }
+.modal-status.err { color: var(--danger); }
 
 /* ---------- toast ---------- */
 #toast {

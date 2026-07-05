@@ -805,6 +805,17 @@ function renderHosts() {
 
 function editHost(h) {
   const isNew = !h;
+  // Builds an SshHost from the form (the test-only secret field is excluded,
+  // so it is never persisted).
+  const hostFrom = (values) => ({
+    id: h?.id || '',
+    name: values.name.trim(),
+    host: values.host.trim(),
+    port: parseInt(values.port, 10) || 22,
+    username: values.username.trim(),
+    auth_method: values.auth_method,
+    key_path: values.key_path.trim(),
+  });
   openModal({
     title: isNew ? 'SSH ホストを登録' : 'SSH ホストを編集',
     okLabel: '保存',
@@ -817,19 +828,39 @@ function editHost(h) {
         ['password', 'パスワード'], ['key', '秘密鍵ファイル'], ['agent', 'ssh-agent'],
       ]),
       field('秘密鍵パス (認証方式: 秘密鍵)', 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
+      field('接続テスト用パスワード / パスフレーズ (保存されません)', 'test_secret', '', { type: 'password' }),
     ],
+    extraActions: [{
+      label: '接続テスト',
+      className: 'ghost-btn',
+      onClick: async ({ values, setStatus, btn }) => {
+        if (!values.host.trim() || !values.username.trim()) {
+          setStatus('ホストとユーザー名を入力してください', 'err');
+          return;
+        }
+        const host = hostFrom(values);
+        const secret = values.test_secret || '';
+        const args = { host };
+        if (host.auth_method === 'key') args.passphrase = secret || null;
+        else if (host.auth_method === 'password') args.password = secret || null;
+        // 'agent' needs no secret.
+        btn.disabled = true;
+        setStatus('接続テスト中…', '');
+        try {
+          const rep = await invoke('test_ssh_connection', args);
+          const key = rep.host_key_known
+            ? '既知のホスト鍵と一致'
+            : `新しいホスト鍵(未登録・保存なし): ${rep.key_type} ${rep.fingerprint}`;
+          setStatus(`✓ 接続成功・認証OK / ${key}`, 'ok');
+        } catch (e) {
+          setStatus(`✗ 接続テスト失敗: ${String(e)}`, 'err');
+        } finally {
+          btn.disabled = false;
+        }
+      },
+    }],
     onOk: async (values) => {
-      await invoke('save_ssh_host', {
-        host: {
-          id: h?.id || '',
-          name: values.name.trim(),
-          host: values.host.trim(),
-          port: parseInt(values.port, 10) || 22,
-          username: values.username.trim(),
-          auth_method: values.auth_method,
-          key_path: values.key_path.trim(),
-        },
-      });
+      await invoke('save_ssh_host', { host: hostFrom(values) });
       refreshHosts();
     },
   });
@@ -1147,7 +1178,16 @@ function fieldSelect(label, name, value, options) {
   return { label, name, value, tag: 'select', options };
 }
 
-function openModal({ title, okLabel, body, onOk, onCancel }) {
+/** Reads the current value of every field in the modal body. */
+function collectModalValues() {
+  const values = {};
+  for (const el of $('#modal-body').querySelectorAll('input, textarea, select')) {
+    values[el.name] = el.value;
+  }
+  return values;
+}
+
+function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
   $('#modal-title').textContent = title;
   $('#modal-ok').textContent = okLabel || 'OK';
   const box = $('#modal-body');
@@ -1182,6 +1222,27 @@ function openModal({ title, okLabel, body, onOk, onCancel }) {
   const err = document.createElement('div');
   err.className = 'modal-error';
   box.appendChild(err);
+  const status = document.createElement('div');
+  status.className = 'modal-status';
+  box.appendChild(status);
+  const setStatus = (msg, kind) => {
+    status.textContent = msg || '';
+    status.className = 'modal-status' + (kind ? ` ${kind}` : '');
+  };
+
+  // Extra action buttons (e.g. "接続テスト") live in the action bar, pushed to
+  // the left of Cancel/OK. Rebuilt each open.
+  const actions = $('#modal .modal-actions');
+  actions.querySelectorAll('.modal-extra').forEach((b) => b.remove());
+  for (const a of extraActions || []) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = `modal-extra ${a.className || 'ghost-btn'}`;
+    btn.textContent = a.label;
+    btn.addEventListener('click', () =>
+      a.onClick({ values: collectModalValues(), setStatus, btn }));
+    actions.insertBefore(btn, actions.firstChild);
+  }
 
   modalCtx = { onOk, onCancel, err };
   $('#modal').classList.remove('hidden');
@@ -1198,10 +1259,9 @@ function closeModal(cancelled) {
 
 async function submitModal() {
   if (!modalCtx) return;
-  const values = {};
+  const values = collectModalValues();
   let valid = true;
   for (const el of $('#modal-body').querySelectorAll('input, textarea, select')) {
-    values[el.name] = el.value;
     if (el.required && !el.value.trim()) valid = false;
   }
   if (!valid) {

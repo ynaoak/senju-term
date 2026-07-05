@@ -275,6 +275,61 @@ async fn known_hosts_tofu_workflow() {
     }
 }
 
+/// The pre-save connection test (`test_ssh`) against a live sshd:
+/// - with the right password it succeeds, reports the server's SHA256
+///   fingerprint, flags the host key as not-yet-known, and — crucially —
+///   does NOT write known_hosts (a test must never silently trust a host);
+/// - with the wrong password it fails.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live sshd (see module docs)"]
+async fn test_connection_probes_without_learning() {
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = known_hosts_dir.path().join("known_hosts");
+    let sink = Arc::new(Capture::default());
+    let mgr = SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+
+    let report = mgr
+        .test_ssh(
+            &test_host(SshAuthMethod::Password),
+            SshSecrets {
+                password: Some(env("SENJU_SSH_PASSWORD")),
+                passphrase: None,
+            },
+        )
+        .await
+        .expect("connection test with the right password should succeed");
+    assert!(report.fingerprint.starts_with("SHA256:"), "{}", report.fingerprint);
+    assert!(!report.key_type.is_empty());
+    assert!(
+        !report.host_key_known,
+        "against a fresh known_hosts the key should be reported as new"
+    );
+    assert!(
+        !known_hosts_path.exists(),
+        "a connection test must never write known_hosts"
+    );
+
+    let err = mgr
+        .test_ssh(
+            &test_host(SshAuthMethod::Password),
+            SshSecrets {
+                password: Some("definitely-wrong".into()),
+                passphrase: None,
+            },
+        )
+        .await
+        .expect_err("connection test with the wrong password should fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("auth") || msg.contains("reject"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        !known_hosts_path.exists(),
+        "a failed connection test must not write known_hosts either"
+    );
+}
+
 /// Regression test for the TOFU TOCTOU vulnerability: the fingerprint the
 /// user approved (from a first, failed handshake) must be checked against
 /// the key presented on the retried handshake, not accepted unconditionally.
