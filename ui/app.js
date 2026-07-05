@@ -248,9 +248,19 @@ async function closeThread(id, { kill = true } = {}) {
 function createPane() {
   const root = document.createElement('div');
   root.className = 'pane';
+  // A custom dropdown (not a native <select>) so each row can render the
+  // inline Material push_pin SVG, matching the thread list — native <option>
+  // elements can only hold text.
   root.innerHTML = `
     <div class="pane-head">
-      <select class="pane-thread" title="このペインに表示するスレッド"></select>
+      <div class="pane-thread-dd">
+        <button type="button" class="pane-thread-btn" title="このペインに表示するスレッド">
+          <span class="ptd-icon"></span>
+          <span class="ptd-label"></span>
+          <span class="ptd-caret">▾</span>
+        </button>
+        <ul class="pane-thread-menu hidden" role="listbox"></ul>
+      </div>
       <span class="pane-kind"></span>
       <div class="spacer"></div>
       <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">✕</button>
@@ -258,22 +268,32 @@ function createPane() {
     <div class="pane-body"></div>`;
   const pane = {
     root,
-    select: root.querySelector('.pane-thread'),
+    dd: root.querySelector('.pane-thread-dd'),
+    ddBtn: root.querySelector('.pane-thread-btn'),
+    ddMenu: root.querySelector('.pane-thread-menu'),
+    ddIcon: root.querySelector('.ptd-icon'),
+    ddLabel: root.querySelector('.ptd-label'),
     kindEl: root.querySelector('.pane-kind'),
     closeBtn: root.querySelector('.pane-close'),
     body: root.querySelector('.pane-body'),
     threadId: null,
   };
-  pane.select.addEventListener('change', () => {
-    // Read the chosen value BEFORE focusPane(): focusPane re-renders, which
-    // resets pane.select.value back to the currently shown thread — reading
-    // afterwards would hand assignThread the old id and the pane wouldn't
-    // switch.
-    const idx = state.panes.indexOf(pane);
-    const chosen = pane.select.value || null;
-    focusPane(idx);
-    assignThread(idx, chosen);
+  pane.ddBtn.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    focusPane(state.panes.indexOf(pane));
+    togglePaneMenu(pane);
   });
+  pane.ddBtn.addEventListener('keydown', (ev) => {
+    if (['ArrowDown', 'Enter', ' '].includes(ev.key)) {
+      ev.preventDefault();
+      if (pane.ddMenu.classList.contains('hidden')) togglePaneMenu(pane);
+    }
+  });
+  // Interactions inside the dropdown must not bubble to the pane's root
+  // mousedown handler below — that fires focusPane() → renderThreads(), which
+  // rebuilds the open menu and detaches the row mid-click, swallowing the
+  // selection. The dropdown's own handlers call focusPane() explicitly.
+  pane.dd.addEventListener('mousedown', (ev) => ev.stopPropagation());
   pane.closeBtn.addEventListener('click', () => removePane(state.panes.indexOf(pane)));
   root.addEventListener('mousedown', () => focusPane(state.panes.indexOf(pane)));
   new ResizeObserver(() => {
@@ -281,6 +301,71 @@ function createPane() {
     if (t) t.fit.fit();
   }).observe(pane.body);
   return pane;
+}
+
+/** Closes every pane's thread menu (only one is ever open at a time). */
+function closeAllPaneMenus() {
+  for (const p of state.panes) {
+    p.ddMenu.classList.add('hidden');
+    p.dd.classList.remove('open');
+  }
+  window.removeEventListener('mousedown', paneMenuOutsideClick);
+}
+
+function paneMenuOutsideClick(ev) {
+  if (!ev.target.closest('.pane-thread-dd')) closeAllPaneMenus();
+}
+
+function togglePaneMenu(pane) {
+  const wasOpen = !pane.ddMenu.classList.contains('hidden');
+  closeAllPaneMenus();
+  if (wasOpen) return;
+  buildPaneMenu(pane);
+  pane.ddMenu.classList.remove('hidden');
+  pane.dd.classList.add('open');
+  // Focus the current (or first) row so arrow keys work immediately.
+  const sel = pane.ddMenu.querySelector('.ptd-item.selected') || pane.ddMenu.querySelector('.ptd-item');
+  sel?.focus();
+  setTimeout(() => window.addEventListener('mousedown', paneMenuOutsideClick), 0);
+}
+
+/** Builds the custom dropdown list for a pane. Each row carries the inline
+ * Material push_pin SVG for pinned threads, matching the sidebar. */
+function buildPaneMenu(pane) {
+  pane.ddMenu.innerHTML = '';
+  if (!state.threads.length) {
+    const li = document.createElement('li');
+    li.className = 'ptd-item empty';
+    li.textContent = '(スレッドなし)';
+    pane.ddMenu.appendChild(li);
+    return;
+  }
+  for (const t of orderedThreads()) {
+    const li = document.createElement('li');
+    li.className = 'ptd-item' + (t.id === pane.threadId ? ' selected' : '');
+    li.dataset.id = t.id;
+    li.tabIndex = 0;
+    li.setAttribute('role', 'option');
+    li.innerHTML = `
+      <span class="ptd-pin">${t.pinned ? pinIcon(true) : ''}</span>
+      <span class="ptd-kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>
+      <span class="ptd-name"></span>`;
+    li.querySelector('.ptd-name').textContent = t.title;
+    const choose = () => {
+      const idx = state.panes.indexOf(pane);
+      closeAllPaneMenus();
+      focusPane(idx);
+      assignThread(idx, t.id);
+    };
+    li.addEventListener('click', choose);
+    li.addEventListener('keydown', (ev) => {
+      if (ev.key === 'ArrowDown') { ev.preventDefault(); li.nextElementSibling?.focus(); }
+      else if (ev.key === 'ArrowUp') { ev.preventDefault(); li.previousElementSibling?.focus(); }
+      else if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); choose(); }
+      else if (ev.key === 'Escape') { ev.preventDefault(); closeAllPaneMenus(); pane.ddBtn.focus(); }
+    });
+    pane.ddMenu.appendChild(li);
+  }
 }
 
 function setPaneThread(paneIdx, threadId) {
@@ -550,24 +635,14 @@ function renderThreads() {
     li.addEventListener('click', () => assignThread(state.focusedPane, t.id));
     list.appendChild(li);
   }
-  // Keep every pane's dropdown in sync with the thread list.
+  // Keep every pane's dropdown button in sync with the thread list; rebuild
+  // the open menu (if any) so it reflects the latest threads/pins.
   state.panes.forEach((pane) => {
-    pane.select.innerHTML = '';
-    for (const t of orderedThreads()) {
-      const o = document.createElement('option');
-      o.value = t.id;
-      o.textContent = `${t.pinned ? '📌 ' : ''}${t.kind === 'ssh' ? '[SSH] ' : ''}${t.title}`;
-      pane.select.appendChild(o);
-    }
-    if (!state.threads.length) {
-      const o = document.createElement('option');
-      o.value = '';
-      o.textContent = '(スレッドなし)';
-      pane.select.appendChild(o);
-    }
-    pane.select.value = pane.threadId || '';
     const t = threadById(pane.threadId);
+    pane.ddIcon.innerHTML = t && t.pinned ? pinIcon(true) : '';
+    pane.ddLabel.textContent = t ? t.title : (state.threads.length ? '' : '(スレッドなし)');
     pane.kindEl.textContent = t ? (t.kind === 'ssh' ? 'SSH' : 'ローカル') : '';
+    if (!pane.ddMenu.classList.contains('hidden')) buildPaneMenu(pane);
   });
 }
 

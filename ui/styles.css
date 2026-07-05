@@ -289,23 +289,67 @@ input[type="number"]::-webkit-outer-spin-button {
 .pane.focused .pane-head { box-shadow: inset 2px 0 0 var(--accent); }
 .pane.focused { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
 
-.pane-head .pane-thread {
-  width: auto;
+/* Custom thread dropdown (replaces a native <select> so rows can hold the
+   inline Material push_pin SVG). Black-based with white text so the thread
+   name reads clearly against the raised header. */
+.pane-head .pane-thread-dd { position: relative; }
+.pane-head .pane-thread-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   max-width: 320px;
+  font: inherit;
   font-size: 0.82rem;
-  padding: 2px 22px 2px 8px;
-  /* Black-based control with white text so the thread name reads clearly
-     against the raised header. */
+  padding: 2px 8px;
   background: #000;
   color: #fff;
-  border-color: #000;
+  border: 1px solid #000;
+  border-radius: var(--radius);
+  cursor: pointer;
 }
-.pane-head .pane-thread:hover { border-color: var(--accent-dim); }
-/* The native dropdown list itself (options) also black-on-white-text. */
-.pane-head .pane-thread option {
+.pane-head .pane-thread-btn:hover,
+.pane-thread-dd.open .pane-thread-btn { border-color: var(--accent-dim); }
+.pane-thread-btn .ptd-icon { display: inline-flex; align-items: center; }
+.pane-thread-btn .ptd-icon .mi { width: 13px; height: 13px; fill: var(--accent); }
+.pane-thread-btn .ptd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-thread-btn .ptd-caret { color: var(--text-dim); font-size: 0.7rem; margin-left: 2px; }
+
+.pane-thread-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 210px;
+  max-width: 340px;
+  max-height: 320px;
+  overflow-y: auto;
+  list-style: none;
   background: #000;
   color: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  padding: 4px;
+  z-index: 40;
 }
+.pane-thread-menu.hidden { display: none; }
+.pane-thread-menu .ptd-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pane-thread-menu .ptd-item:hover,
+.pane-thread-menu .ptd-item:focus { background: var(--bg-raised); outline: none; }
+.pane-thread-menu .ptd-item.selected { background: var(--bg-raised); }
+.pane-thread-menu .ptd-item.empty { color: var(--text-dim); cursor: default; }
+.pane-thread-menu .ptd-pin { width: 14px; display: inline-flex; align-items: center; }
+.pane-thread-menu .ptd-pin .mi { width: 14px; height: 14px; fill: var(--accent); }
+.pane-thread-menu .ptd-kind { color: var(--violet); font-size: 0.72rem; min-width: 1.4em; }
+.pane-thread-menu .ptd-name { overflow: hidden; text-overflow: ellipsis; }
+
 .pane-head .pane-kind { color: var(--text-dim); font-size: 0.72rem; }
 .pane-head .pane-close { border: none; padding: 1px 7px; font-size: 0.8rem; color: var(--text-dim); }
 .pane-head .pane-close:hover { color: var(--danger); }
