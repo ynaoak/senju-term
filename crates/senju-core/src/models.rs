@@ -22,6 +22,9 @@ pub enum SshAuthMethod {
     Password,
     Key,
     Agent,
+    /// Multi-step auth: public key first, then password — for servers
+    /// configured with `AuthenticationMethods publickey,password`.
+    KeyPassword,
 }
 
 /// A saved SSH destination. Secrets (password / key passphrase) are never

@@ -766,7 +766,7 @@ async function refreshHosts() {
   renderHosts();
 }
 
-const AUTH_LABEL = { password: 'パスワード', key: '秘密鍵', agent: 'ssh-agent' };
+const AUTH_LABEL = { password: 'パスワード', key: '秘密鍵', agent: 'ssh-agent', keypassword: '秘密鍵+パスワード' };
 
 function renderHosts() {
   const q = $('#host-search').value.trim().toLowerCase();
@@ -826,9 +826,11 @@ function editHost(h) {
       field('ユーザー名', 'username', h?.username || '', { required: true }),
       fieldSelect('認証方式', 'auth_method', h?.auth_method || 'password', [
         ['password', 'パスワード'], ['key', '秘密鍵ファイル'], ['agent', 'ssh-agent'],
+        ['keypassword', '秘密鍵 + パスワード'],
       ]),
-      field('秘密鍵パス (認証方式: 秘密鍵)', 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
-      field('接続テスト用パスワード / パスフレーズ (保存されません)', 'test_secret', '', { type: 'password' }),
+      field('秘密鍵パス (認証方式: 秘密鍵 / 秘密鍵+パスワード)', 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
+      field('接続テスト用パスワード (保存されません)', 'test_password', '', { type: 'password' }),
+      field('接続テスト用 鍵パスフレーズ (保存されません)', 'test_passphrase', '', { type: 'password' }),
     ],
     extraActions: [{
       label: '接続テスト',
@@ -839,10 +841,13 @@ function editHost(h) {
           return;
         }
         const host = hostFrom(values);
-        const secret = values.test_secret || '';
+        const pw = values.test_password || null;
+        const pass = values.test_passphrase || null;
         const args = { host };
-        if (host.auth_method === 'key') args.passphrase = secret || null;
-        else if (host.auth_method === 'password') args.password = secret || null;
+        // Send whichever secrets the chosen method uses.
+        if (host.auth_method === 'password') args.password = pw;
+        else if (host.auth_method === 'key') args.passphrase = pass;
+        else if (host.auth_method === 'keypassword') { args.password = pw; args.passphrase = pass; }
         // 'agent' needs no secret.
         btn.disabled = true;
         setStatus('接続テスト中…', '');
@@ -867,21 +872,35 @@ function editHost(h) {
 }
 
 /** Returns {password?, passphrase?} or null when cancelled. Secrets are used
- * for the one connection only and never persisted. */
+ * for the one connection only and never persisted. The combined
+ * "秘密鍵 + パスワード" method collects both a key passphrase and a server
+ * password. */
 function promptSshSecrets(host) {
   if (host.auth_method === 'agent') return Promise.resolve({});
+  const isKey = host.auth_method === 'key';
+  const isCombined = host.auth_method === 'keypassword';
   return new Promise((resolve) => {
-    const isKey = host.auth_method === 'key';
+    const body = [];
+    if (isCombined) {
+      body.push(field('鍵のパスフレーズ (無い場合は空欄)', 'passphrase', '', { type: 'password' }));
+      body.push(field(`${host.username} のパスワード`, 'password', '', { type: 'password' }));
+    } else {
+      body.push(field(isKey ? 'パスフレーズ (無い場合は空欄)' : `${host.username} のパスワード`,
+        'secret', '', { type: 'password', autofocus: true }));
+    }
     openModal({
-      title: `${host.name || host.host} — ${isKey ? '鍵のパスフレーズ' : 'パスワード'}`,
+      title: `${host.name || host.host} — ${isCombined ? '鍵パスフレーズ + パスワード' : (isKey ? '鍵のパスフレーズ' : 'パスワード')}`,
       okLabel: '接続',
-      body: [
-        field(isKey ? 'パスフレーズ (無い場合は空欄)' : `${host.username} のパスワード`,
-          'secret', '', { type: 'password', autofocus: true }),
-      ],
-      onOk: (values) => resolve(isKey
-        ? { passphrase: values.secret || null }
-        : { password: values.secret }),
+      body,
+      onOk: (values) => {
+        if (isCombined) {
+          resolve({ passphrase: values.passphrase || null, password: values.password || null });
+        } else if (isKey) {
+          resolve({ passphrase: values.secret || null });
+        } else {
+          resolve({ password: values.secret });
+        }
+      },
       onCancel: () => resolve(null),
     });
   });
