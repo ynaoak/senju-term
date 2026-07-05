@@ -131,6 +131,71 @@ async fn password_auth_shell_roundtrip() {
     .await;
 }
 
+/// Combined public-key + password auth against a server that requires BOTH
+/// (`AuthenticationMethods publickey,password`). Uses its own env vars because
+/// it needs a differently-configured sshd than the other tests, and skips
+/// cleanly when `SENJU_SSH_COMBINED_HOST` isn't set.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live sshd with AuthenticationMethods publickey,password"]
+async fn combined_key_password_auth() {
+    let Ok(host_addr) = std::env::var("SENJU_SSH_COMBINED_HOST") else {
+        return;
+    };
+    let host = SshHost {
+        id: "combo".into(),
+        name: "combo".into(),
+        host: host_addr,
+        port: env("SENJU_SSH_COMBINED_PORT").parse().unwrap(),
+        username: env("SENJU_SSH_COMBINED_USER"),
+        auth_method: SshAuthMethod::KeyPassword,
+        key_path: env("SENJU_SSH_COMBINED_KEY"),
+    };
+    let secrets = || SshSecrets {
+        password: Some(env("SENJU_SSH_COMBINED_PASSWORD")),
+        passphrase: None,
+    };
+
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let known_hosts_path = known_hosts_dir.path().join("known_hosts");
+
+    // The pre-save connection test succeeds when both secrets are supplied.
+    let sink = Arc::new(Capture::default());
+    let mgr = SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+    let report = mgr
+        .test_ssh(&host, secrets())
+        .await
+        .expect("combined publickey+password auth should succeed");
+    assert!(report.fingerprint.starts_with("SHA256:"), "{}", report.fingerprint);
+
+    // Key alone must fail: the server also requires the password.
+    let sink2 = Arc::new(Capture::default());
+    let mgr2 = SessionManager::with_known_hosts_path(sink2, Some(known_hosts_path.clone()));
+    let key_only = SshHost {
+        auth_method: SshAuthMethod::Key,
+        ..host.clone()
+    };
+    mgr2.test_ssh(&key_only, SshSecrets::default())
+        .await
+        .expect_err("key-only auth must fail against a publickey,password server");
+
+    // Full shell roundtrip over combined auth: learn the fingerprint via the
+    // first-contact rejection, then connect approving it.
+    let sink3 = Arc::new(Capture::default());
+    let mgr3 =
+        SessionManager::with_known_hosts_path(sink3.clone(), Some(known_hosts_path.clone()));
+    let fingerprint = learn_unknown_host_fingerprint(&mgr3, &host, secrets()).await;
+    let info = mgr3
+        .create_ssh(&host, secrets(), 80, 24, Some(fingerprint))
+        .await
+        .expect("combined-auth connect");
+    mgr3.write(&info.id, b"echo combo-$((1+1))\n").await.unwrap();
+    assert!(
+        wait_for(&sink3, "combo-2").await,
+        "expected remote echo over combined auth"
+    );
+    mgr3.kill(&info.id);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a live sshd (see module docs)"]
 async fn key_auth_shell_roundtrip() {

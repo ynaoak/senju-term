@@ -412,24 +412,26 @@ async fn authenticate<H: client::Handler>(
                 .map_err(|e| SessionError::Ssh(format!("auth failed: {e}")))?
         }
         SshAuthMethod::Key => {
-            let path = expand_home(&host.key_path);
-            let key = load_secret_key(&path, secrets.passphrase.as_deref())
-                .map_err(|e| SessionError::Ssh(format!("cannot load key {path}: {e}")))?;
-            let hash = handle
-                .best_supported_rsa_hash()
-                .await
-                .map_err(|e| SessionError::Ssh(e.to_string()))?
-                .flatten();
-            handle
-                .authenticate_publickey(
-                    &host.username,
-                    PrivateKeyWithHashAlg::new(Arc::new(key), hash),
-                )
-                .await
-                .map_err(|e| SessionError::Ssh(format!("auth failed: {e}")))?
+            publickey_step(handle, host, secrets.passphrase.as_deref()).await?
         }
         SshAuthMethod::Agent => {
             return authenticate_with_agent(handle, host).await;
+        }
+        SshAuthMethod::KeyPassword => {
+            // Multi-step auth for servers with `AuthenticationMethods
+            // publickey,password`. Offer the public key first; if the server
+            // is fully satisfied, we're done. Otherwise (partial success —
+            // it accepted the key but still wants a password) continue with
+            // the password to complete authentication.
+            let r = publickey_step(handle, host, secrets.passphrase.as_deref()).await?;
+            if r.success() {
+                return Ok(());
+            }
+            let password = secrets.password.clone().unwrap_or_default();
+            handle
+                .authenticate_password(&host.username, password)
+                .await
+                .map_err(|e| SessionError::Ssh(format!("auth failed: {e}")))?
         }
     };
     if auth.success() {
@@ -437,6 +439,31 @@ async fn authenticate<H: client::Handler>(
     } else {
         Err(SessionError::Ssh("authentication rejected".into()))
     }
+}
+
+/// Loads the host's private key (honoring `passphrase` for encrypted keys)
+/// and offers it for public-key authentication, returning the server's
+/// `AuthResult`. Shared by the `Key` and `KeyPassword` methods.
+async fn publickey_step<H: client::Handler>(
+    handle: &mut Handle<H>,
+    host: &SshHost,
+    passphrase: Option<&str>,
+) -> Result<client::AuthResult, SessionError> {
+    let path = expand_home(&host.key_path);
+    let key = load_secret_key(&path, passphrase)
+        .map_err(|e| SessionError::Ssh(format!("cannot load key {path}: {e}")))?;
+    let hash = handle
+        .best_supported_rsa_hash()
+        .await
+        .map_err(|e| SessionError::Ssh(e.to_string()))?
+        .flatten();
+    handle
+        .authenticate_publickey(
+            &host.username,
+            PrivateKeyWithHashAlg::new(Arc::new(key), hash),
+        )
+        .await
+        .map_err(|e| SessionError::Ssh(format!("auth failed: {e}")))
 }
 
 async fn authenticate_with_agent<H: client::Handler>(
