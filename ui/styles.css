@@ -142,6 +142,16 @@ input:focus, select:focus, textarea:focus {
   border-color: var(--accent-dim);
 }
 
+/* Hide the native number spinners — their default chrome clashes with the
+   dark theme. Values are still adjustable by typing or arrow keys. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
 /* ---------- layout ---------- */
 #body { display: flex; flex: 1; min-height: 0; }
 
@@ -252,6 +262,12 @@ input:focus, select:focus, textarea:focus {
 .thread-item .pin:hover { opacity: 1; }
 .thread-item .close:hover { opacity: 1; color: var(--danger); }
 
+/* Inline Google Material Symbol (push_pin). Inherits currentColor so it
+   picks up the button's dim/accent state. */
+.thread-item .pin { display: inline-flex; align-items: center; }
+.thread-item .pin .mi { width: 15px; height: 15px; fill: currentColor; }
+.thread-item.pinned .pin { color: var(--accent); }
+
 /* ---------- panes ---------- */
 .pane {
   flex: 1;
@@ -277,11 +293,19 @@ input:focus, select:focus, textarea:focus {
   width: auto;
   max-width: 320px;
   font-size: 0.82rem;
-  padding: 2px 6px;
-  background: transparent;
-  border-color: transparent;
+  padding: 2px 22px 2px 8px;
+  /* Black-based control with white text so the thread name reads clearly
+     against the raised header. */
+  background: #000;
+  color: #fff;
+  border-color: #000;
 }
-.pane-head .pane-thread:hover { border-color: var(--border); }
+.pane-head .pane-thread:hover { border-color: var(--accent-dim); }
+/* The native dropdown list itself (options) also black-on-white-text. */
+.pane-head .pane-thread option {
+  background: #000;
+  color: #fff;
+}
 .pane-head .pane-kind { color: var(--text-dim); font-size: 0.72rem; }
 .pane-head .pane-close { border: none; padding: 1px 7px; font-size: 0.8rem; color: var(--text-dim); }
 .pane-head .pane-close:hover { color: var(--danger); }

@@ -265,8 +265,14 @@ function createPane() {
     threadId: null,
   };
   pane.select.addEventListener('change', () => {
-    focusPane(state.panes.indexOf(pane));
-    assignThread(state.panes.indexOf(pane), pane.select.value || null);
+    // Read the chosen value BEFORE focusPane(): focusPane re-renders, which
+    // resets pane.select.value back to the currently shown thread — reading
+    // afterwards would hand assignThread the old id and the pane wouldn't
+    // switch.
+    const idx = state.panes.indexOf(pane);
+    const chosen = pane.select.value || null;
+    focusPane(idx);
+    assignThread(idx, chosen);
   });
   pane.closeBtn.addEventListener('click', () => removePane(state.panes.indexOf(pane)));
   root.addEventListener('mousedown', () => focusPane(state.panes.indexOf(pane)));
@@ -407,6 +413,24 @@ function enableSplitterDrag(splitter) {
 
 const PANE_MARK = ['▲', '▼'];
 
+// Google Material Symbols "push_pin" (filled when pinned, outlined otherwise),
+// inlined as SVG so it works offline with no webfont/CDN dependency.
+const PIN_PATH = {
+  filled:
+    'M16 9V4l1 0c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1l1 0v5c0 ' +
+    '1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z',
+  outlined:
+    'M14 4v5c0 1.12.37 2.16 1 3H9c.65-.86 1-1.9 1-3V4h4m3-2H7c-.55 0-1 .45-1 1s.45 ' +
+    '1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3V4h1c.55 ' +
+    '0 1-.45 1-1s-.45-1-1-1z',
+};
+
+function pinIcon(pinned) {
+  return `<svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><path d="${
+    pinned ? PIN_PATH.filled : PIN_PATH.outlined
+  }"/></svg>`;
+}
+
 /** Pinned threads first (in pin order), then the rest in creation order. */
 function orderedThreads() {
   return state.threads
@@ -512,7 +536,7 @@ function renderThreads() {
       <span class="activity-dot" title="新しい出力があります"></span>
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
-      <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${t.pinned ? '📌' : '📍'}</button>
+      <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${pinIcon(t.pinned)}</button>
       <button class="close" title="スレッドを終了">✕</button>`;
     li.querySelector('.title').textContent = t.title;
     li.querySelector('.pin').addEventListener('click', (ev) => {
