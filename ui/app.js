@@ -188,6 +188,9 @@ function createThread(info, paneIdx) {
   // false keeps xterm from consuming the event; the actual action runs in
   // the window-level keydown handler the event bubbles up to.
   term.attachCustomKeyEventHandler((ev) => {
+    // Let a registered workflow shortcut bubble to the window handler instead
+    // of being typed into the shell.
+    if (ev.type === 'keydown' && workflowForShortcut(ev)) return false;
     const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
     const key = ev.key.toLowerCase();
     if (!mod) return true;
@@ -665,6 +668,60 @@ function sendToActive(text, run) {
 async function refreshWorkflows() {
   state.workflows = await invoke('list_workflows');
   renderWorkflows();
+  renderQuickbar();
+}
+
+/** Normalized shortcut string from a keydown event, e.g. "ctrl+shift+g".
+ * Requires a ctrl/alt/meta modifier so a shortcut never fires while plainly
+ * typing. Returns null for modifier-only or unmodified keys. */
+function shortcutFromEvent(ev) {
+  const k = ev.key;
+  if (['Control', 'Alt', 'Shift', 'Meta', 'Dead'].includes(k)) return null;
+  if (!(ev.ctrlKey || ev.altKey || ev.metaKey)) return null;
+  const mods = [];
+  if (ev.ctrlKey) mods.push('ctrl');
+  if (ev.altKey) mods.push('alt');
+  if (ev.shiftKey) mods.push('shift');
+  if (ev.metaKey) mods.push('meta');
+  let key = k.toLowerCase();
+  if (key === ' ') key = 'space';
+  return [...mods, key].join('+');
+}
+
+const SC_LABEL = { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', meta: 'Meta' };
+function prettyShortcut(s) {
+  if (!s) return '';
+  return s.split('+')
+    .map((p) => SC_LABEL[p] || (p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1)))
+    .join('+');
+}
+
+/** The workflow whose registered shortcut matches this event, if any. */
+function workflowForShortcut(ev) {
+  const sc = shortcutFromEvent(ev);
+  if (!sc) return null;
+  return state.workflows.find((w) => w.shortcut && w.shortcut === sc) || null;
+}
+
+/** Renders the shell-view quick-launch bar from workflows flagged show_button. */
+function renderQuickbar() {
+  const bar = $('#wf-quickbar');
+  bar.innerHTML = '';
+  const items = state.workflows.filter((w) => w.show_button);
+  bar.classList.toggle('hidden', !items.length);
+  for (const w of items) {
+    const btn = document.createElement('button');
+    btn.className = 'wf-quick-btn';
+    btn.title = (w.description || w.command) + (w.shortcut ? `  (${prettyShortcut(w.shortcut)})` : '');
+    btn.textContent = w.name;
+    if (w.shortcut) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = prettyShortcut(w.shortcut);
+      btn.appendChild(kbd);
+    }
+    btn.addEventListener('click', () => runWorkflow(w, true));
+    bar.appendChild(btn);
+  }
 }
 
 function renderWorkflows() {
@@ -683,6 +740,7 @@ function renderWorkflows() {
     li.innerHTML = `
       <h4></h4><div class="desc"></div><code></code>
       <div class="tags"></div>
+      <div class="wf-badges"></div>
       <div class="row">
         <button class="accent-btn run">▶ 実行</button>
         <button class="ghost-btn insert">挿入</button>
@@ -695,6 +753,18 @@ function renderWorkflows() {
     li.querySelector('.tags').innerHTML = (w.tags || [])
       .map(() => '<span class="tag"></span>').join('');
     li.querySelectorAll('.tag').forEach((el, i) => (el.textContent = w.tags[i]));
+    const badges = li.querySelector('.wf-badges');
+    if (w.shortcut) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = prettyShortcut(w.shortcut);
+      badges.appendChild(kbd);
+    }
+    if (w.show_button) {
+      const b = document.createElement('span');
+      b.className = 'wf-badge';
+      b.textContent = '★ クイックボタン';
+      badges.appendChild(b);
+    }
     li.querySelector('.run').addEventListener('click', () => runWorkflow(w, true));
     li.querySelector('.insert').addEventListener('click', () => runWorkflow(w, false));
     li.querySelector('.edit').addEventListener('click', () => editWorkflow(w));
@@ -730,6 +800,8 @@ function editWorkflow(w) {
       field('説明', 'description', w?.description || ''),
       fieldTextarea('コマンド ( {{名前}} / {{名前:既定値}} でプレースホルダ )', 'command', w?.command || '', { required: true }),
       field('タグ (カンマ区切り)', 'tags', (w?.tags || []).join(', ')),
+      fieldShortcut('ショートカット (任意・Ctrl / Alt / Meta 必須)', 'shortcut', w?.shortcut || ''),
+      fieldCheckbox('シェル表示にクイックボタンを表示', 'show_button', !!w?.show_button),
     ],
     onOk: async (values) => {
       await invoke('save_workflow', {
@@ -739,6 +811,8 @@ function editWorkflow(w) {
           description: values.description.trim(),
           command: values.command,
           tags: values.tags.split(',').map((t) => t.trim()).filter(Boolean),
+          shortcut: values.shortcut || '',
+          show_button: !!values.show_button,
         },
       });
       refreshWorkflows();
@@ -1199,12 +1273,22 @@ function fieldTextarea(label, name, value, opts = {}) {
 function fieldSelect(label, name, value, options) {
   return { label, name, value, tag: 'select', options };
 }
+function fieldCheckbox(label, name, checked) {
+  return { label, name, checked, tag: 'checkbox' };
+}
+function fieldShortcut(label, name, value, opts = {}) {
+  return { label, name, value, tag: 'shortcut', ...opts };
+}
 
-/** Reads the current value of every field in the modal body. */
+/** Reads the current value of every field in the modal body. Checkboxes read
+ * as booleans; shortcut inputs read their normalized combo (dataset), not the
+ * pretty display value. */
 function collectModalValues() {
   const values = {};
   for (const el of $('#modal-body').querySelectorAll('input, textarea, select')) {
-    values[el.name] = el.value;
+    if (el.type === 'checkbox') values[el.name] = el.checked;
+    else if ('shortcut' in el.dataset) values[el.name] = el.dataset.shortcut;
+    else values[el.name] = el.value;
   }
   return values;
 }
@@ -1230,6 +1314,34 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
         el.appendChild(o);
       }
       el.value = f.value;
+    } else if (f.tag === 'checkbox') {
+      el = document.createElement('input');
+      el.type = 'checkbox';
+      el.checked = !!f.checked;
+      label.classList.add('checkbox-row'); // checkbox sits inline with its label
+    } else if (f.tag === 'shortcut') {
+      // A read-only input that captures a key combo on keydown; Backspace /
+      // Delete / Escape clears it. The normalized combo lives in dataset,
+      // the pretty form in the value.
+      el = document.createElement('input');
+      el.type = 'text';
+      el.readOnly = true;
+      el.dataset.shortcut = f.value || '';
+      el.value = prettyShortcut(f.value || '');
+      el.placeholder = 'クリックしてキーを押す (Backspace で消去)';
+      el.addEventListener('keydown', (ev) => {
+        ev.preventDefault();
+        if (['Backspace', 'Delete', 'Escape'].includes(ev.key)) {
+          el.dataset.shortcut = '';
+          el.value = '';
+          return;
+        }
+        const sc = shortcutFromEvent(ev);
+        if (sc) {
+          el.dataset.shortcut = sc;
+          el.value = prettyShortcut(sc);
+        }
+      });
     } else {
       el = document.createElement('input');
       el.type = f.type || 'text';
@@ -1416,6 +1528,28 @@ function toggleProfileMenu(anchor) {
     });
     menu.appendChild(item);
   }
+  // SSH connections: creating a new thread can open one of the saved hosts.
+  if (state.hosts.length) {
+    const sshSep = document.createElement('div');
+    sshSep.className = 'popup-sep';
+    menu.appendChild(sshSep);
+    const sshLabel = document.createElement('div');
+    sshLabel.className = 'popup-label';
+    sshLabel.textContent = 'SSH 接続';
+    menu.appendChild(sshLabel);
+    for (const h of state.hosts) {
+      const item = document.createElement('button');
+      item.className = 'popup-item';
+      item.innerHTML = `<span class="pi-name"></span><span class="pi-cmd"></span>`;
+      item.querySelector('.pi-name').textContent = `⇄ ${h.name || h.host}`;
+      item.querySelector('.pi-cmd').textContent = `${h.username}@${h.host}:${h.port}`;
+      item.addEventListener('click', () => {
+        closeProfileMenu();
+        newSshThread(h);
+      });
+      menu.appendChild(item);
+    }
+  }
   const sep = document.createElement('div');
   sep.className = 'popup-sep';
   menu.appendChild(sep);
@@ -1518,6 +1652,13 @@ window.addEventListener('keydown', (ev) => {
     closePalette();
   } else if (ev.key === 'Escape' && termSearch.open) {
     closeTermSearch();
+  } else if (!palette.open && !modalCtx) {
+    // Registered workflow shortcut (runs on the focused terminal).
+    const wf = workflowForShortcut(ev);
+    if (wf) {
+      ev.preventDefault();
+      runWorkflow(wf, true);
+    }
   }
 });
 
