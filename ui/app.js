@@ -1336,18 +1336,37 @@ function toast(message, isError = false) {
 
 /* ---------------- sidebars & shortcuts ---------------- */
 
-for (const btn of document.querySelectorAll('#sidebar-tabs button')) {
-  btn.addEventListener('click', () => {
-    document.querySelectorAll('#sidebar-tabs button').forEach((b) => b.classList.remove('active'));
-    document.querySelectorAll('.panel').forEach((p) => p.classList.remove('active'));
-    btn.classList.add('active');
-    $(`#panel-${btn.dataset.panel}`).classList.add('active');
-  });
+/** The header tool tabs (Workflows / SSH / 端末 / 設定) toggle the right
+ * sidebar: clicking a tab opens the sidebar to that panel, and clicking the
+ * one that's already showing hides the sidebar so the terminal gets the full
+ * width. */
+function toggleHeaderPanel(name) {
+  const sidebar = $('#sidebar');
+  const active = document.querySelector('.panel.active');
+  const showingThis = !sidebar.classList.contains('hidden') && active && active.id === `panel-${name}`;
+  if (showingThis) {
+    sidebar.classList.add('hidden');
+  } else {
+    sidebar.classList.remove('hidden');
+    document.querySelectorAll('.panel').forEach((p) =>
+      p.classList.toggle('active', p.id === `panel-${name}`));
+  }
+  syncHeaderTabs();
 }
 
-$('#toggle-sidebar').addEventListener('click', () => {
-  $('#sidebar').classList.toggle('hidden');
-});
+/** Highlights the header tab whose panel is currently shown (none when the
+ * sidebar is hidden). */
+function syncHeaderTabs() {
+  const hidden = $('#sidebar').classList.contains('hidden');
+  const active = document.querySelector('.panel.active');
+  const activeName = !hidden && active ? active.id.replace('panel-', '') : null;
+  document.querySelectorAll('.hdr-tab').forEach((b) =>
+    b.classList.toggle('active', b.dataset.panel === activeName));
+}
+
+for (const btn of document.querySelectorAll('.hdr-tab')) {
+  btn.addEventListener('click', () => toggleHeaderPanel(btn.dataset.panel));
+}
 
 $('#toggle-threadbar').addEventListener('click', () => {
   $('#threadbar').classList.toggle('hidden');
@@ -1414,10 +1433,9 @@ function closeProfileMenuOnce(ev) {
 
 function openSidebarPanel(name) {
   $('#sidebar').classList.remove('hidden');
-  document.querySelectorAll('#sidebar-tabs button').forEach((b) =>
-    b.classList.toggle('active', b.dataset.panel === name));
   document.querySelectorAll('.panel').forEach((p) =>
     p.classList.toggle('active', p.id === `panel-${name}`));
+  syncHeaderTabs();
 }
 
 /* ---------------- window controls (custom titlebar) ---------------- */
@@ -1591,6 +1609,7 @@ listen('session:exit', (ev) => {
   state.panes.push(pane);
   focusPane(0);
   updateSplitUi();
+  syncHeaderTabs();
   refreshMaxIcon();
   await newLocalThread();
 })();
