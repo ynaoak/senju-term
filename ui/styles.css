@@ -450,18 +450,27 @@ body.row-resizing { cursor: row-resize; }
 body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 
 /* ---------- sidebar ---------- */
+/* Tool views (Workflows / SSH / 端末 / 設定) render as the main window content
+   rather than a narrow sidebar: the terminal workspace is hidden and #sidebar
+   fills the whole body. */
+#body.tool-view #threadbar,
+#body.tool-view #terminals { display: none; }
+
 #sidebar {
-  width: 320px;
-  background: var(--bg-panel);
-  border-left: 1px solid var(--border);
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
   display: flex;
   flex-direction: column;
 }
 
 #sidebar.hidden { display: none; }
 
-.panel { display: none; flex: 1; overflow-y: auto; padding: 10px; }
+.panel { display: none; flex: 1; overflow-y: auto; padding: 16px; }
 .panel.active { display: block; }
+/* As full-width main content, cap line length and center each section. */
+.panel > * { max-width: 860px; margin-left: auto; margin-right: auto; }
+#panel-settings .form { max-width: 520px; }
 
 .panel-head { display: flex; gap: 6px; margin-bottom: 10px; }
 .panel-head input { flex: 1; }

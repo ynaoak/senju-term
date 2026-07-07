@@ -216,6 +216,9 @@ function createThread(info, paneIdx) {
   });
   state.threads.push(thread);
   assignThread(paneIdx, info.id);
+  // A new thread implies wanting to use it — surface the shell view (a tool
+  // panel may be covering the terminal).
+  if (currentView !== 'shell') setView('shell');
   renderThreads();
 }
 
@@ -1070,7 +1073,7 @@ function paletteEntries() {
       kind: 'thread',
       label: `表示: ${t.title}`,
       detail: t.kind === 'ssh' ? 'SSH スレッド' : 'ローカルスレッド',
-      run: () => assignThread(state.focusedPane, t.id),
+      run: () => { setView('shell'); assignThread(state.focusedPane, t.id); },
     });
   }
   for (const h of state.hosts) {
@@ -1336,36 +1339,45 @@ function toast(message, isError = false) {
 
 /* ---------------- sidebars & shortcuts ---------------- */
 
-/** The header tool tabs (Workflows / SSH / 端末 / 設定) toggle the right
- * sidebar: clicking a tab opens the sidebar to that panel, and clicking the
- * one that's already showing hides the sidebar so the terminal gets the full
- * width. */
-function toggleHeaderPanel(name) {
-  const sidebar = $('#sidebar');
-  const active = document.querySelector('.panel.active');
-  const showingThis = !sidebar.classList.contains('hidden') && active && active.id === `panel-${name}`;
-  if (showingThis) {
-    sidebar.classList.add('hidden');
-  } else {
-    sidebar.classList.remove('hidden');
+/** Header views. "シェル" shows the terminal workspace (thread list + panes);
+ * each other tab (Workflows / SSH / 端末 / 設定) takes over the whole main
+ * content area with its panel, instead of a narrow right sidebar. Exactly one
+ * view is shown at a time. */
+let currentView = 'shell';
+
+function setView(name) {
+  currentView = name;
+  const isShell = name === 'shell';
+  // In a tool view the terminal workspace is hidden (see #body.tool-view CSS)
+  // and the panel container fills the window.
+  $('#body').classList.toggle('tool-view', !isShell);
+  $('#sidebar').classList.toggle('hidden', isShell);
+  if (!isShell) {
     document.querySelectorAll('.panel').forEach((p) =>
       p.classList.toggle('active', p.id === `panel-${name}`));
   }
-  syncHeaderTabs();
+  document.querySelectorAll('.hdr-tab').forEach((b) =>
+    b.classList.toggle('active', b.dataset.panel === name));
+  if (isShell) {
+    // Terminals were display:none while the tool view was up — refit/refocus
+    // now that they are visible again.
+    requestAnimationFrame(() => {
+      for (const pane of state.panes) {
+        const t = threadById(pane.threadId);
+        if (t) t.fit.fit();
+      }
+      focusedThread()?.term.focus();
+    });
+  }
 }
 
-/** Highlights the header tab whose panel is currently shown (none when the
- * sidebar is hidden). */
-function syncHeaderTabs() {
-  const hidden = $('#sidebar').classList.contains('hidden');
-  const active = document.querySelector('.panel.active');
-  const activeName = !hidden && active ? active.id.replace('panel-', '') : null;
-  document.querySelectorAll('.hdr-tab').forEach((b) =>
-    b.classList.toggle('active', b.dataset.panel === activeName));
+/** Clicking the already-active tool tab returns to the shell view. */
+function toggleView(name) {
+  setView(name !== 'shell' && currentView === name ? 'shell' : name);
 }
 
 for (const btn of document.querySelectorAll('.hdr-tab')) {
-  btn.addEventListener('click', () => toggleHeaderPanel(btn.dataset.panel));
+  btn.addEventListener('click', () => toggleView(btn.dataset.panel));
 }
 
 $('#toggle-threadbar').addEventListener('click', () => {
@@ -1432,10 +1444,7 @@ function closeProfileMenuOnce(ev) {
 }
 
 function openSidebarPanel(name) {
-  $('#sidebar').classList.remove('hidden');
-  document.querySelectorAll('.panel').forEach((p) =>
-    p.classList.toggle('active', p.id === `panel-${name}`));
-  syncHeaderTabs();
+  setView(name);
 }
 
 /* ---------------- window controls (custom titlebar) ---------------- */
@@ -1609,7 +1618,7 @@ listen('session:exit', (ev) => {
   state.panes.push(pane);
   focusPane(0);
   updateSplitUi();
-  syncHeaderTabs();
+  setView('shell');
   refreshMaxIcon();
   await newLocalThread();
 })();
