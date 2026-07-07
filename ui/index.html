@@ -25,9 +25,18 @@
       <button id="toggle-threadbar" class="icon-btn" title="スレッド一覧を切替">☰</button>
       <div id="brand" data-tauri-drag-region>❯ Senju</div>
       <div class="spacer" data-tauri-drag-region></div>
+      <!-- Tool-panel tabs, centered in the header. Each toggles its panel in
+           the right sidebar; clicking the active one again hides the sidebar
+           so the terminal can use the full window width. -->
+      <nav id="header-tabs">
+        <button class="hdr-tab" data-panel="workflows">Workflows</button>
+        <button class="hdr-tab" data-panel="hosts">SSH</button>
+        <button class="hdr-tab" data-panel="profiles">端末</button>
+        <button class="hdr-tab" data-panel="settings">設定</button>
+      </nav>
+      <div class="spacer" data-tauri-drag-region></div>
       <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)">⬒ 分割</button>
       <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)">⌕ パレット <kbd>Ctrl⇧P</kbd></button>
-      <button id="toggle-sidebar" class="icon-btn" title="ツールパネルを切替">🛠</button>
       <!-- Windows / Linux: window controls on the right. Plain Unicode glyphs
            so they render without the Segoe icon font (absent on Linux). -->
       <div id="win-controls" class="win-controls">
@@ -63,15 +72,8 @@
         </div>
       </main>
 
-      <!-- 右: ワークフロー / SSH / プロファイル / 設定 -->
+      <!-- 右: ワークフロー / SSH / プロファイル / 設定。タブはヘッダー中央 (#header-tabs) -->
       <aside id="sidebar">
-        <nav id="sidebar-tabs">
-          <button data-panel="workflows" class="active">Workflows</button>
-          <button data-panel="hosts">SSH</button>
-          <button data-panel="profiles">端末</button>
-          <button data-panel="settings">設定</button>
-        </nav>
-
         <section id="panel-workflows" class="panel active">
           <div class="panel-head">
             <input id="wf-search" type="search" placeholder="コマンドを検索…" />
