@@ -77,7 +77,16 @@
 
 - [ ] **CI1** clippy/fmt/`cargo check -p senju-term` の CI ゲート無し (`build.yml`) — med/S
 - [ ] **CI2** actions 未ピン(`tauri-action@v0` 等) (`build.yml`) — med/S
-- [ ] **CI3** release profile 未調整(lto/strip) (`Cargo.toml`) — low/S
+- [x] **CI3** release profile 未調整(lto/strip) ✅ → `[profile.release] lto/codegen-units=1/strip`(panic=abort は堅牢性方針のため除外)
+
+## 依存のスクラッチ化検討(外部ライブラリ)
+
+実測: 依存の大半は tauri(≈819)/russh(≈365)由来。葉の依存は各 0〜6 ノードで、スクラッチ化しても削減効果はほぼ無い。
+
+- [x] **③ リリースプロファイル** ✅ 実利(バイナリ縮小)。葉の依存除去より桁違いに効く。
+- [x] **① window-state 自前化** ✅ `tauri-plugin-window-state` を除去し自前 JSON 永続化に置換(プラグイン依存を1つ削減)。
+- [~] **② addon-fit 除去** 見送り: `FitAddon` は `_renderService.dimensions.css.cell`(xterm の**実測セルサイズ**)を参照して正確に fit する。自作は同じ内部 API を inline するか(脆さを自前で抱える)、フォント実測で代替するか(行/桁ずれの精度劣化)しかなく、1.5KB のために net-negative。維持が正解。
+- ❌ **base64 / open / uuid / russh / tauri / xterm / portable-pty / tokio / serde**: スクラッチ化は逆効果 or 禁忌(性能劣化・注入リスク・暗号/OS 差異の複雑性)。
 
 ### 残(意図的)
 - Q5(挿入/削除レース): 別途リファクタ。フロントは exit-before-create を既にガード。
