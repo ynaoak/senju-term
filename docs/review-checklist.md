@@ -52,7 +52,7 @@
       → okLabel 引数化。
 - [x] **U4** ✅ Batch F — exit でスレッドが無言消滅、SSH 切断がデータ消失に見える (`app.js`) — high/M
       → exited 状態を残す or トースト。
-- [ ] **U5** ワークフローショートカットが端末を壊す組合せ/重複を許容 (`app.js`) — med/M
+- [x] **U5** ✅ Batch I — ワークフローショートカットが端末を壊す組合せ/重複を許容 (`app.js`) — med/M
       → 予約・shell 必須キー・重複を拒否し理由表示。
 - [x] **U6** ✅ Batch F — modal/palette に dialog セマンティクス無し (`index.html`) — med/S
       → role/aria 付与。
@@ -78,6 +78,11 @@
 - [ ] **CI1** clippy/fmt/`cargo check -p senju-term` の CI ゲート無し (`build.yml`) — med/S
 - [ ] **CI2** actions 未ピン(`tauri-action@v0` 等) (`build.yml`) — med/S
 - [ ] **CI3** release profile 未調整(lto/strip) (`Cargo.toml`) — low/S
+
+### 残(意図的)
+- Q5(挿入/削除レース): 別途リファクタ。フロントは exit-before-create を既にガード。
+- renderThreads の rename 中再描画: 低頻度エッジのため別途。
+- CI1–3(clippy/pin/release profile): コード外・別 PR。
 
 ## 対応方針
 

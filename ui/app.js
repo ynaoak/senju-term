@@ -719,6 +719,24 @@ function workflowForShortcut(ev) {
   return state.workflows.find((w) => w.shortcut && w.shortcut === sc) || null;
 }
 
+// Combos the app itself owns (all Ctrl+Shift+…), which a workflow shortcut
+// could never win, so binding them is pointless/confusing.
+const RESERVED_SHORTCUTS = new Set(
+  ['p', 't', 'w', 'd', 'c', 'v', 'f', 'arrowup', 'arrowdown'].map((k) => `ctrl+shift+${k}`),
+);
+
+/** Returns a reason string if `sc` is a bad workflow shortcut, else null. */
+function shortcutConflict(sc, excludeId) {
+  if (RESERVED_SHORTCUTS.has(sc)) return 'アプリのショートカットと重複しています';
+  // A plain Ctrl+<letter> (no shift/alt/meta) is a core shell key (Ctrl+C
+  // interrupt, Ctrl+D EOF, Ctrl+Z suspend, …); stealing it would break the
+  // terminal.
+  if (/^ctrl\+[a-z0-9]$/.test(sc)) return 'シェルが使うキーのため割り当てできません';
+  const dup = state.workflows.find((w) => w.id !== excludeId && w.shortcut === sc);
+  if (dup) return `「${dup.name}」に割り当て済みです`;
+  return null;
+}
+
 /** Renders the shell-view quick-launch bar from workflows flagged show_button. */
 function renderQuickbar() {
   const bar = $('#wf-quickbar');
@@ -816,7 +834,7 @@ function editWorkflow(w) {
       field('説明', 'description', w?.description || ''),
       fieldTextarea('コマンド ( {{名前}} / {{名前:既定値}} でプレースホルダ )', 'command', w?.command || '', { required: true }),
       field('タグ (カンマ区切り)', 'tags', (w?.tags || []).join(', ')),
-      fieldShortcut('ショートカット (任意・Ctrl / Alt / Meta 必須)', 'shortcut', w?.shortcut || ''),
+      fieldShortcut('ショートカット (任意・Ctrl / Alt / Meta 必須)', 'shortcut', w?.shortcut || '', { excludeId: w?.id || '' }),
       fieldCheckbox('シェル表示にクイックボタンを表示', 'show_button', !!w?.show_button),
     ],
     onOk: async (values) => {
@@ -1407,10 +1425,14 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
           return;
         }
         const sc = shortcutFromEvent(ev);
-        if (sc) {
-          el.dataset.shortcut = sc;
-          el.value = prettyShortcut(sc);
+        if (!sc) return;
+        const conflict = shortcutConflict(sc, f.excludeId || '');
+        if (conflict) {
+          toast(`${prettyShortcut(sc)}: ${conflict}`, true);
+          return; // reject — keep the previous value
         }
+        el.dataset.shortcut = sc;
+        el.value = prettyShortcut(sc);
       });
     } else {
       el = document.createElement('input');
