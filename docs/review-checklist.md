@@ -65,13 +65,13 @@
 
 ## デザイン
 
-- [ ] **D1** ボタン/タブ/リスト行にキーボードフォーカス可視スタイル無し (`styles.css`) — high/S
+- [x] **D1** ✅ Batch G — ボタン/タブ/リスト行にキーボードフォーカス可視スタイル無し (`styles.css`) — high/S
       → `:focus-visible` グローバル。
-- [ ] **D2** モーダルが画面を超えるとスクロールせずボタンが切れる (`styles.css`) — high/S
+- [x] **D2** ✅ Batch G — モーダルが画面を超えるとスクロールせずボタンが切れる (`styles.css`) — high/S
       → max-height+flex+body スクロール。
-- [ ] **D3** pinned と focused のスレッド行が視覚的に同一 (`styles.css`) — med/S
-- [ ] **D4** ペインドロップダウンがトークン外の #000/#fff (`styles.css`) — med/S
-- [ ] **D5** 色トークンのドリフト(hex 直書き重複) (`styles.css`) — low/S
+- [x] **D3** ✅ Batch G — pinned と focused のスレッド行が視覚的に同一 (`styles.css`) — med/S
+- [~] **D4** (見送り: ユーザーが「黒ベース白文字」を明示指定したため尊重) — ペインドロップダウンがトークン外の #000/#fff (`styles.css`) — med/S
+- [x] **D5** ✅ Batch G — 色トークンのドリフト(hex 直書き重複) (`styles.css`) — low/S
 
 ## CI / 配布(コード外・別 PR 候補)
 

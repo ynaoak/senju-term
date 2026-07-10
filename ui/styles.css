@@ -7,7 +7,10 @@
   --text-dim: #8b95a3;
   --accent: #00e5be;
   --accent-dim: #0d8f79;
+  --accent-ink: #04110e; /* readable text on an --accent fill */
   --violet: #8957e5;
+  --violet-bright: #b393f0; /* violet text/badges on dark */
+  --blue: #79c0ff;
   --danger: #e5534b;
   --radius: 8px;
   font-size: 14px;
@@ -72,7 +75,7 @@ body {
 .hdr-tab:hover { color: var(--text); background: var(--bg-raised); }
 .hdr-tab.active {
   background: var(--accent-dim);
-  color: #04110e;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 
@@ -147,7 +150,7 @@ kbd {
 .accent-btn {
   background: var(--accent-dim);
   border-color: transparent;
-  color: #04110e;
+  color: var(--accent-ink);
   font-weight: 600;
 }
 .accent-btn:hover { background: var(--accent); }
@@ -168,6 +171,19 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus {
   outline: none;
   border-color: var(--accent-dim);
+}
+
+/* Visible keyboard focus across the chrome — the UA default ring is nearly
+   invisible on this dark theme. Only for keyboard focus (:focus-visible), so
+   mouse clicks don't ring. */
+.icon-btn:focus-visible, .ghost-btn:focus-visible, .accent-btn:focus-visible,
+.danger-btn:focus-visible, .hdr-tab:focus-visible, .win-btn:focus-visible,
+.thread-item:focus-visible, .thread-item .pin:focus-visible,
+.thread-item .close:focus-visible, .pane-thread-btn:focus-visible,
+.card .row button:focus-visible, .wf-quick-btn:focus-visible,
+.popup-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 /* Hide the native number spinners — their default chrome clashes with the
@@ -248,7 +264,10 @@ input[type="number"]::-webkit-outer-spin-button {
 
 .thread-item:hover { background: var(--bg-raised); }
 .thread-item.shown { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
-.thread-item.focused { border-color: var(--accent-dim); }
+/* Focused pane's thread: accent border + a left accent bar, so it reads
+   differently from a merely-pinned thread (which uses the pin icon + a dimmer
+   border). */
+.thread-item.focused { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
 
 .thread-item.pinned { border-color: var(--accent-dim); }
 .thread-item.pinned.shown { border-color: var(--accent); }
@@ -541,7 +560,7 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 .tag {
   display: inline-block;
   background: rgba(137, 87, 229, 0.18);
-  color: #b393f0;
+  color: var(--violet-bright);
   border-radius: 10px;
   font-size: 0.72rem;
   padding: 1px 8px;
@@ -609,9 +628,9 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
   white-space: nowrap;
 }
 .kind-badge.wf { background: rgba(0, 229, 190, 0.14); color: var(--accent); }
-.kind-badge.ssh { background: rgba(137, 87, 229, 0.18); color: #b393f0; }
+.kind-badge.ssh { background: rgba(137, 87, 229, 0.18); color: var(--violet-bright); }
 .kind-badge.action { background: rgba(139, 149, 163, 0.18); color: var(--text-dim); }
-.kind-badge.thread { background: rgba(88, 166, 255, 0.16); color: #79c0ff; }
+.kind-badge.thread { background: rgba(88, 166, 255, 0.16); color: var(--blue); }
 
 #palette-results .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #palette-results .detail {
@@ -624,9 +643,16 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
   white-space: nowrap;
 }
 
-.modal-box { padding: 18px; }
+/* Cap the modal height and let the field area scroll, so a tall form (e.g. the
+   SSH host editor) never pushes the OK/Cancel row off-screen. */
+.modal-box {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  max-height: 84vh;
+}
 .modal-box h3 { margin-bottom: 14px; font-size: 1.05rem; }
-#modal-body { display: flex; flex-direction: column; gap: 10px; }
+#modal-body { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
 #modal-body label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
 /* Checkbox field: sits inline with its label rather than stacked. */
 #modal-body label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
