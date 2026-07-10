@@ -11,11 +11,11 @@
       → 厳格な CSP を設定(全アセットはローカル)。
 - [x] **SEC3** TestClient が known_hosts 読取失敗時にフェイルオープン (`ssh.rs`) — med/S ✅ Batch A
       → VerifyError で Ok(false)、認証に進まない。
-- [ ] **SEC4** WebLinksAddon 既定ハンドラが端末出力の URL を webview で開く (`app.js:183`) — high/S
+- [x] **SEC4** ✅ Batch B — WebLinksAddon 既定ハンドラが端末出力の URL を webview で開く (`app.js:183`) — high/S
       → http(s) のみ OS ブラウザで開く明示ハンドラに。
-- [ ] **SEC5** ペーストが xterm を迂回し bracketed paste を無効化 (`app.js` paste) — med/S
+- [x] **SEC5** ✅ Batch B — ペーストが xterm を迂回し bracketed paste を無効化 (`app.js` paste) — med/S
       → `term.paste(text)` 経由に。改行含む場合は確認。
-- [ ] **SEC6** パスワードがモーダル DOM に残留 (`app.js` closeModal) — med/S
+- [x] **SEC6** ✅ Batch B — パスワードがモーダル DOM に残留 (`app.js` closeModal) — med/S
       → 閉じる時に modal-body をクリア、password 欄に autocomplete=off。
 - [ ] **SEC7** capability が `core:default` 全付与 (`capabilities/default.json`) — med/S
       → 実際に使う `core:event:default` + 明示 window 権限に絞る。
@@ -48,7 +48,7 @@
 - [ ] **U1** 確認モーダルで Escape が効かず Enter が背後ボタンを再発火 (`app.js` openModal) — high/M
       → フォーカス管理・window レベルの Esc/Enter・フォーカストラップ。
 - [ ] **U2** Cancel フォーカス中の Enter が保存してしまう (`app.js`) — med/S
-- [ ] **U3** 確認ボタンが常に「削除」(スレッド終了でも) (`app.js` confirmModal) — med/S
+- [x] **U3** ✅ Batch B(confirmModal okLabel 化) — 確認ボタンが常に「削除」(スレッド終了でも) (`app.js` confirmModal) — med/S
       → okLabel 引数化。
 - [ ] **U4** exit でスレッドが無言消滅、SSH 切断がデータ消失に見える (`app.js`) — high/M
       → exited 状態を残す or トースト。

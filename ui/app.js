@@ -180,7 +180,13 @@ function createThread(info, paneIdx) {
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  // Links in (attacker-controlled) terminal output must NOT be opened inside
+  // the Tauri webview, which holds window.__TAURI__ / IPC. Route http(s) links
+  // to the OS browser via the scheme-restricted `open_external` command; ignore
+  // everything else.
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((_ev, uri) => {
+    if (/^https?:\/\//i.test(uri)) invoke('open_external', { url: uri }).catch(() => {});
+  }));
   const search = new SearchAddon.SearchAddon();
   term.loadAddon(search);
   // App-level shortcuts must win over the shell (Ctrl+K etc. stay usable
@@ -1375,6 +1381,8 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
       el.type = f.type || 'text';
       el.value = f.value;
       if (f.placeholder) el.placeholder = f.placeholder;
+      // Keep passwords/passphrases out of the browser's autofill store.
+      if (el.type === 'password') el.autocomplete = 'new-password';
     }
     el.name = f.name;
     if (f.required) el.required = true;
@@ -1416,6 +1424,9 @@ function closeModal(cancelled) {
   if (cancelled && modalCtx?.onCancel) modalCtx.onCancel();
   modalCtx = null;
   $('#modal').classList.add('hidden');
+  // Drop any password/passphrase values from the DOM immediately rather than
+  // letting them linger in hidden inputs until the next modal opens.
+  $('#modal-body').innerHTML = '';
   focusedThread()?.term.focus();
 }
 
@@ -1435,16 +1446,17 @@ async function submitModal() {
     await ctx.onOk?.(values);
     modalCtx = null;
     $('#modal').classList.add('hidden');
+    $('#modal-body').innerHTML = ''; // clear secrets from the DOM (see closeModal)
   } catch (e) {
     ctx.err.textContent = String(e);
   }
 }
 
-function confirmModal(message) {
+function confirmModal(message, okLabel = '削除') {
   return new Promise((resolve) => {
     openModal({
       title: message,
-      okLabel: '削除',
+      okLabel,
       body: [],
       onOk: () => resolve(true),
       onCancel: () => resolve(false),
@@ -1707,12 +1719,23 @@ async function copyFocusedSelection() {
 async function pasteIntoFocused() {
   const thread = focusedThread();
   if (!thread) return;
+  let text;
   try {
-    const text = await navigator.clipboard.readText();
-    if (text) await invoke('session_write', { id: thread.id, data: text });
+    text = await navigator.clipboard.readText();
   } catch (e) {
     toast(`貼り付けに失敗: ${e}`, true);
+    return;
   }
+  if (!text) return;
+  // Multi-line clipboard content can auto-run commands. Confirm first, and
+  // route through term.paste() so bracketed-paste (\e[200~) wraps it when the
+  // shell/editor requested it — writing straight to the PTY bypassed that.
+  if (text.trimEnd().includes('\n')) {
+    const lines = text.trimEnd().split('\n').length;
+    if (!(await confirmModal(`${lines} 行のテキストを貼り付けますか?`, '貼り付け'))) return;
+  }
+  thread.term.paste(text);
+  thread.term.focus();
 }
 
 /* ---------------- in-terminal search (Ctrl+Shift+F) ---------------- */

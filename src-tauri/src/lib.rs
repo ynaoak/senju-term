@@ -135,6 +135,21 @@ async fn test_ssh_connection(
         .map_err(|e| e.to_string())
 }
 
+/// Opens a link (e.g. one xterm detected in terminal output) in the OS default
+/// browser. Terminal output is attacker-controlled, so this hard-restricts the
+/// scheme to http/https — never `file:`, `javascript:`, custom protocol
+/// handlers, etc. — and hands the URL to the `open` crate, which uses
+/// ShellExecute/open(1)/xdg-open rather than a shell, so URL contents can't be
+/// reinterpreted as a command.
+#[tauri::command]
+fn open_external(url: String) -> CmdResult<()> {
+    let lower = url.to_ascii_lowercase();
+    if !(lower.starts_with("http://") || lower.starts_with("https://")) {
+        return Err("http(s) 以外の URL は開けません".into());
+    }
+    open::that_detached(&url).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn session_write(state: State<'_, AppState>, id: String, data: String) -> CmdResult<()> {
     state
@@ -270,6 +285,7 @@ pub fn run() {
             create_local_session,
             create_ssh_session,
             test_ssh_connection,
+            open_external,
             session_write,
             session_resize,
             session_kill,
