@@ -30,7 +30,7 @@
       → ロック解放後に書く / 専用ライタスレッド。
 - [x] **Q3** ✅ Batch D — store の破損 JSON を握り潰し次回保存で上書き消失 (`store.rs`) — high/S
       → NotFound と parse error を区別、破損ファイル退避、警告。
-- [ ] **Q4** invoke() のエラー処理欠如で無言失敗(get_settings 失敗で起動不能) (`app.js`) — high/M
+- [x] **Q4** ✅ Batch E — invoke() のエラー処理欠如で無言失敗(get_settings 失敗で起動不能) (`app.js`) — high/M
       → try/catch → toast、boot をデフォルトで継続。
 - [ ] **Q5** セッション挿入/削除レース (`sessions/mod.rs`) — med/M
       → 挿入をリーダ spawn より前に。
@@ -38,9 +38,9 @@
       → `unwrap_or_else(PoisonError::into_inner)`。
 - [ ] **Q7** 端末データ転送がチャンク毎 base64+JSON+broadcast (`lib.rs` TauriSink) — high/M
       → コアレッシング(~8-16ms/32-64KB でバッチ)。
-- [ ] **Q8** 非同期作成後にペインインデックスが陳腐化するレース (`app.js`) — med/M
+- [x] **Q8** ✅ Batch E — 非同期作成後にペインインデックスが陳腐化するレース (`app.js`) — med/M
       → ペインオブジェクトを捕捉し attach 時に index 解決。
-- [ ] **Q9** 既定プロファイル削除後に default_profile_id が陳腐化 (`app.js`) — med/S
+- [x] **Q9** ✅ Batch E — 既定プロファイル削除後に default_profile_id が陳腐化 (`app.js`) — med/S
       → 削除時にリセット+保存、isDefaultProfile を先頭フォールバック。
 
 ## UI/UX

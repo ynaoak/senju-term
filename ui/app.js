@@ -76,9 +76,13 @@ function measureCells() {
 
 async function newLocalThread({ paneIdx = state.focusedPane, profileId = null } = {}) {
   const { cols, rows } = measureCells();
+  // Capture the pane object, not just its index: panes can be added/removed
+  // while the backend is starting the shell, which would shift the index.
+  const pane = state.panes[paneIdx];
   try {
     const info = await invoke('create_local_session', { profileId, cols, rows });
-    createThread(info, paneIdx);
+    const idx = pane ? state.panes.indexOf(pane) : -1;
+    createThread(info, idx >= 0 ? idx : state.focusedPane);
   } catch (e) {
     toast(`シェルの起動に失敗: ${e}`, true);
   }
@@ -308,10 +312,11 @@ function createPane() {
   pane.dd.addEventListener('mousedown', (ev) => ev.stopPropagation());
   pane.closeBtn.addEventListener('click', () => removePane(state.panes.indexOf(pane)));
   root.addEventListener('mousedown', () => focusPane(state.panes.indexOf(pane)));
-  new ResizeObserver(() => {
+  pane.ro = new ResizeObserver(() => {
     const t = threadById(pane.threadId);
     if (t) t.fit.fit();
-  }).observe(pane.body);
+  });
+  pane.ro.observe(pane.body);
   return pane;
 }
 
@@ -466,6 +471,7 @@ function addPane() {
 function removePane(idx) {
   if (state.panes.length <= 1) return;
   const [pane] = state.panes.splice(idx, 1);
+  pane.ro?.disconnect(); // stop observing the detached body (avoid a leak)
   const prev = threadById(pane.threadId);
   if (prev) $('#thread-parking').appendChild(prev.hostEl); // thread keeps running
   pane.root.remove();
@@ -672,7 +678,11 @@ function sendToActive(text, run) {
 /* ---------------- workflows ---------------- */
 
 async function refreshWorkflows() {
-  state.workflows = await invoke('list_workflows');
+  try {
+    state.workflows = await invoke('list_workflows');
+  } catch (e) {
+    toast(`ワークフローの読み込みに失敗: ${e}`, true);
+  }
   renderWorkflows();
   renderQuickbar();
 }
@@ -845,7 +855,11 @@ function promptPlaceholders(w, placeholders) {
 /* ---------------- SSH hosts ---------------- */
 
 async function refreshHosts() {
-  state.hosts = await invoke('list_ssh_hosts');
+  try {
+    state.hosts = await invoke('list_ssh_hosts');
+  } catch (e) {
+    toast(`SSH ホストの読み込みに失敗: ${e}`, true);
+  }
   renderHosts();
 }
 
@@ -1020,15 +1034,21 @@ function promptSshSecrets(host) {
 /* ---------------- terminal profiles (Windows Terminal style) ---------------- */
 
 async function refreshProfiles() {
-  state.profiles = await invoke('list_profiles');
+  try {
+    state.profiles = await invoke('list_profiles');
+  } catch (e) {
+    toast(`プロファイルの読み込みに失敗: ${e}`, true);
+  }
   renderProfiles();
   renderProfileSettingOptions();
 }
 
 function isDefaultProfile(p) {
   const def = state.settings.default_profile_id;
-  // With no explicit default, the first profile is effectively the default.
-  return def ? p.id === def : state.profiles[0]?.id === p.id;
+  // A default id that no longer matches any profile (deleted) falls back to
+  // the first profile, so exactly one profile always reads as default.
+  const known = def && state.profiles.some((x) => x.id === def);
+  return known ? p.id === def : state.profiles[0]?.id === p.id;
 }
 
 function renderProfiles() {
@@ -1064,8 +1084,18 @@ function renderProfiles() {
     li.querySelector('.del').addEventListener('click', async () => {
       if (state.profiles.length <= 1) return toast('最後のプロファイルは削除できません', true);
       if (!(await confirmModal(`プロファイル「${p.name}」を削除しますか?`))) return;
-      await invoke('delete_profile', { id: p.id });
-      refreshProfiles();
+      try {
+        await invoke('delete_profile', { id: p.id });
+        // Clear the configured default if it pointed at the deleted profile,
+        // so settings don't reference a nonexistent profile.
+        if (state.settings.default_profile_id === p.id) {
+          state.settings = { ...state.settings, default_profile_id: '' };
+          await invoke('save_settings', { settings: state.settings });
+        }
+        refreshProfiles();
+      } catch (e) {
+        toast(`削除に失敗: ${e}`, true);
+      }
     });
     list.appendChild(li);
   }
@@ -1120,7 +1150,13 @@ function renderProfileSettingOptions() {
 }
 
 async function loadSettings() {
-  state.settings = await invoke('get_settings');
+  try {
+    state.settings = await invoke('get_settings');
+  } catch (e) {
+    // Keep the built-in defaults from `state.settings` rather than aborting
+    // boot() and leaving a blank app.
+    toast(`設定の読み込みに失敗、既定値を使用します: ${e}`, true);
+  }
   const f = $('#settings-form').elements;
   f.font_size.value = state.settings.font_size;
   f.font_family.value = state.settings.font_family;
@@ -1802,6 +1838,8 @@ listen('session:exit', (ev) => {
 });
 
 (async function boot() {
+  // The refresh/loadSettings helpers each swallow their own backend errors
+  // (keeping defaults), so one failing store can't leave a blank window.
   await loadSettings();
   // Profiles must load before the first thread so the default profile applies.
   await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles()]);
@@ -1813,4 +1851,4 @@ listen('session:exit', (ev) => {
   setView('shell');
   refreshMaxIcon();
   await newLocalThread();
-})();
+})().catch((e) => toast(`起動処理でエラー: ${e}`, true));
