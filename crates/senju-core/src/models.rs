@@ -13,6 +13,14 @@ pub struct Workflow {
     pub command: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Optional keyboard shortcut that runs this workflow, stored normalized
+    /// as e.g. `"ctrl+shift+g"`. Empty means no shortcut.
+    #[serde(default)]
+    pub shortcut: String,
+    /// When true, the workflow is shown as a quick-launch button in the shell
+    /// view's workflow bar.
+    #[serde(default)]
+    pub show_button: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]

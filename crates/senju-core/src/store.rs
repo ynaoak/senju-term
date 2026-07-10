@@ -200,6 +200,8 @@ fn default_workflows() -> Vec<Workflow> {
         description: description.into(),
         command: command.into(),
         tags: tags.iter().map(|t| t.to_string()).collect(),
+        shortcut: String::new(),
+        show_button: false,
     };
     vec![
         wf(
@@ -247,6 +249,8 @@ mod tests {
                 description: String::new(),
                 command: "docker ps -a".into(),
                 tags: vec![],
+                shortcut: String::new(),
+                show_button: false,
             })
             .unwrap();
         assert!(!saved.id.is_empty());

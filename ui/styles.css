@@ -402,6 +402,33 @@ input[type="number"]::-webkit-outer-spin-button {
 }
 
 /* ---------- in-terminal search bar (Ctrl+Shift+F) ---------- */
+/* Workflow quick-launch bar (shell view). */
+#wf-quickbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+#wf-quickbar.hidden { display: none; }
+.wf-quick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wf-quick-btn:hover { border-color: var(--accent-dim); background: var(--bg); }
+.wf-quick-btn kbd { font-size: 0.68rem; }
+
 .term-search {
   position: absolute;
   top: 8px;
@@ -504,6 +531,10 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 
 .card .meta { color: var(--text-dim); font-size: 0.8rem; margin-bottom: 8px; }
 
+.wf-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.wf-badges:empty { display: none; }
+.wf-badge { font-size: 0.72rem; color: var(--accent); background: rgba(0, 229, 190, 0.12); border-radius: 10px; padding: 1px 8px; }
+
 .card .row { display: flex; gap: 6px; flex-wrap: wrap; }
 .card .row button { font-size: 0.82rem; padding: 4px 9px; }
 
@@ -597,6 +628,9 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 .modal-box h3 { margin-bottom: 14px; font-size: 1.05rem; }
 #modal-body { display: flex; flex-direction: column; gap: 10px; }
 #modal-body label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
+/* Checkbox field: sits inline with its label rather than stacked. */
+#modal-body label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
+#modal-body input[type="checkbox"] { width: auto; }
 #modal-body textarea { font-family: Consolas, monospace; min-height: 64px; resize: vertical; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 /* An extra action button (e.g. 接続テスト) sits left of Cancel/OK. */
@@ -655,6 +689,7 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 .popup-item .pi-name { font-size: 0.9rem; }
 .popup-item .pi-cmd { font-size: 0.75rem; color: var(--text-dim); font-family: Consolas, monospace; }
 .popup-sep { height: 1px; background: var(--border); margin: 5px 6px; }
+.popup-label { color: var(--text-dim); font-size: 0.7rem; letter-spacing: 0.06em; padding: 2px 10px 4px; }
 
 /* ---------- profiles panel ---------- */
 .panel-note { color: var(--text-dim); font-size: 0.8rem; flex: 1; }
