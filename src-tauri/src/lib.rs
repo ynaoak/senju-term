@@ -119,10 +119,18 @@ async fn test_ssh_connection(
     host: SshHost,
     password: Option<String>,
     passphrase: Option<String>,
+    // Same TOFU handshake as `create_ssh_session`: `None` first contact returns
+    // UNKNOWN_HOST_KEY (before any credential is sent); the UI re-tests with the
+    // approved fingerprint here.
+    expected_fingerprint: Option<String>,
 ) -> CmdResult<SshTestReport> {
     state
         .sessions
-        .test_ssh(&host, SshSecrets { password, passphrase })
+        .test_ssh(
+            &host,
+            SshSecrets { password, passphrase },
+            expected_fingerprint,
+        )
         .await
         .map_err(|e| e.to_string())
 }

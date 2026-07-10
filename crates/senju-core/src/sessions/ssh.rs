@@ -154,6 +154,12 @@ pub(crate) fn default_known_hosts_path() -> PathBuf {
     home.join(".ssh").join("known_hosts")
 }
 
+/// Upper bound on the TCP connect + SSH handshake, and separately on the
+/// authentication exchange. Keepalive only starts once the session is up, so
+/// without this a black-holed IP or a hung/malicious server would stall the
+/// connect and "接続テスト" buttons indefinitely.
+const SSH_STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
 struct Client {
     host: String,
     port: u16,
@@ -306,11 +312,22 @@ impl SshSession {
             outcome: outcome.clone(),
         };
 
-        let mut handle = client::connect(config, (host.host.as_str(), host.port), handler)
-            .await
-            .map_err(|e| host_key_error(e, &outcome))?;
+        let mut handle = match tokio::time::timeout(
+            SSH_STAGE_TIMEOUT,
+            client::connect(config, (host.host.as_str(), host.port), handler),
+        )
+        .await
+        {
+            Ok(res) => res.map_err(|e| host_key_error(e, &outcome))?,
+            Err(_) => return Err(SessionError::Ssh("接続がタイムアウトしました".into())),
+        };
 
-        authenticate(&mut handle, host, &secrets).await?;
+        match tokio::time::timeout(SSH_STAGE_TIMEOUT, authenticate(&mut handle, host, &secrets))
+            .await
+        {
+            Ok(res) => res?,
+            Err(_) => return Err(SessionError::Ssh("認証がタイムアウトしました".into())),
+        }
 
         let channel = handle
             .channel_open_session()
@@ -537,18 +554,25 @@ pub struct SshTestReport {
     pub host_key_known: bool,
 }
 
-/// Host-key handler used only for the pre-save connection test. Unlike the
-/// real [`Client`], an *unknown* host key is accepted for the probe (nothing
-/// is ever written to known_hosts) so that authentication can be exercised;
-/// the observed key is recorded for reporting. A key that mismatches an
-/// EXISTING known_hosts entry still fails — that's a genuine MITM signal the
-/// test must surface rather than hide.
+/// Host-key handler for the pre-save connection test. It applies the SAME
+/// fail-closed verification as the real [`Client`] — authentication (and the
+/// password it may carry) only ever happens over a channel whose host key is
+/// already known, or whose fingerprint the user explicitly approved this
+/// round. The only difference from `Client` is that it never *writes*
+/// known_hosts (a test must not silently trust a host). `observed` records the
+/// key of an accepted channel so the report can show its fingerprint.
 struct TestClient {
     host: String,
     port: u16,
+    /// `Some(fp)` when the UI already showed the user this SHA256 fingerprint
+    /// (from a prior `UnknownHostKey` rejection) and they approved it; the key
+    /// presented now is only accepted if it matches exactly. `None` means no
+    /// prior approval — an unknown host is reported back, never authenticated.
+    expected_fingerprint: Option<String>,
     known_hosts_path: PathBuf,
+    outcome: Arc<StdMutex<Option<HostKeyOutcome>>>,
+    /// `(key_type, fingerprint, was_already_known)` of an accepted key.
     observed: Arc<StdMutex<Option<(String, String, bool)>>>,
-    mismatch: Arc<StdMutex<Option<usize>>>,
 }
 
 impl client::Handler for TestClient {
@@ -558,74 +582,106 @@ impl client::Handler for TestClient {
         &mut self,
         server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        let (key_type, fingerprint) = describe_key(server_public_key);
         match check_host_key(&self.host, self.port, server_public_key, &self.known_hosts_path) {
             HostKeyCheck::Match => {
+                let (key_type, fingerprint) = describe_key(server_public_key);
                 *self.observed.lock().unwrap() = Some((key_type, fingerprint, true));
                 Ok(true)
             }
-            // Accept for the probe only; never learn during a test.
-            HostKeyCheck::Unknown => {
-                *self.observed.lock().unwrap() = Some((key_type, fingerprint, false));
-                Ok(true)
-            }
             HostKeyCheck::Mismatch { line } => {
-                *self.observed.lock().unwrap() = Some((key_type, fingerprint, false));
-                *self.mismatch.lock().unwrap() = Some(line);
+                let (key_type, fingerprint) = describe_key(server_public_key);
+                *self.outcome.lock().unwrap() = Some(HostKeyOutcome::Mismatch {
+                    line,
+                    key_type,
+                    fingerprint,
+                });
                 Err(russh::Error::KeyChanged { line })
             }
-            // known_hosts unreadable: still let the probe proceed so auth can
-            // be tested, and report the key as not-yet-known.
-            HostKeyCheck::VerifyError(_) => {
-                *self.observed.lock().unwrap() = Some((key_type, fingerprint, false));
-                Ok(true)
+            // Fail closed: never authenticate over a channel we couldn't
+            // verify. (The real Client does the same — SEC review S2/S3.)
+            HostKeyCheck::VerifyError(msg) => {
+                *self.outcome.lock().unwrap() = Some(HostKeyOutcome::VerifyError(msg));
+                Ok(false)
+            }
+            HostKeyCheck::Unknown => {
+                let (key_type, actual) = describe_key(server_public_key);
+                match &self.expected_fingerprint {
+                    // User approved exactly this fingerprint on a prior round:
+                    // accept for the probe (but do NOT learn it).
+                    Some(expected) if *expected == actual => {
+                        *self.observed.lock().unwrap() = Some((key_type, actual, false));
+                        Ok(true)
+                    }
+                    // Approved a different fingerprint — possible MITM swap.
+                    Some(expected) => {
+                        *self.outcome.lock().unwrap() = Some(HostKeyOutcome::FingerprintMismatch {
+                            key_type,
+                            expected: expected.clone(),
+                            actual,
+                        });
+                        Ok(false)
+                    }
+                    // First contact: report the key so the UI can prompt. Do
+                    // NOT authenticate — that would leak the password to an
+                    // unverified host (SEC review S1).
+                    None => {
+                        *self.outcome.lock().unwrap() = Some(HostKeyOutcome::Unknown {
+                            key_type,
+                            fingerprint: actual,
+                        });
+                        Ok(false)
+                    }
+                }
             }
         }
     }
 }
 
 /// Probes a host WITHOUT creating a persistent session or learning the host
-/// key: connects, authenticates, opens a session channel, then disconnects.
+/// key: verifies the host key (fail-closed, same as a real connect), then —
+/// only if the key is known or the caller-approved `expected_fingerprint`
+/// matches — authenticates and opens a session channel, then disconnects.
 /// Backs the "接続テスト" button in the SSH host editor.
+///
+/// On first contact with an unrecorded host this returns
+/// [`SessionError::UnknownHostKey`] (with the fingerprint) *before* sending any
+/// credentials, so the UI can show a trust prompt and retry with
+/// `expected_fingerprint = Some(that_fingerprint)`.
 pub async fn test_connection(
     host: &SshHost,
     secrets: SshSecrets,
+    expected_fingerprint: Option<String>,
     known_hosts_path: PathBuf,
 ) -> Result<SshTestReport, SessionError> {
     let config = Arc::new(client::Config {
         keepalive_interval: Some(std::time::Duration::from_secs(30)),
         ..Default::default()
     });
+    let outcome = Arc::new(StdMutex::new(None));
     let observed = Arc::new(StdMutex::new(None));
-    let mismatch = Arc::new(StdMutex::new(None));
     let handler = TestClient {
         host: host.host.clone(),
         port: host.port,
+        expected_fingerprint,
         known_hosts_path,
+        outcome: outcome.clone(),
         observed: observed.clone(),
-        mismatch: mismatch.clone(),
     };
 
-    let mut handle = client::connect(config, (host.host.as_str(), host.port), handler)
-        .await
-        .map_err(|e| match mismatch.lock().unwrap().take() {
-            Some(line) => {
-                let (key_type, fingerprint) = observed
-                    .lock()
-                    .unwrap()
-                    .clone()
-                    .map(|(k, f, _)| (k, f))
-                    .unwrap_or_default();
-                SessionError::HostKeyMismatch {
-                    line,
-                    key_type,
-                    fingerprint,
-                }
-            }
-            None => SessionError::Ssh(format!("接続に失敗しました: {e}")),
-        })?;
+    let mut handle = match tokio::time::timeout(
+        SSH_STAGE_TIMEOUT,
+        client::connect(config, (host.host.as_str(), host.port), handler),
+    )
+    .await
+    {
+        Ok(res) => res.map_err(|e| host_key_error(e, &outcome))?,
+        Err(_) => return Err(SessionError::Ssh("接続がタイムアウトしました".into())),
+    };
 
-    authenticate(&mut handle, host, &secrets).await?;
+    match tokio::time::timeout(SSH_STAGE_TIMEOUT, authenticate(&mut handle, host, &secrets)).await {
+        Ok(res) => res?,
+        Err(_) => return Err(SessionError::Ssh("認証がタイムアウトしました".into())),
+    }
 
     // Confirm a shell channel can actually be opened, then disconnect — the
     // test leaves no session behind.

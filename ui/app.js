@@ -882,6 +882,9 @@ function renderHosts() {
 
 function editHost(h) {
   const isNew = !h;
+  // Fingerprint the user approved during a connection test's TOFU prompt, held
+  // across the two-press "test → trust & re-test" flow. Never persisted.
+  let testTrustFingerprint = null;
   // Builds an SshHost from the form (the test-only secret field is excluded,
   // so it is never persisted).
   const hostFrom = (values) => ({
@@ -909,6 +912,10 @@ function editHost(h) {
       field('接続テスト用パスワード (保存されません)', 'test_password', '', { type: 'password' }),
       field('接続テスト用 鍵パスフレーズ (保存されません)', 'test_passphrase', '', { type: 'password' }),
     ],
+    // The connection test uses the SAME fail-closed TOFU handshake as a real
+    // connect: on first contact with an unknown host it does NOT send the
+    // password — it reports the fingerprint and, on a second press, re-tests
+    // trusting exactly that fingerprint (which is required to exercise auth).
     extraActions: [{
       label: '接続テスト',
       className: 'ghost-btn',
@@ -918,10 +925,10 @@ function editHost(h) {
           return;
         }
         const host = hostFrom(values);
+        const args = { host, expectedFingerprint: testTrustFingerprint };
+        // Send whichever secrets the chosen method uses.
         const pw = values.test_password || null;
         const pass = values.test_passphrase || null;
-        const args = { host };
-        // Send whichever secrets the chosen method uses.
         if (host.auth_method === 'password') args.password = pw;
         else if (host.auth_method === 'key') args.passphrase = pass;
         else if (host.auth_method === 'keypassword') { args.password = pw; args.passphrase = pass; }
@@ -932,10 +939,31 @@ function editHost(h) {
           const rep = await invoke('test_ssh_connection', args);
           const key = rep.host_key_known
             ? '既知のホスト鍵と一致'
-            : `新しいホスト鍵(未登録・保存なし): ${rep.key_type} ${rep.fingerprint}`;
+            : `承認したホスト鍵で認証(未保存): ${rep.key_type} ${rep.fingerprint}`;
           setStatus(`✓ 接続成功・認証OK / ${key}`, 'ok');
+          testTrustFingerprint = null;
+          btn.textContent = '接続テスト';
         } catch (e) {
-          setStatus(`✗ 接続テスト失敗: ${String(e)}`, 'err');
+          const msg = String(e);
+          const unknown = !testTrustFingerprint && msg.match(/^UNKNOWN_HOST_KEY:([^:]+):(.+)$/);
+          if (unknown) {
+            // First contact — no credential was sent. Show the fingerprint;
+            // pressing the button again trusts it for the auth test only.
+            testTrustFingerprint = unknown[2];
+            btn.textContent = 'この鍵を信頼して認証テスト';
+            setStatus(
+              `到達可能・新しいホスト鍵 ${unknown[1]} ${unknown[2]} — 認証もテストするにはもう一度押してください(保存はされません)`,
+              'ok',
+            );
+          } else if (msg.match(/^FINGERPRINT_MISMATCH:/)) {
+            testTrustFingerprint = null;
+            btn.textContent = '接続テスト';
+            setStatus('承認した鍵と異なる鍵が提示されました(MITM の可能性)。中止しました', 'err');
+          } else {
+            testTrustFingerprint = null;
+            btn.textContent = '接続テスト';
+            setStatus(`✗ 接続テスト失敗: ${msg}`, 'err');
+          }
         } finally {
           btn.disabled = false;
         }
