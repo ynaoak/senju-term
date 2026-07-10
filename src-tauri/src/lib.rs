@@ -3,8 +3,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine;
-use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, State};
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 
 use senju_core::sessions::{SessionInfo, SshSecrets, SshTestReport};
 use senju_core::template;
@@ -330,11 +330,69 @@ fn save_settings(state: State<AppState>, settings: Settings) -> CmdResult<()> {
         .map_err(|e| e.to_string())
 }
 
+/// Saved window geometry. Persisted as `window-state.json` next to the other
+/// stores so size/position/maximized survive restarts — a tiny replacement for
+/// tauri-plugin-window-state, reusing the app's own JSON persistence.
+#[derive(Serialize, Deserialize, Default)]
+struct WindowState {
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    maximized: bool,
+}
+
+fn window_state_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path()
+        .app_config_dir()
+        .ok()
+        .map(|d| d.join("window-state.json"))
+}
+
+fn restore_window_state(window: &tauri::WebviewWindow) {
+    let Some(path) = window_state_path(window.app_handle()) else {
+        return;
+    };
+    let Ok(bytes) = std::fs::read(&path) else {
+        return;
+    };
+    let Ok(st) = serde_json::from_slice::<WindowState>(&bytes) else {
+        return;
+    };
+    if st.width > 0 && st.height > 0 {
+        let _ = window.set_size(PhysicalSize::new(st.width, st.height));
+        let _ = window.set_position(PhysicalPosition::new(st.x, st.y));
+    }
+    if st.maximized {
+        let _ = window.maximize();
+    }
+}
+
+fn save_window_state(window: &tauri::Window) {
+    let Some(path) = window_state_path(window.app_handle()) else {
+        return;
+    };
+    let maximized = window.is_maximized().unwrap_or(false);
+    let (Ok(pos), Ok(size)) = (window.outer_position(), window.outer_size()) else {
+        return;
+    };
+    let st = WindowState {
+        x: pos.x,
+        y: pos.y,
+        width: size.width,
+        height: size.height,
+        maximized,
+    };
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Ok(json) = serde_json::to_vec_pretty(&st) {
+        let _ = std::fs::write(&path, json);
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
-        // Remembers window size/position/maximized state across restarts,
-        // restoring it before the window is first shown.
-        .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let stores = Stores::new(dir)?;
@@ -343,15 +401,28 @@ pub fn run() {
                 stores,
                 sessions: SessionManager::new(sink),
             });
+            // Restore the saved window geometry before the first paint.
+            if let Some(window) = app.get_webview_window("main") {
+                restore_window_state(&window);
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Only tear down all sessions when the MAIN window closes — not when
-            // some future auxiliary window (settings, about, …) is destroyed.
-            if matches!(event, tauri::WindowEvent::Destroyed) && window.label() == "main" {
-                if let Some(state) = window.app_handle().try_state::<AppState>() {
-                    state.sessions.kill_all();
+            if window.label() != "main" {
+                return;
+            }
+            match event {
+                // Persist geometry on close (our custom ✕ calls window.close(),
+                // which fires this before the window goes away).
+                tauri::WindowEvent::CloseRequested { .. } => save_window_state(window),
+                // Only tear down all sessions when the MAIN window closes — not
+                // when a future auxiliary window is destroyed.
+                tauri::WindowEvent::Destroyed => {
+                    if let Some(state) = window.app_handle().try_state::<AppState>() {
+                        state.sessions.kill_all();
+                    }
                 }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
