@@ -1452,8 +1452,11 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
 
   modalCtx = { onOk, onCancel, err };
   $('#modal').classList.remove('hidden');
+  // Focus the first field, or the OK button for a body-less confirm dialog, so
+  // keyboard focus starts inside the modal (Escape/Enter and the focus trap
+  // depend on it).
   const first = box.querySelector('input, textarea, select');
-  if (first) first.focus();
+  (first || $('#modal-ok')).focus();
 }
 
 function closeModal(cancelled) {
@@ -1506,10 +1509,32 @@ $('#modal').addEventListener('mousedown', (ev) => {
   if (ev.target === $('#modal')) closeModal(true);
 });
 $('#modal').addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') closeModal(true);
-  if (ev.key === 'Enter' && ev.target.tagName !== 'TEXTAREA') {
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    closeModal(true);
+    return;
+  }
+  // Enter submits — but NOT when a button (Cancel/OK/接続テスト) is focused, so
+  // Enter on Cancel cancels instead of saving, and not inside a textarea.
+  if (ev.key === 'Enter' && ev.target.tagName !== 'TEXTAREA' && ev.target.tagName !== 'BUTTON') {
     ev.preventDefault();
     submitModal();
+    return;
+  }
+  // Keep Tab focus within the modal.
+  if (ev.key === 'Tab') {
+    const f = [...$('#modal').querySelectorAll('input, textarea, select, button')]
+      .filter((el) => !el.disabled && el.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0];
+    const last = f[f.length - 1];
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault();
+      first.focus();
+    }
   }
 });
 
@@ -1673,7 +1698,14 @@ for (const btn of document.querySelectorAll('.win-btn')) {
     const action = btn.dataset.win;
     if (action === 'minimize') await appWindow.minimize();
     else if (action === 'maximize') { await appWindow.toggleMaximize(); refreshMaxIcon(); }
-    else if (action === 'close') await appWindow.close();
+    else if (action === 'close') {
+      // Closing kills every live shell/SSH session — confirm when any are open.
+      if (state.threads.length &&
+          !(await confirmModal(`${state.threads.length} 個のセッションが実行中です。終了しますか?`, '終了'))) {
+        return;
+      }
+      await appWindow.close();
+    }
   });
 }
 
@@ -1833,8 +1865,16 @@ listen('session:data', (ev) => {
 });
 
 listen('session:exit', (ev) => {
-  const { id } = ev.payload;
-  if (threadById(id)) closeThread(id, { kill: false });
+  const { id, code } = ev.payload;
+  const thread = threadById(id);
+  if (!thread) return;
+  // A vanishing SSH thread can look like data loss, so surface it — a dropped
+  // connection (code -1 from the backend) is flagged as an error.
+  if (thread.kind === 'ssh') {
+    if (code === -1) toast(`「${thread.title}」の接続が切断されました`, true);
+    else toast(`「${thread.title}」が終了しました (code ${code})`);
+  }
+  closeThread(id, { kill: false });
 });
 
 (async function boot() {

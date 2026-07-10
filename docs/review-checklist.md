@@ -45,20 +45,20 @@
 
 ## UI/UX
 
-- [ ] **U1** 確認モーダルで Escape が効かず Enter が背後ボタンを再発火 (`app.js` openModal) — high/M
+- [x] **U1** ✅ Batch F — 確認モーダルで Escape が効かず Enter が背後ボタンを再発火 (`app.js` openModal) — high/M
       → フォーカス管理・window レベルの Esc/Enter・フォーカストラップ。
-- [ ] **U2** Cancel フォーカス中の Enter が保存してしまう (`app.js`) — med/S
+- [x] **U2** ✅ Batch F — Cancel フォーカス中の Enter が保存してしまう (`app.js`) — med/S
 - [x] **U3** ✅ Batch B(confirmModal okLabel 化) — 確認ボタンが常に「削除」(スレッド終了でも) (`app.js` confirmModal) — med/S
       → okLabel 引数化。
-- [ ] **U4** exit でスレッドが無言消滅、SSH 切断がデータ消失に見える (`app.js`) — high/M
+- [x] **U4** ✅ Batch F — exit でスレッドが無言消滅、SSH 切断がデータ消失に見える (`app.js`) — high/M
       → exited 状態を残す or トースト。
 - [ ] **U5** ワークフローショートカットが端末を壊す組合せ/重複を許容 (`app.js`) — med/M
       → 予約・shell 必須キー・重複を拒否し理由表示。
-- [ ] **U6** modal/palette に dialog セマンティクス無し (`index.html`) — med/S
+- [x] **U6** ✅ Batch F — modal/palette に dialog セマンティクス無し (`index.html`) — med/S
       → role/aria 付与。
-- [ ] **U7** ウィンドウ✕が確認なしで全セッション kill (`app.js`) — med/S
+- [x] **U7** ✅ Batch F — ウィンドウ✕が確認なしで全セッション kill (`app.js`) — med/S
       → 実行中セッションがあれば確認。
-- [ ] **U8** ナビの JP/EN 混在(Workflows だけ英語) (`index.html`) — low/S
+- [x] **U8** ✅ Batch F — ナビの JP/EN 混在(Workflows だけ英語) (`index.html`) — low/S
 - [x] **R2** ✅ Batch D — SSH 切断が終了コード 0(正常終了)に見える (`ssh.rs`) — med/S
       → exit-status 無しの終了を別扱い。
 - [x] **R4** ✅ Batch D — 保存モデルの検証なし(空 host/port 0 等) (`store.rs`) — low/S
