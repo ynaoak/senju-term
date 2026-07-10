@@ -35,11 +35,18 @@ struct ExitEvent<'a> {
 impl senju_core::EventSink for TauriSink {
     fn data(&self, id: &str, data: &[u8]) {
         let encoded = base64::engine::general_purpose::STANDARD.encode(data);
-        let _ = self.app.emit("session:data", DataEvent { id, data: encoded });
+        // Deliver only to the main webview, not every window — terminal output
+        // (which may include typed passwords echoed by a remote host) must not
+        // fan out to any future auxiliary window.
+        let _ = self
+            .app
+            .emit_to("main", "session:data", DataEvent { id, data: encoded });
     }
 
     fn exit(&self, id: &str, code: i32) {
-        let _ = self.app.emit("session:exit", ExitEvent { id, code });
+        let _ = self
+            .app
+            .emit_to("main", "session:exit", ExitEvent { id, code });
     }
 }
 
@@ -275,7 +282,9 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
+            // Only tear down all sessions when the MAIN window closes — not when
+            // some future auxiliary window (settings, about, …) is destroyed.
+            if matches!(event, tauri::WindowEvent::Destroyed) && window.label() == "main" {
                 if let Some(state) = window.app_handle().try_state::<AppState>() {
                     state.sessions.kill_all();
                 }

@@ -7,7 +7,7 @@
 
 - [x] **SEC1** 接続テストが未検証ホストへパスワードを送信する (`ssh.rs` TestClient) — high/M ✅ Batch A
       → TestClient を Client と同じフェイルクローズ TOFU に。未知の鍵は認証前に UnknownHostKey を返し、UI は承認後に再テスト。
-- [ ] **SEC2** CSP 未設定 (`tauri.conf.json` `csp: null`) — high/S
+- [x] **SEC2** ✅ Batch C — CSP 未設定 (`tauri.conf.json` `csp: null`) — high/S
       → 厳格な CSP を設定(全アセットはローカル)。
 - [x] **SEC3** TestClient が known_hosts 読取失敗時にフェイルオープン (`ssh.rs`) — med/S ✅ Batch A
       → VerifyError で Ok(false)、認証に進まない。
@@ -17,7 +17,7 @@
       → `term.paste(text)` 経由に。改行含む場合は確認。
 - [x] **SEC6** ✅ Batch B — パスワードがモーダル DOM に残留 (`app.js` closeModal) — med/S
       → 閉じる時に modal-body をクリア、password 欄に autocomplete=off。
-- [ ] **SEC7** capability が `core:default` 全付与 (`capabilities/default.json`) — med/S
+- [x] **SEC7** ✅ Batch C — capability が `core:default` 全付与 (`capabilities/default.json`) — med/S
       → 実際に使う `core:event:default` + 明示 window 権限に絞る。
 - [x] **SEC8** (部分) SshSecrets の Debug を redact 化(ログ流出防止) ✅ Batch A ／ zeroize 本体は今後
       → Zeroizing / Drop で消去、Debug を redact。
