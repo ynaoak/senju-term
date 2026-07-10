@@ -26,15 +26,15 @@
 
 - [x] **Q1** SSH connect/auth にタイムアウトなし (`ssh.rs`) ✅ Batch A → 20秒 timeout を connect+auth に
       → `tokio::time::timeout` で connect+auth+channel をラップ。
-- [ ] **Q2** ブロッキング PTY write をセッションマップのロック保持中に実行 (`sessions/mod.rs`, `local.rs`) — high/M
+- [x] **Q2** ✅ Batch D — ブロッキング PTY write をセッションマップのロック保持中に実行 (`sessions/mod.rs`, `local.rs`) — high/M
       → ロック解放後に書く / 専用ライタスレッド。
-- [ ] **Q3** store の破損 JSON を握り潰し次回保存で上書き消失 (`store.rs`) — high/S
+- [x] **Q3** ✅ Batch D — store の破損 JSON を握り潰し次回保存で上書き消失 (`store.rs`) — high/S
       → NotFound と parse error を区別、破損ファイル退避、警告。
 - [ ] **Q4** invoke() のエラー処理欠如で無言失敗(get_settings 失敗で起動不能) (`app.js`) — high/M
       → try/catch → toast、boot をデフォルトで継続。
 - [ ] **Q5** セッション挿入/削除レース (`sessions/mod.rs`) — med/M
       → 挿入をリーダ spawn より前に。
-- [ ] **Q6** `lock().unwrap()` の poison 連鎖で exit イベント消失 (`local.rs`,`ssh.rs`,`mod.rs`,`store.rs`) — med/S
+- [x] **Q6** ✅ Batch D — `lock().unwrap()` の poison 連鎖で exit イベント消失 (`local.rs`,`ssh.rs`,`mod.rs`,`store.rs`) — med/S
       → `unwrap_or_else(PoisonError::into_inner)`。
 - [ ] **Q7** 端末データ転送がチャンク毎 base64+JSON+broadcast (`lib.rs` TauriSink) — high/M
       → コアレッシング(~8-16ms/32-64KB でバッチ)。
@@ -59,9 +59,9 @@
 - [ ] **U7** ウィンドウ✕が確認なしで全セッション kill (`app.js`) — med/S
       → 実行中セッションがあれば確認。
 - [ ] **U8** ナビの JP/EN 混在(Workflows だけ英語) (`index.html`) — low/S
-- [ ] **R2** SSH 切断が終了コード 0(正常終了)に見える (`ssh.rs`) — med/S
+- [x] **R2** ✅ Batch D — SSH 切断が終了コード 0(正常終了)に見える (`ssh.rs`) — med/S
       → exit-status 無しの終了を別扱い。
-- [ ] **R4** 保存モデルの検証なし(空 host/port 0 等) (`store.rs`) — low/S
+- [x] **R4** ✅ Batch D — 保存モデルの検証なし(空 host/port 0 等) (`store.rs`) — low/S
 
 ## デザイン
 

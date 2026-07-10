@@ -349,16 +349,28 @@ impl SshSession {
         let sid = id.to_string();
         tokio::spawn(async move {
             let mut code = 0i32;
+            let mut saw_exit_status = false;
             while let Some(msg) = read_half.wait().await {
                 match msg {
                     ChannelMsg::Data { data } => sink.data(&sid, &data),
                     ChannelMsg::ExtendedData { data, .. } => sink.data(&sid, &data),
-                    ChannelMsg::ExitStatus { exit_status } => code = exit_status as i32,
+                    ChannelMsg::ExitStatus { exit_status } => {
+                        code = exit_status as i32;
+                        saw_exit_status = true;
+                    }
                     _ => {}
                 }
             }
-            sessions.lock().unwrap().remove(&sid);
-            sink.exit(&sid, code);
+            // If the channel closed without the server sending an exit status,
+            // the connection dropped rather than the shell exiting cleanly.
+            // Report a sentinel so the UI can distinguish "disconnected" from a
+            // normal exit instead of showing a misleading code 0.
+            let final_code = if saw_exit_status { code } else { -1 };
+            sessions
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .remove(&sid);
+            sink.exit(&sid, final_code);
         });
 
         Ok(Self {
