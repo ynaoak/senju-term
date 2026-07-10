@@ -36,7 +36,7 @@
       → 挿入をリーダ spawn より前に。
 - [x] **Q6** ✅ Batch D — `lock().unwrap()` の poison 連鎖で exit イベント消失 (`local.rs`,`ssh.rs`,`mod.rs`,`store.rs`) — med/S
       → `unwrap_or_else(PoisonError::into_inner)`。
-- [ ] **Q7** 端末データ転送がチャンク毎 base64+JSON+broadcast (`lib.rs` TauriSink) — high/M
+- [x] **Q7** ✅ Batch H — 端末データ転送がチャンク毎 base64+JSON+broadcast (`lib.rs` TauriSink) — high/M
       → コアレッシング(~8-16ms/32-64KB でバッチ)。
 - [x] **Q8** ✅ Batch E — 非同期作成後にペインインデックスが陳腐化するレース (`app.js`) — med/M
       → ペインオブジェクトを捕捉し attach 時に index 解決。

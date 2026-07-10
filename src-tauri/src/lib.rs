@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use base64::Engine;
 use serde::Serialize;
@@ -14,10 +15,22 @@ struct AppState {
     sessions: SessionManager,
 }
 
+/// Flush terminal output at most once every ~8ms per session (roughly a frame)
+/// instead of once per PTY read, and force a flush past this size so a firehose
+/// (`cat` of a big file, a build's output) can't grow an unbounded buffer.
+const FLUSH_INTERVAL: Duration = Duration::from_millis(8);
+const FLUSH_THRESHOLD: usize = 64 * 1024;
+
 /// Forwards session output/exit to the webview. Output bytes are base64
 /// encoded so multibyte sequences split across reads survive the JSON hop.
+///
+/// Reads are coalesced: instead of a base64+JSON+emit per PTY read (thousands
+/// per second during heavy output, each with full event-system overhead and a
+/// main-thread decode), bytes accumulate per session and a background flusher
+/// emits one batched event per session per tick.
 struct TauriSink {
     app: AppHandle,
+    pending: Mutex<HashMap<String, Vec<u8>>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -32,9 +45,25 @@ struct ExitEvent<'a> {
     code: i32,
 }
 
-impl senju_core::EventSink for TauriSink {
-    fn data(&self, id: &str, data: &[u8]) {
-        let encoded = base64::engine::general_purpose::STANDARD.encode(data);
+impl TauriSink {
+    fn new(app: AppHandle) -> Arc<Self> {
+        let sink = Arc::new(Self {
+            app,
+            pending: Mutex::new(HashMap::new()),
+        });
+        let flusher = sink.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(FLUSH_INTERVAL);
+            flusher.flush_all();
+        });
+        sink
+    }
+
+    fn emit_data(&self, id: &str, bytes: &[u8]) {
+        if bytes.is_empty() {
+            return;
+        }
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         // Deliver only to the main webview, not every window — terminal output
         // (which may include typed passwords echoed by a remote host) must not
         // fan out to any future auxiliary window.
@@ -43,7 +72,44 @@ impl senju_core::EventSink for TauriSink {
             .emit_to("main", "session:data", DataEvent { id, data: encoded });
     }
 
+    fn flush_all(&self) {
+        let drained: Vec<(String, Vec<u8>)> = {
+            let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            map.drain().filter(|(_, v)| !v.is_empty()).collect()
+        };
+        for (id, bytes) in drained {
+            self.emit_data(&id, &bytes);
+        }
+    }
+
+    /// Flush a single session's buffer immediately (on threshold, and before
+    /// its exit event so output always precedes exit).
+    fn flush_one(&self, id: &str) {
+        let bytes = {
+            let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            map.remove(id)
+        };
+        if let Some(bytes) = bytes {
+            self.emit_data(id, &bytes);
+        }
+    }
+}
+
+impl senju_core::EventSink for TauriSink {
+    fn data(&self, id: &str, data: &[u8]) {
+        let over_threshold = {
+            let mut map = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+            let buf = map.entry(id.to_string()).or_default();
+            buf.extend_from_slice(data);
+            buf.len() >= FLUSH_THRESHOLD
+        };
+        if over_threshold {
+            self.flush_one(id);
+        }
+    }
+
     fn exit(&self, id: &str, code: i32) {
+        self.flush_one(id); // any buffered output must land before the exit
         let _ = self
             .app
             .emit_to("main", "session:exit", ExitEvent { id, code });
@@ -272,9 +338,7 @@ pub fn run() {
         .setup(|app| {
             let dir = app.path().app_config_dir()?;
             let stores = Stores::new(dir)?;
-            let sink = Arc::new(TauriSink {
-                app: app.handle().clone(),
-            });
+            let sink = TauriSink::new(app.handle().clone());
             app.manage(AppState {
                 stores,
                 sessions: SessionManager::new(sink),
