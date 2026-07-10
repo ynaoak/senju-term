@@ -159,10 +159,12 @@ async fn combined_key_password_auth() {
     let known_hosts_path = known_hosts_dir.path().join("known_hosts");
 
     // The pre-save connection test succeeds when both secrets are supplied.
+    // Learn the fingerprint via the first-contact rejection, then approve it.
     let sink = Arc::new(Capture::default());
     let mgr = SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
+    let fp = learn_unknown_host_fingerprint(&mgr, &host, secrets()).await;
     let report = mgr
-        .test_ssh(&host, secrets())
+        .test_ssh(&host, secrets(), Some(fp.clone()))
         .await
         .expect("combined publickey+password auth should succeed");
     assert!(report.fingerprint.starts_with("SHA256:"), "{}", report.fingerprint);
@@ -174,7 +176,7 @@ async fn combined_key_password_auth() {
         auth_method: SshAuthMethod::Key,
         ..host.clone()
     };
-    mgr2.test_ssh(&key_only, SshSecrets::default())
+    mgr2.test_ssh(&key_only, SshSecrets::default(), Some(fp))
         .await
         .expect_err("key-only auth must fail against a publickey,password server");
 
@@ -341,28 +343,54 @@ async fn known_hosts_tofu_workflow() {
 }
 
 /// The pre-save connection test (`test_ssh`) against a live sshd:
-/// - with the right password it succeeds, reports the server's SHA256
-///   fingerprint, flags the host key as not-yet-known, and — crucially —
-///   does NOT write known_hosts (a test must never silently trust a host);
-/// - with the wrong password it fails.
+/// - first contact with `expected_fingerprint: None` fails with
+///   `UnknownHostKey` and — crucially — does so even with a WRONG password,
+///   proving no credential was sent to the unverified host (SEC review S1);
+/// - after approving that fingerprint the test authenticates, reports the key
+///   as not-yet-known, and never writes known_hosts (a test must not trust);
+/// - with the approved fingerprint but a wrong password it fails at auth.
 #[tokio::test(flavor = "multi_thread")]
 #[ignore = "needs a live sshd (see module docs)"]
 async fn test_connection_probes_without_learning() {
     let known_hosts_dir = tempfile::tempdir().unwrap();
     let known_hosts_path = known_hosts_dir.path().join("known_hosts");
+    let host = test_host(SshAuthMethod::Password);
+    let good = || SshSecrets {
+        password: Some(env("SENJU_SSH_PASSWORD")),
+        passphrase: None,
+    };
+
+    // First contact with a DELIBERATELY WRONG password must still fail with
+    // UnknownHostKey (not an auth error) — the password is never sent because
+    // the host key isn't verified yet.
     let sink = Arc::new(Capture::default());
     let mgr = SessionManager::with_known_hosts_path(sink, Some(known_hosts_path.clone()));
-
-    let report = mgr
+    let fingerprint = match mgr
         .test_ssh(
-            &test_host(SshAuthMethod::Password),
+            &host,
             SshSecrets {
-                password: Some(env("SENJU_SSH_PASSWORD")),
+                password: Some("definitely-wrong".into()),
                 passphrase: None,
             },
+            None,
         )
         .await
-        .expect("connection test with the right password should succeed");
+        .expect_err("first contact must be rejected before auth")
+    {
+        SessionError::UnknownHostKey { fingerprint, .. } => fingerprint,
+        other => panic!("expected UnknownHostKey (no auth), got: {other}"),
+    };
+    assert!(
+        !known_hosts_path.exists(),
+        "a connection test must never write known_hosts"
+    );
+
+    // Approving that fingerprint lets the test authenticate — over a verified
+    // key — and still leaves known_hosts untouched.
+    let report = mgr
+        .test_ssh(&host, good(), Some(fingerprint.clone()))
+        .await
+        .expect("approving the real fingerprint should let the test succeed");
     assert!(report.fingerprint.starts_with("SHA256:"), "{}", report.fingerprint);
     assert!(!report.key_type.is_empty());
     assert!(
@@ -374,16 +402,18 @@ async fn test_connection_probes_without_learning() {
         "a connection test must never write known_hosts"
     );
 
+    // Approved fingerprint + wrong password -> now it fails at auth.
     let err = mgr
         .test_ssh(
-            &test_host(SshAuthMethod::Password),
+            &host,
             SshSecrets {
                 password: Some("definitely-wrong".into()),
                 passphrase: None,
             },
+            Some(fingerprint),
         )
         .await
-        .expect_err("connection test with the wrong password should fail");
+        .expect_err("wrong password over a verified key should fail at auth");
     let msg = err.to_string();
     assert!(
         msg.contains("auth") || msg.contains("reject"),

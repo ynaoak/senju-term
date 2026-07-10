@@ -30,7 +30,7 @@
            so the terminal can use the full window width. -->
       <nav id="header-tabs">
         <button class="hdr-tab" data-panel="shell">シェル</button>
-        <button class="hdr-tab" data-panel="workflows">Workflows</button>
+        <button class="hdr-tab" data-panel="workflows">ワークフロー</button>
         <button class="hdr-tab" data-panel="hosts">SSH</button>
         <button class="hdr-tab" data-panel="profiles">端末</button>
         <button class="hdr-tab" data-panel="settings">設定</button>
@@ -130,15 +130,16 @@
   <div id="profile-menu" class="popup-menu hidden"></div>
 
   <!-- コマンドパレット -->
-  <div id="palette" class="overlay hidden">
+  <div id="palette" class="overlay hidden" role="dialog" aria-modal="true" aria-label="コマンドパレット">
     <div class="palette-box">
-      <input id="palette-input" type="text" placeholder="コマンド・ワークフロー・SSH ホストを検索…" autocomplete="off" />
-      <ul id="palette-results"></ul>
+      <input id="palette-input" type="text" placeholder="コマンド・ワークフロー・SSH ホストを検索…"
+             autocomplete="off" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" />
+      <ul id="palette-results" role="listbox" aria-label="検索結果"></ul>
     </div>
   </div>
 
   <!-- 汎用モーダル -->
-  <div id="modal" class="overlay hidden">
+  <div id="modal" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
     <div class="modal-box">
       <h3 id="modal-title"></h3>
       <div id="modal-body"></div>

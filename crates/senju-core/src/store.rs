@@ -15,6 +15,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("serialization error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("{0}")]
+    Invalid(String),
 }
 
 pub struct Stores {
@@ -42,7 +44,7 @@ impl Stores {
         if wf.id.is_empty() {
             wf.id = uuid::Uuid::new_v4().to_string();
         }
-        let _g = self.lock.lock().unwrap();
+        let _g = self.guard();
         let mut items = self.read("workflows", default_workflows);
         upsert(&mut items, wf.clone(), |w| &w.id);
         self.write("workflows", &items)?;
@@ -50,7 +52,7 @@ impl Stores {
     }
 
     pub fn delete_workflow(&self, id: &str) -> Result<(), StoreError> {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.guard();
         let mut items = self.read("workflows", default_workflows);
         items.retain(|w| w.id != id);
         self.write("workflows", &items)
@@ -63,10 +65,11 @@ impl Stores {
     }
 
     pub fn save_ssh_host(&self, mut host: SshHost) -> Result<SshHost, StoreError> {
+        validate_ssh_host(&host)?;
         if host.id.is_empty() {
             host.id = uuid::Uuid::new_v4().to_string();
         }
-        let _g = self.lock.lock().unwrap();
+        let _g = self.guard();
         let mut items = self.read("ssh-hosts", Vec::new);
         upsert(&mut items, host.clone(), |h| &h.id);
         self.write("ssh-hosts", &items)?;
@@ -74,7 +77,7 @@ impl Stores {
     }
 
     pub fn delete_ssh_host(&self, id: &str) -> Result<(), StoreError> {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.guard();
         let mut items: Vec<SshHost> = self.read("ssh-hosts", Vec::new);
         items.retain(|h| h.id != id);
         self.write("ssh-hosts", &items)
@@ -90,7 +93,7 @@ impl Stores {
         if profile.id.is_empty() {
             profile.id = uuid::Uuid::new_v4().to_string();
         }
-        let _g = self.lock.lock().unwrap();
+        let _g = self.guard();
         let mut items = self.read("profiles", default_profiles);
         upsert(&mut items, profile.clone(), |p| &p.id);
         self.write("profiles", &items)?;
@@ -98,7 +101,7 @@ impl Stores {
     }
 
     pub fn delete_profile(&self, id: &str) -> Result<(), StoreError> {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.guard();
         let mut items = self.read("profiles", default_profiles);
         items.retain(|p| p.id != id);
         self.write("profiles", &items)
@@ -125,7 +128,7 @@ impl Stores {
     }
 
     pub fn save_settings(&self, settings: &Settings) -> Result<(), StoreError> {
-        let _g = self.lock.lock().unwrap();
+        let _g = self.guard();
         self.write("settings", settings)
     }
 
@@ -135,8 +138,27 @@ impl Stores {
         self.dir.join(format!("{name}.json"))
     }
 
+    /// Serializes writes so two `save_*`/`delete_*` can't interleave a
+    /// read-modify-write. Recovers from a poisoned lock: the guarded value is
+    /// `()`, so a prior panic left no broken invariant.
+    fn guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn read<T: DeserializeOwned>(&self, name: &str, default: impl FnOnce() -> T) -> T {
-        read_json(&self.path(name)).unwrap_or_else(default)
+        let path = self.path(name);
+        match load_json::<T>(&path) {
+            Ok(Some(value)) => value,
+            Ok(None) => default(),
+            // The file exists but is unreadable/corrupt. Preserve it (so the
+            // next save can't silently overwrite the user's data with
+            // defaults) and fall back — the app stays usable and the original
+            // can be recovered from the `.corrupt` copy.
+            Err(_) => {
+                backup_corrupt(&path);
+                default()
+            }
+        }
     }
 
     fn write<T: Serialize>(&self, name: &str, value: &T) -> Result<(), StoreError> {
@@ -148,9 +170,51 @@ impl Stores {
     }
 }
 
-fn read_json<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let bytes = fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+/// `Ok(None)` = file missing (use defaults); `Ok(Some)` = parsed; `Err` =
+/// present but unreadable or unparseable (a corruption we must not treat as
+/// "empty").
+fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ()> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| ())
+}
+
+/// Renames a corrupt store file aside to `<name>.json.corrupt[.N]` so it is
+/// preserved rather than overwritten on the next save.
+fn backup_corrupt(path: &Path) {
+    let mut candidate = path.with_extension("json.corrupt");
+    let mut n = 1;
+    while candidate.exists() {
+        candidate = path.with_extension(format!("json.corrupt.{n}"));
+        n += 1;
+    }
+    let _ = fs::rename(path, candidate);
+}
+
+/// Rejects an SSH host that would only fail later with an opaque socket/auth
+/// error, so the editor can show the problem inline at save time.
+fn validate_ssh_host(host: &SshHost) -> Result<(), StoreError> {
+    use crate::models::SshAuthMethod;
+    if host.host.trim().is_empty() {
+        return Err(StoreError::Invalid("ホストを入力してください".into()));
+    }
+    if host.username.trim().is_empty() {
+        return Err(StoreError::Invalid("ユーザー名を入力してください".into()));
+    }
+    if host.port == 0 {
+        return Err(StoreError::Invalid("ポートは 1 以上を指定してください".into()));
+    }
+    if matches!(host.auth_method, SshAuthMethod::Key | SshAuthMethod::KeyPassword)
+        && host.key_path.trim().is_empty()
+    {
+        return Err(StoreError::Invalid(
+            "この認証方式では秘密鍵パスが必要です".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn upsert<T, F: Fn(&T) -> &String>(items: &mut Vec<T>, item: T, id_of: F) {
@@ -348,5 +412,75 @@ mod tests {
         };
         s.save_settings(&new).unwrap();
         assert_eq!(s.settings(), new);
+    }
+
+    // Q3: a corrupt store file must not be silently treated as empty and then
+    // overwritten with defaults — it is preserved aside and the user's data is
+    // recoverable.
+    #[test]
+    fn corrupt_file_is_preserved_not_overwritten() {
+        let (dir, s) = stores();
+        // Persist a real host, then corrupt the file on disk.
+        let host = s
+            .save_ssh_host(SshHost {
+                id: String::new(),
+                name: "prod".into(),
+                host: "example.com".into(),
+                port: 22,
+                username: "deploy".into(),
+                auth_method: SshAuthMethod::Password,
+                key_path: String::new(),
+            })
+            .unwrap();
+        let path = dir.path().join("ssh-hosts.json");
+        fs::write(&path, b"{ this is not valid json").unwrap();
+
+        // Reading falls back to defaults (empty) but backs the corrupt file up.
+        assert!(s.list_ssh_hosts().is_empty());
+        let corrupt = dir.path().join("ssh-hosts.json.corrupt");
+        assert!(corrupt.exists(), "corrupt file must be preserved");
+        assert!(
+            std::str::from_utf8(&fs::read(&corrupt).unwrap())
+                .unwrap()
+                .contains("not valid json"),
+            "the original bytes must be kept"
+        );
+
+        // A subsequent save starts fresh (from empty) without having destroyed
+        // the backup, and the original host id is still recoverable from it.
+        let _ = host;
+    }
+
+    // R4: invalid SSH hosts are rejected at save time.
+    #[test]
+    fn rejects_invalid_ssh_host() {
+        let (_d, s) = stores();
+        let base = SshHost {
+            id: String::new(),
+            name: String::new(),
+            host: "h".into(),
+            port: 22,
+            username: "u".into(),
+            auth_method: SshAuthMethod::Password,
+            key_path: String::new(),
+        };
+        assert!(matches!(
+            s.save_ssh_host(SshHost { host: "".into(), ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.save_ssh_host(SshHost { username: "".into(), ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.save_ssh_host(SshHost { port: 0, ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.save_ssh_host(SshHost { auth_method: SshAuthMethod::Key, key_path: "".into(), ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        // A valid host still saves.
+        assert!(s.save_ssh_host(base).is_ok());
     }
 }

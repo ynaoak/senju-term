@@ -13,3 +13,14 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "io-util", "net"] }
+
+# Tuned for the shipped desktop binary: link-time optimization + a single
+# codegen unit produce a smaller, faster build, and stripping drops debug
+# symbols. `panic = "abort"` is deliberately NOT set — the app relies on
+# unwinding so a panic in one worker (a PTY reader thread, the output flusher)
+# doesn't abort the whole process and take every live session with it (see the
+# poison-safe locks in senju-core::sessions).
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

@@ -8,9 +8,13 @@ use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, Pt
 
 use super::{EventSink, LocalSpec, SessionError, SessionMap};
 
+/// Shared PTY writer handle. Cloned out of the session map so the (blocking)
+/// write happens *after* the map lock is released — see `SessionManager::write`.
+pub(crate) type LocalWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
 pub(crate) struct LocalSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    writer: LocalWriter,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
 }
 
@@ -78,7 +82,7 @@ impl LocalSession {
                 }
             }
             let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
-            sessions.lock().unwrap().remove(&sid);
+            sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&sid);
             sink.exit(&sid, code);
         });
 
@@ -90,17 +94,27 @@ impl LocalSession {
         Ok((
             Self {
                 master: Mutex::new(pair.master),
-                writer: Mutex::new(writer),
+                writer: Arc::new(Mutex::new(writer)),
                 killer: Mutex::new(killer),
             },
             title,
         ))
     }
 
-    pub fn write(&self, data: &[u8]) -> Result<(), SessionError> {
-        self.writer
+    /// A cloneable handle to the PTY writer, so the caller can release the
+    /// session-map lock before writing.
+    pub fn writer_handle(&self) -> LocalWriter {
+        self.writer.clone()
+    }
+
+    /// Blocking PTY write. MUST be called off the session-map lock (and off an
+    /// async worker, via `spawn_blocking`): a full PTY buffer — e.g. a stopped
+    /// or Ctrl-S'd child — can block this until the buffer drains, which would
+    /// otherwise deadlock every other session operation.
+    pub fn write_blocking(writer: &LocalWriter, data: &[u8]) -> Result<(), SessionError> {
+        writer
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .write_all(data)
             .map_err(|e| SessionError::Pty(e.to_string()))
     }

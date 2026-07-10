@@ -31,10 +31,21 @@ pub struct SessionInfo {
 }
 
 /// Secrets collected in the UI at connect time. Never persisted.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub struct SshSecrets {
     pub password: Option<String>,
     pub passphrase: Option<String>,
+}
+
+// Redacting Debug so a stray `{:?}`/log line can never spill the password or
+// passphrase (only whether each is present).
+impl std::fmt::Debug for SshSecrets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshSecrets")
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("passphrase", &self.passphrase.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 /// How to launch a local shell — the resolved form of a terminal profile.
@@ -143,7 +154,7 @@ impl SessionManager {
         )?;
         self.sessions
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), Backend::Local(session));
         Ok(SessionInfo {
             id,
@@ -197,7 +208,7 @@ impl SessionManager {
         .await?;
         self.sessions
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .insert(id.clone(), Backend::Ssh(session));
         Ok(SessionInfo {
             id,
@@ -213,33 +224,57 @@ impl SessionManager {
     /// Probes an SSH host (reachability, host key, credentials) without
     /// creating a persistent session or learning the host key. Backs the
     /// pre-save "test connection" button in the host editor.
+    ///
+    /// Like [`Self::create_ssh`], credentials are only sent once the host key
+    /// is verified: on first contact with an unrecorded host this fails with
+    /// [`SessionError::UnknownHostKey`] before authenticating, so the UI can
+    /// show the fingerprint and retry with `expected_fingerprint`.
     pub async fn test_ssh(
         &self,
         host: &SshHost,
         secrets: SshSecrets,
+        expected_fingerprint: Option<String>,
     ) -> Result<SshTestReport, SessionError> {
         let known_hosts_path = self
             .known_hosts_path
             .clone()
             .unwrap_or_else(ssh::default_known_hosts_path);
-        ssh::test_connection(host, secrets, known_hosts_path).await
+        ssh::test_connection(host, secrets, expected_fingerprint, known_hosts_path).await
     }
 
     pub async fn write(&self, id: &str, data: &[u8]) -> Result<(), SessionError> {
+        enum Target {
+            Local(local::LocalWriter),
+            Ssh(Arc<tokio::sync::Mutex<ssh::SshWriter>>),
+        }
+        // Only look the session up under the lock; the actual write happens
+        // after it is released so a slow/blocked writer can't stall every other
+        // session op (Q2). Local writes are blocking, so they go to a blocking
+        // thread; SSH writes are async.
         let target = {
-            let mut map = self.sessions.lock().unwrap();
+            let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             match map.get_mut(id) {
-                Some(Backend::Local(s)) => return s.write(data),
-                Some(Backend::Ssh(s)) => s.writer(),
+                Some(Backend::Local(s)) => Target::Local(s.writer_handle()),
+                Some(Backend::Ssh(s)) => Target::Ssh(s.writer()),
                 None => return Err(SessionError::UnknownSession(id.into())),
             }
         };
-        ssh::SshSession::write(&target, data).await
+        match target {
+            Target::Local(writer) => {
+                let data = data.to_vec();
+                tokio::task::spawn_blocking(move || {
+                    local::LocalSession::write_blocking(&writer, &data)
+                })
+                .await
+                .map_err(|e| SessionError::Pty(format!("write task failed: {e}")))?
+            }
+            Target::Ssh(writer) => ssh::SshSession::write(&writer, data).await,
+        }
     }
 
     pub async fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), SessionError> {
         let target = {
-            let mut map = self.sessions.lock().unwrap();
+            let mut map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
             match map.get_mut(id) {
                 Some(Backend::Local(s)) => return s.resize(cols, rows),
                 Some(Backend::Ssh(s)) => s.writer(),
@@ -252,7 +287,7 @@ impl SessionManager {
     /// Terminates the session. The exit event is emitted by the session's own
     /// reader task once the underlying stream closes.
     pub fn kill(&self, id: &str) {
-        let backend = self.sessions.lock().unwrap().remove(id);
+        let backend = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
         match backend {
             Some(Backend::Local(s)) => s.kill(),
             Some(Backend::Ssh(s)) => s.kill(),
@@ -261,7 +296,7 @@ impl SessionManager {
     }
 
     pub fn kill_all(&self) {
-        let ids: Vec<String> = self.sessions.lock().unwrap().keys().cloned().collect();
+        let ids: Vec<String> = self.sessions.lock().unwrap_or_else(|e| e.into_inner()).keys().cloned().collect();
         for id in ids {
             self.kill(&id);
         }

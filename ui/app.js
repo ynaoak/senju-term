@@ -76,9 +76,13 @@ function measureCells() {
 
 async function newLocalThread({ paneIdx = state.focusedPane, profileId = null } = {}) {
   const { cols, rows } = measureCells();
+  // Capture the pane object, not just its index: panes can be added/removed
+  // while the backend is starting the shell, which would shift the index.
+  const pane = state.panes[paneIdx];
   try {
     const info = await invoke('create_local_session', { profileId, cols, rows });
-    createThread(info, paneIdx);
+    const idx = pane ? state.panes.indexOf(pane) : -1;
+    createThread(info, idx >= 0 ? idx : state.focusedPane);
   } catch (e) {
     toast(`シェルの起動に失敗: ${e}`, true);
   }
@@ -180,7 +184,13 @@ function createThread(info, paneIdx) {
   });
   const fit = new FitAddon.FitAddon();
   term.loadAddon(fit);
-  term.loadAddon(new WebLinksAddon.WebLinksAddon());
+  // Links in (attacker-controlled) terminal output must NOT be opened inside
+  // the Tauri webview, which holds window.__TAURI__ / IPC. Route http(s) links
+  // to the OS browser via the scheme-restricted `open_external` command; ignore
+  // everything else.
+  term.loadAddon(new WebLinksAddon.WebLinksAddon((_ev, uri) => {
+    if (/^https?:\/\//i.test(uri)) invoke('open_external', { url: uri }).catch(() => {});
+  }));
   const search = new SearchAddon.SearchAddon();
   term.loadAddon(search);
   // App-level shortcuts must win over the shell (Ctrl+K etc. stay usable
@@ -302,10 +312,11 @@ function createPane() {
   pane.dd.addEventListener('mousedown', (ev) => ev.stopPropagation());
   pane.closeBtn.addEventListener('click', () => removePane(state.panes.indexOf(pane)));
   root.addEventListener('mousedown', () => focusPane(state.panes.indexOf(pane)));
-  new ResizeObserver(() => {
+  pane.ro = new ResizeObserver(() => {
     const t = threadById(pane.threadId);
     if (t) t.fit.fit();
-  }).observe(pane.body);
+  });
+  pane.ro.observe(pane.body);
   return pane;
 }
 
@@ -460,6 +471,7 @@ function addPane() {
 function removePane(idx) {
   if (state.panes.length <= 1) return;
   const [pane] = state.panes.splice(idx, 1);
+  pane.ro?.disconnect(); // stop observing the detached body (avoid a leak)
   const prev = threadById(pane.threadId);
   if (prev) $('#thread-parking').appendChild(prev.hostEl); // thread keeps running
   pane.root.remove();
@@ -666,7 +678,11 @@ function sendToActive(text, run) {
 /* ---------------- workflows ---------------- */
 
 async function refreshWorkflows() {
-  state.workflows = await invoke('list_workflows');
+  try {
+    state.workflows = await invoke('list_workflows');
+  } catch (e) {
+    toast(`ワークフローの読み込みに失敗: ${e}`, true);
+  }
   renderWorkflows();
   renderQuickbar();
 }
@@ -701,6 +717,24 @@ function workflowForShortcut(ev) {
   const sc = shortcutFromEvent(ev);
   if (!sc) return null;
   return state.workflows.find((w) => w.shortcut && w.shortcut === sc) || null;
+}
+
+// Combos the app itself owns (all Ctrl+Shift+…), which a workflow shortcut
+// could never win, so binding them is pointless/confusing.
+const RESERVED_SHORTCUTS = new Set(
+  ['p', 't', 'w', 'd', 'c', 'v', 'f', 'arrowup', 'arrowdown'].map((k) => `ctrl+shift+${k}`),
+);
+
+/** Returns a reason string if `sc` is a bad workflow shortcut, else null. */
+function shortcutConflict(sc, excludeId) {
+  if (RESERVED_SHORTCUTS.has(sc)) return 'アプリのショートカットと重複しています';
+  // A plain Ctrl+<letter> (no shift/alt/meta) is a core shell key (Ctrl+C
+  // interrupt, Ctrl+D EOF, Ctrl+Z suspend, …); stealing it would break the
+  // terminal.
+  if (/^ctrl\+[a-z0-9]$/.test(sc)) return 'シェルが使うキーのため割り当てできません';
+  const dup = state.workflows.find((w) => w.id !== excludeId && w.shortcut === sc);
+  if (dup) return `「${dup.name}」に割り当て済みです`;
+  return null;
 }
 
 /** Renders the shell-view quick-launch bar from workflows flagged show_button. */
@@ -800,7 +834,7 @@ function editWorkflow(w) {
       field('説明', 'description', w?.description || ''),
       fieldTextarea('コマンド ( {{名前}} / {{名前:既定値}} でプレースホルダ )', 'command', w?.command || '', { required: true }),
       field('タグ (カンマ区切り)', 'tags', (w?.tags || []).join(', ')),
-      fieldShortcut('ショートカット (任意・Ctrl / Alt / Meta 必須)', 'shortcut', w?.shortcut || ''),
+      fieldShortcut('ショートカット (任意・Ctrl / Alt / Meta 必須)', 'shortcut', w?.shortcut || '', { excludeId: w?.id || '' }),
       fieldCheckbox('シェル表示にクイックボタンを表示', 'show_button', !!w?.show_button),
     ],
     onOk: async (values) => {
@@ -839,7 +873,11 @@ function promptPlaceholders(w, placeholders) {
 /* ---------------- SSH hosts ---------------- */
 
 async function refreshHosts() {
-  state.hosts = await invoke('list_ssh_hosts');
+  try {
+    state.hosts = await invoke('list_ssh_hosts');
+  } catch (e) {
+    toast(`SSH ホストの読み込みに失敗: ${e}`, true);
+  }
   renderHosts();
 }
 
@@ -882,6 +920,9 @@ function renderHosts() {
 
 function editHost(h) {
   const isNew = !h;
+  // Fingerprint the user approved during a connection test's TOFU prompt, held
+  // across the two-press "test → trust & re-test" flow. Never persisted.
+  let testTrustFingerprint = null;
   // Builds an SshHost from the form (the test-only secret field is excluded,
   // so it is never persisted).
   const hostFrom = (values) => ({
@@ -909,6 +950,10 @@ function editHost(h) {
       field('接続テスト用パスワード (保存されません)', 'test_password', '', { type: 'password' }),
       field('接続テスト用 鍵パスフレーズ (保存されません)', 'test_passphrase', '', { type: 'password' }),
     ],
+    // The connection test uses the SAME fail-closed TOFU handshake as a real
+    // connect: on first contact with an unknown host it does NOT send the
+    // password — it reports the fingerprint and, on a second press, re-tests
+    // trusting exactly that fingerprint (which is required to exercise auth).
     extraActions: [{
       label: '接続テスト',
       className: 'ghost-btn',
@@ -918,10 +963,10 @@ function editHost(h) {
           return;
         }
         const host = hostFrom(values);
+        const args = { host, expectedFingerprint: testTrustFingerprint };
+        // Send whichever secrets the chosen method uses.
         const pw = values.test_password || null;
         const pass = values.test_passphrase || null;
-        const args = { host };
-        // Send whichever secrets the chosen method uses.
         if (host.auth_method === 'password') args.password = pw;
         else if (host.auth_method === 'key') args.passphrase = pass;
         else if (host.auth_method === 'keypassword') { args.password = pw; args.passphrase = pass; }
@@ -932,10 +977,31 @@ function editHost(h) {
           const rep = await invoke('test_ssh_connection', args);
           const key = rep.host_key_known
             ? '既知のホスト鍵と一致'
-            : `新しいホスト鍵(未登録・保存なし): ${rep.key_type} ${rep.fingerprint}`;
+            : `承認したホスト鍵で認証(未保存): ${rep.key_type} ${rep.fingerprint}`;
           setStatus(`✓ 接続成功・認証OK / ${key}`, 'ok');
+          testTrustFingerprint = null;
+          btn.textContent = '接続テスト';
         } catch (e) {
-          setStatus(`✗ 接続テスト失敗: ${String(e)}`, 'err');
+          const msg = String(e);
+          const unknown = !testTrustFingerprint && msg.match(/^UNKNOWN_HOST_KEY:([^:]+):(.+)$/);
+          if (unknown) {
+            // First contact — no credential was sent. Show the fingerprint;
+            // pressing the button again trusts it for the auth test only.
+            testTrustFingerprint = unknown[2];
+            btn.textContent = 'この鍵を信頼して認証テスト';
+            setStatus(
+              `到達可能・新しいホスト鍵 ${unknown[1]} ${unknown[2]} — 認証もテストするにはもう一度押してください(保存はされません)`,
+              'ok',
+            );
+          } else if (msg.match(/^FINGERPRINT_MISMATCH:/)) {
+            testTrustFingerprint = null;
+            btn.textContent = '接続テスト';
+            setStatus('承認した鍵と異なる鍵が提示されました(MITM の可能性)。中止しました', 'err');
+          } else {
+            testTrustFingerprint = null;
+            btn.textContent = '接続テスト';
+            setStatus(`✗ 接続テスト失敗: ${msg}`, 'err');
+          }
         } finally {
           btn.disabled = false;
         }
@@ -986,15 +1052,21 @@ function promptSshSecrets(host) {
 /* ---------------- terminal profiles (Windows Terminal style) ---------------- */
 
 async function refreshProfiles() {
-  state.profiles = await invoke('list_profiles');
+  try {
+    state.profiles = await invoke('list_profiles');
+  } catch (e) {
+    toast(`プロファイルの読み込みに失敗: ${e}`, true);
+  }
   renderProfiles();
   renderProfileSettingOptions();
 }
 
 function isDefaultProfile(p) {
   const def = state.settings.default_profile_id;
-  // With no explicit default, the first profile is effectively the default.
-  return def ? p.id === def : state.profiles[0]?.id === p.id;
+  // A default id that no longer matches any profile (deleted) falls back to
+  // the first profile, so exactly one profile always reads as default.
+  const known = def && state.profiles.some((x) => x.id === def);
+  return known ? p.id === def : state.profiles[0]?.id === p.id;
 }
 
 function renderProfiles() {
@@ -1030,8 +1102,18 @@ function renderProfiles() {
     li.querySelector('.del').addEventListener('click', async () => {
       if (state.profiles.length <= 1) return toast('最後のプロファイルは削除できません', true);
       if (!(await confirmModal(`プロファイル「${p.name}」を削除しますか?`))) return;
-      await invoke('delete_profile', { id: p.id });
-      refreshProfiles();
+      try {
+        await invoke('delete_profile', { id: p.id });
+        // Clear the configured default if it pointed at the deleted profile,
+        // so settings don't reference a nonexistent profile.
+        if (state.settings.default_profile_id === p.id) {
+          state.settings = { ...state.settings, default_profile_id: '' };
+          await invoke('save_settings', { settings: state.settings });
+        }
+        refreshProfiles();
+      } catch (e) {
+        toast(`削除に失敗: ${e}`, true);
+      }
     });
     list.appendChild(li);
   }
@@ -1086,7 +1168,13 @@ function renderProfileSettingOptions() {
 }
 
 async function loadSettings() {
-  state.settings = await invoke('get_settings');
+  try {
+    state.settings = await invoke('get_settings');
+  } catch (e) {
+    // Keep the built-in defaults from `state.settings` rather than aborting
+    // boot() and leaving a blank app.
+    toast(`設定の読み込みに失敗、既定値を使用します: ${e}`, true);
+  }
   const f = $('#settings-form').elements;
   f.font_size.value = state.settings.font_size;
   f.font_family.value = state.settings.font_family;
@@ -1337,16 +1425,22 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
           return;
         }
         const sc = shortcutFromEvent(ev);
-        if (sc) {
-          el.dataset.shortcut = sc;
-          el.value = prettyShortcut(sc);
+        if (!sc) return;
+        const conflict = shortcutConflict(sc, f.excludeId || '');
+        if (conflict) {
+          toast(`${prettyShortcut(sc)}: ${conflict}`, true);
+          return; // reject — keep the previous value
         }
+        el.dataset.shortcut = sc;
+        el.value = prettyShortcut(sc);
       });
     } else {
       el = document.createElement('input');
       el.type = f.type || 'text';
       el.value = f.value;
       if (f.placeholder) el.placeholder = f.placeholder;
+      // Keep passwords/passphrases out of the browser's autofill store.
+      if (el.type === 'password') el.autocomplete = 'new-password';
     }
     el.name = f.name;
     if (f.required) el.required = true;
@@ -1380,14 +1474,20 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
 
   modalCtx = { onOk, onCancel, err };
   $('#modal').classList.remove('hidden');
+  // Focus the first field, or the OK button for a body-less confirm dialog, so
+  // keyboard focus starts inside the modal (Escape/Enter and the focus trap
+  // depend on it).
   const first = box.querySelector('input, textarea, select');
-  if (first) first.focus();
+  (first || $('#modal-ok')).focus();
 }
 
 function closeModal(cancelled) {
   if (cancelled && modalCtx?.onCancel) modalCtx.onCancel();
   modalCtx = null;
   $('#modal').classList.add('hidden');
+  // Drop any password/passphrase values from the DOM immediately rather than
+  // letting them linger in hidden inputs until the next modal opens.
+  $('#modal-body').innerHTML = '';
   focusedThread()?.term.focus();
 }
 
@@ -1407,16 +1507,17 @@ async function submitModal() {
     await ctx.onOk?.(values);
     modalCtx = null;
     $('#modal').classList.add('hidden');
+    $('#modal-body').innerHTML = ''; // clear secrets from the DOM (see closeModal)
   } catch (e) {
     ctx.err.textContent = String(e);
   }
 }
 
-function confirmModal(message) {
+function confirmModal(message, okLabel = '削除') {
   return new Promise((resolve) => {
     openModal({
       title: message,
-      okLabel: '削除',
+      okLabel,
       body: [],
       onOk: () => resolve(true),
       onCancel: () => resolve(false),
@@ -1430,10 +1531,32 @@ $('#modal').addEventListener('mousedown', (ev) => {
   if (ev.target === $('#modal')) closeModal(true);
 });
 $('#modal').addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') closeModal(true);
-  if (ev.key === 'Enter' && ev.target.tagName !== 'TEXTAREA') {
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    closeModal(true);
+    return;
+  }
+  // Enter submits — but NOT when a button (Cancel/OK/接続テスト) is focused, so
+  // Enter on Cancel cancels instead of saving, and not inside a textarea.
+  if (ev.key === 'Enter' && ev.target.tagName !== 'TEXTAREA' && ev.target.tagName !== 'BUTTON') {
     ev.preventDefault();
     submitModal();
+    return;
+  }
+  // Keep Tab focus within the modal.
+  if (ev.key === 'Tab') {
+    const f = [...$('#modal').querySelectorAll('input, textarea, select, button')]
+      .filter((el) => !el.disabled && el.offsetParent !== null);
+    if (!f.length) return;
+    const first = f[0];
+    const last = f[f.length - 1];
+    if (ev.shiftKey && document.activeElement === first) {
+      ev.preventDefault();
+      last.focus();
+    } else if (!ev.shiftKey && document.activeElement === last) {
+      ev.preventDefault();
+      first.focus();
+    }
   }
 });
 
@@ -1597,7 +1720,14 @@ for (const btn of document.querySelectorAll('.win-btn')) {
     const action = btn.dataset.win;
     if (action === 'minimize') await appWindow.minimize();
     else if (action === 'maximize') { await appWindow.toggleMaximize(); refreshMaxIcon(); }
-    else if (action === 'close') await appWindow.close();
+    else if (action === 'close') {
+      // Closing kills every live shell/SSH session — confirm when any are open.
+      if (state.threads.length &&
+          !(await confirmModal(`${state.threads.length} 個のセッションが実行中です。終了しますか?`, '終了'))) {
+        return;
+      }
+      await appWindow.close();
+    }
   });
 }
 
@@ -1679,12 +1809,23 @@ async function copyFocusedSelection() {
 async function pasteIntoFocused() {
   const thread = focusedThread();
   if (!thread) return;
+  let text;
   try {
-    const text = await navigator.clipboard.readText();
-    if (text) await invoke('session_write', { id: thread.id, data: text });
+    text = await navigator.clipboard.readText();
   } catch (e) {
     toast(`貼り付けに失敗: ${e}`, true);
+    return;
   }
+  if (!text) return;
+  // Multi-line clipboard content can auto-run commands. Confirm first, and
+  // route through term.paste() so bracketed-paste (\e[200~) wraps it when the
+  // shell/editor requested it — writing straight to the PTY bypassed that.
+  if (text.trimEnd().includes('\n')) {
+    const lines = text.trimEnd().split('\n').length;
+    if (!(await confirmModal(`${lines} 行のテキストを貼り付けますか?`, '貼り付け'))) return;
+  }
+  thread.term.paste(text);
+  thread.term.focus();
 }
 
 /* ---------------- in-terminal search (Ctrl+Shift+F) ---------------- */
@@ -1746,11 +1887,21 @@ listen('session:data', (ev) => {
 });
 
 listen('session:exit', (ev) => {
-  const { id } = ev.payload;
-  if (threadById(id)) closeThread(id, { kill: false });
+  const { id, code } = ev.payload;
+  const thread = threadById(id);
+  if (!thread) return;
+  // A vanishing SSH thread can look like data loss, so surface it — a dropped
+  // connection (code -1 from the backend) is flagged as an error.
+  if (thread.kind === 'ssh') {
+    if (code === -1) toast(`「${thread.title}」の接続が切断されました`, true);
+    else toast(`「${thread.title}」が終了しました (code ${code})`);
+  }
+  closeThread(id, { kill: false });
 });
 
 (async function boot() {
+  // The refresh/loadSettings helpers each swallow their own backend errors
+  // (keeping defaults), so one failing store can't leave a blank window.
   await loadSettings();
   // Profiles must load before the first thread so the default profile applies.
   await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles()]);
@@ -1762,4 +1913,4 @@ listen('session:exit', (ev) => {
   setView('shell');
   refreshMaxIcon();
   await newLocalThread();
-})();
+})().catch((e) => toast(`起動処理でエラー: ${e}`, true));

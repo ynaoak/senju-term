@@ -11,10 +11,12 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 senju-core = { path = "../crates/senju-core" }
 tauri = { version = "2", features = [] }
-tauri-plugin-window-state = "2"
 serde.workspace = true
 serde_json.workspace = true
 base64 = "0.22"
+# Opens external URLs via the OS default browser (ShellExecute on Windows,
+# open(1) on macOS, xdg-open on Linux) — avoids shelling out through cmd.exe.
+open = "5"
 
 [lib]
 name = "senju_term_lib"
