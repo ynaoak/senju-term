@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Senju Term — ワークフローと SSH を組み込んだターミナル</title>
+  <meta
+    name="description"
+    content="Warp にインスパイアされた、カスタムコマンド(ワークフロー)管理と SSH 接続管理を組み込んだクロスプラットフォームターミナル。Rust + Tauri 2。"
+  />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <header class="site-header">
+    <div class="wrap header-inner">
+      <a class="brand" href="#top" aria-label="Senju Term ホーム">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Senju&nbsp;Term</span>
+      </a>
+      <nav class="site-nav" aria-label="メインナビゲーション">
+        <a href="#features">機能</a>
+        <a href="#workflows">ワークフロー</a>
+        <a href="#ssh">SSH</a>
+        <a href="#download" class="nav-cta">ダウンロード</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="top">
+    <!-- Hero -->
+    <section class="hero">
+      <div class="wrap hero-inner">
+        <p class="eyebrow">Rust + Tauri 2 · Windows / macOS / Linux</p>
+        <h1 class="hero-title">
+          ターミナルに、<span class="accent">ワークフロー</span>と
+          <span class="accent">SSH 管理</span>を。
+        </h1>
+        <p class="hero-lede">
+          <a href="https://github.com/warpdotdev/warp">Warp</a>
+          にインスパイアされた、カスタムコマンド(ワークフロー)管理と
+          SSH 接続管理を組み込んだクロスプラットフォームターミナル。
+          描画は xterm.js、ローカルシェルは ConPTY / openpty、SSH は
+          Pure Rust の russh。ビルドステップのないフロントエンド。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="#download">ダウンロード</a>
+          <a class="btn btn-ghost" href="https://github.com/ynaoak/senju-term"
+            >GitHub で見る</a
+          >
+        </div>
+
+        <!-- ミニターミナルのモック -->
+        <div class="term-mock" role="img" aria-label="Senju Term のターミナル画面イメージ">
+          <div class="term-bar">
+            <span class="dot dot-r"></span>
+            <span class="dot dot-y"></span>
+            <span class="dot dot-g"></span>
+            <span class="term-title">senju — zsh</span>
+          </div>
+          <pre class="term-body"><span class="c-dim"># ワークフローをワンキーで呼び出し</span>
+<span class="c-accent">➜</span> deploy <span class="c-dim">{{env:staging}}</span>
+<span class="c-accent">➜</span> ssh <span class="c-blue">prod-web-01</span>
+<span class="c-dim">TOFU: SHA256 フィンガープリントを確認して接続…</span>
+<span class="c-accent">➜</span> <span class="cursor">▋</span></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- Features -->
+    <section id="features" class="section">
+      <div class="wrap">
+        <h2 class="section-title">主な機能</h2>
+        <div class="grid">
+          <article class="card">
+            <h3>スレッド管理</h3>
+            <p>
+              ローカルシェルと SSH セッションを「スレッド」として一覧管理。
+              非表示スレッドもバックグラウンドで動作し、出力があれば点灯で通知。
+              ピン留め・インラインリネーム・上下ペイン分割に対応。
+            </p>
+          </article>
+          <article class="card">
+            <h3>ターミナルプロファイル</h3>
+            <p>
+              起動するシェルをプロファイルとして登録。「＋ 新規」の
+              ▾ メニューからプロファイルや登録済み SSH 接続先を選択。
+              OS に応じた既定プロファイルを初回に自動生成。
+            </p>
+          </article>
+          <article class="card">
+            <h3>コマンドパレット</h3>
+            <p>
+              <kbd>Ctrl+Shift+P</kbd> でワークフロー・SSH ホスト・アクションを
+              横断ファジー検索。<kbd>Enter</kbd> で実行、
+              <kbd>Shift+Enter</kbd> で挿入のみ。
+            </p>
+          </article>
+          <article class="card">
+            <h3>ネイティブライクな UI</h3>
+            <p>
+              OS 標準の枠を外したカスタムタイトルバー。ウィンドウ操作ボタンは
+              OS に合わせて配置(Windows/Linux は右上、macOS は左上)。
+              ウィンドウサイズ・位置を記憶して復元。
+            </p>
+          </article>
+          <article class="card">
+            <h3>xterm.js 描画</h3>
+            <p>
+              256 色 / True Color 描画、スクロールバックを含む端末内検索
+              (<kbd>Ctrl+Shift+F</kbd>)、フォント・スクロールバック行数の設定。
+            </p>
+          </article>
+          <article class="card">
+            <h3>Pure Rust コア</h3>
+            <p>
+              バックエンドは Rust。SSH は OpenSSL / libssh2 に依存しない
+              russh、ローカルは portable-pty。GUI 非依存のコア crate に
+              ロジックを分離。
+            </p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- Workflows -->
+    <section id="workflows" class="section section-alt">
+      <div class="wrap two-col">
+        <div>
+          <h2 class="section-title">カスタムコマンド管理</h2>
+          <p class="section-lede">
+            Warp の Workflows 相当。コマンドテンプレートを名前・説明・タグ付きで
+            登録し、実行時にプレースホルダを埋めて呼び出します。
+          </p>
+          <ul class="checklist">
+            <li><code>{{名前}}</code> / <code>{{名前:既定値}}</code> のプレースホルダ対応</li>
+            <li>「実行」(Enter 送信つき)と「挿入」の 2 モード</li>
+            <li>任意キーのショートカット登録でワンキー実行</li>
+            <li>シェル表示のクイック起動バーにボタン常時表示</li>
+          </ul>
+        </div>
+        <div class="panel">
+          <div class="panel-head">Workflows</div>
+          <ul class="wf-list">
+            <li><span class="wf-name">deploy</span><span class="wf-tag">ops</span></li>
+            <li><span class="wf-name">tail logs</span><span class="wf-tag">debug</span></li>
+            <li><span class="wf-name">db backup</span><span class="wf-tag">ops</span></li>
+            <li><span class="wf-name">git sync</span><span class="wf-tag">git</span></li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- SSH -->
+    <section id="ssh" class="section">
+      <div class="wrap two-col">
+        <div class="panel">
+          <div class="panel-head">SSH 接続</div>
+          <dl class="ssh-props">
+            <dt>認証</dt><dd>パスワード / 秘密鍵 / ssh-agent / 鍵+パスワード併用</dd>
+            <dt>検証</dt><dd>known_hosts (TOFU)・SHA256 フィンガープリント確認</dd>
+            <dt>保存前</dt><dd>接続テストで到達性・認証・ホスト鍵を確認</dd>
+          </dl>
+        </div>
+        <div>
+          <h2 class="section-title">SSH 接続管理</h2>
+          <p class="section-lede">
+            ホストを登録して、新規スレッド作成時に選択。パスワードや
+            パスフレーズは保存せず、接続時のみ使用します。
+          </p>
+          <ul class="checklist">
+            <li>OpenSSH 互換の known_hosts 検証(TOFU)でフェイルクローズ</li>
+            <li>未知ホストは鍵種別・SHA256 を表示して承認後に接続</li>
+            <li>多段認証(<code>publickey,password</code>)に対応</li>
+            <li>keepalive(30 秒)・リサイズ対応</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- Download -->
+    <section id="download" class="section section-cta">
+      <div class="wrap cta-inner">
+        <h2 class="section-title">ダウンロード</h2>
+        <p class="section-lede">
+          各プラットフォーム向けのインストーラは GitHub Releases から入手できます。
+        </p>
+        <div class="hero-actions">
+          <a class="btn btn-primary" href="https://github.com/ynaoak/senju-term/releases"
+            >Releases を開く</a
+          >
+          <a class="btn btn-ghost" href="https://github.com/ynaoak/senju-term"
+            >ソースコード</a
+          >
+        </div>
+        <p class="platforms">Windows · macOS (Universal) · Linux (deb / rpm / AppImage)</p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="wrap footer-inner">
+      <span class="brand-name">Senju Term</span>
+      <span class="footer-dim">MIT License · Rust + Tauri 2</span>
+      <a href="https://github.com/ynaoak/senju-term">GitHub</a>
+    </div>
+  </footer>
+</body>
+</html>

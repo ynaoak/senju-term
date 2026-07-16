@@ -13,7 +13,10 @@ jobs:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-app
       - name: Core tests (no GUI deps required)
+        working-directory: apps/desktop-app
         run: cargo test -p senju-core
 
   build:
@@ -44,12 +47,15 @@ jobs:
           targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop-app
 
       - name: Build app (and attach installers to a draft release on v* tags)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          projectPath: apps/desktop-app
           args: ${{ matrix.args }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('Senju Term {0}', github.ref_name) || '' }}
@@ -60,11 +66,11 @@ jobs:
         with:
           name: senju-term-${{ matrix.platform }}
           path: |
-            target/**/release/bundle/**/*.deb
-            target/**/release/bundle/**/*.rpm
-            target/**/release/bundle/**/*.AppImage
-            target/**/release/bundle/**/*.dmg
-            target/**/release/bundle/**/*.app.tar.gz
-            target/**/release/bundle/**/*.msi
-            target/**/release/bundle/**/*.exe
+            apps/desktop-app/target/**/release/bundle/**/*.deb
+            apps/desktop-app/target/**/release/bundle/**/*.rpm
+            apps/desktop-app/target/**/release/bundle/**/*.AppImage
+            apps/desktop-app/target/**/release/bundle/**/*.dmg
+            apps/desktop-app/target/**/release/bundle/**/*.app.tar.gz
+            apps/desktop-app/target/**/release/bundle/**/*.msi
+            apps/desktop-app/target/**/release/bundle/**/*.exe
           if-no-files-found: ignore
