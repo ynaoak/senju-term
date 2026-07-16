@@ -14,9 +14,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop-app
+          workspaces: apps/desktop-app
       - name: Core tests (no GUI deps required)
-        working-directory: desktop-app
+        working-directory: apps/desktop-app
         run: cargo test -p senju-core
 
   build:
@@ -48,14 +48,14 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: desktop-app
+          workspaces: apps/desktop-app
 
       - name: Build app (and attach installers to a draft release on v* tags)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          projectPath: desktop-app
+          projectPath: apps/desktop-app
           args: ${{ matrix.args }}
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
           releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('Senju Term {0}', github.ref_name) || '' }}
@@ -66,11 +66,11 @@ jobs:
         with:
           name: senju-term-${{ matrix.platform }}
           path: |
-            desktop-app/target/**/release/bundle/**/*.deb
-            desktop-app/target/**/release/bundle/**/*.rpm
-            desktop-app/target/**/release/bundle/**/*.AppImage
-            desktop-app/target/**/release/bundle/**/*.dmg
-            desktop-app/target/**/release/bundle/**/*.app.tar.gz
-            desktop-app/target/**/release/bundle/**/*.msi
-            desktop-app/target/**/release/bundle/**/*.exe
+            apps/desktop-app/target/**/release/bundle/**/*.deb
+            apps/desktop-app/target/**/release/bundle/**/*.rpm
+            apps/desktop-app/target/**/release/bundle/**/*.AppImage
+            apps/desktop-app/target/**/release/bundle/**/*.dmg
+            apps/desktop-app/target/**/release/bundle/**/*.app.tar.gz
+            apps/desktop-app/target/**/release/bundle/**/*.msi
+            apps/desktop-app/target/**/release/bundle/**/*.exe
           if-no-files-found: ignore

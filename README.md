@@ -6,10 +6,11 @@
 
 | ディレクトリ | 内容 |
 | --- | --- |
-| [`desktop-app/`](desktop-app/) | デスクトップアプリ本体(Rust + Tauri 2 / xterm.js)。Cargo ワークスペース(`crates/senju-core` + `src-tauri`)とフロントエンド(`ui/`)。 |
-| [`web-lp/`](web-lp/) | 紹介用ランディングページ(素の HTML / CSS、ビルドステップなし)。 |
+| [`apps/desktop-app/`](apps/desktop-app/) | デスクトップアプリ本体(Rust + Tauri 2 / xterm.js)。Cargo ワークスペース(`crates/senju-core` + `src-tauri`)とフロントエンド(`ui/`)。 |
+| [`apps/web-lp/`](apps/web-lp/) | 紹介用ランディングページ(素の HTML / CSS、ビルドステップなし)。 |
+| [`docs/`](docs/) | 両アプリ共通のドキュメント。 |
 
-各ディレクトリの詳細はそれぞれの `README.md` を参照してください。
+各アプリの詳細はそれぞれの `README.md` を参照してください。
 
 ## デスクトップアプリ
 
@@ -18,21 +19,21 @@
 - ローカルシェルは [portable-pty](https://crates.io/crates/portable-pty)、SSH は Pure Rust の [russh](https://crates.io/crates/russh)
 
 ```sh
-cd desktop-app
-cargo tauri dev      # 開発起動
+cd apps/desktop-app
+cargo tauri dev            # 開発起動
 cargo test -p senju-core   # コアのテスト
 ```
 
-詳細な機能一覧・キーボードショートカット・開発手順は [`desktop-app/README.md`](desktop-app/README.md) にあります。
+詳細な機能一覧・キーボードショートカット・開発手順は [`apps/desktop-app/README.md`](apps/desktop-app/README.md) にあります。
 
 ## Web LP
 
 ```sh
-cd web-lp
+cd apps/web-lp
 python3 -m http.server 8000   # → http://localhost:8000
 ```
 
-詳細は [`web-lp/README.md`](web-lp/README.md) を参照してください。
+詳細は [`apps/web-lp/README.md`](apps/web-lp/README.md) を参照してください。
 
 ## CI / 配布
 
