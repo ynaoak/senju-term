@@ -273,13 +273,13 @@ function createPane() {
         <button type="button" class="pane-thread-btn" title="このペインに表示するスレッド">
           <span class="ptd-icon"></span>
           <span class="ptd-label"></span>
-          <span class="ptd-caret">▾</span>
+          <span class="ptd-caret">${icon('chevronDown')}</span>
         </button>
         <ul class="pane-thread-menu hidden" role="listbox"></ul>
       </div>
       <span class="pane-kind"></span>
       <div class="spacer"></div>
-      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">✕</button>
+      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">${icon('x')}</button>
     </div>
     <div class="pane-body"></div>`;
   const pane = {
@@ -489,7 +489,8 @@ function toggleSplit() {
 
 function updateSplitUi() {
   const split = state.panes.length >= 2;
-  $('#split-toggle').textContent = split ? '⬓ 分割解除' : '⬒ 分割';
+  // Update only the label span so the leading split icon stays put.
+  $('#split-toggle .split-label').textContent = split ? '分割解除' : '分割';
   document.querySelectorAll('.pane-close').forEach((b) => (b.style.display = split ? '' : 'none'));
 }
 
@@ -532,6 +533,47 @@ function pinIcon(pinned) {
   return `<svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><path d="${
     pinned ? PIN_PATH.filled : PIN_PATH.outlined
   }"/></svg>`;
+}
+
+/* A small, coherent inline-SVG icon set (Lucide-style 24×24 strokes, plus a
+ * couple of filled marks) so the whole UI speaks one visual language instead
+ * of mixing emoji and Unicode glyphs. Inlined — no webfont/CDN. */
+const ICONS = {
+  menu: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  play: '<polygon points="6 4 20 12 6 20 6 4"/>',
+  insert: '<line x1="12" y1="4" x2="12" y2="16"/><polyline points="7 11 12 16 17 11"/><line x1="5" y1="20" x2="19" y2="20"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>',
+  star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  split: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="12" x2="21" y2="12"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+  zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+  keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8"/><line x1="10" y1="8" x2="10" y2="8"/><line x1="14" y1="8" x2="14" y2="8"/><line x1="18" y1="8" x2="18" y2="8"/><line x1="6" y1="12" x2="6" y2="12"/><line x1="10" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="14" y2="12"/><line x1="18" y1="12" x2="18" y2="12"/><line x1="7" y1="16" x2="17" y2="16"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+};
+const FILLED_ICONS = new Set(['play', 'star']);
+
+/** Returns inline SVG markup for a named icon. Stroke icons inherit
+ * currentColor; the few filled marks (play/star) fill with it instead. */
+function icon(name) {
+  const body = ICONS[name] || '';
+  const paint = FILLED_ICONS.has(name)
+    ? 'fill="currentColor" stroke="none"'
+    : 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  return `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" ${paint}>${body}</svg>`;
+}
+
+/** Fills every `[data-icon]` placeholder in static markup with its icon. */
+function initIcons() {
+  for (const el of document.querySelectorAll('[data-icon]')) {
+    el.innerHTML = icon(el.dataset.icon);
+  }
 }
 
 /** Pinned threads first (in pin order), then the rest in creation order. */
@@ -640,7 +682,7 @@ function renderThreads() {
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
       <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${pinIcon(t.pinned)}</button>
-      <button class="close" title="スレッドを終了">✕</button>`;
+      <button class="close" title="スレッドを終了">${icon('x')}</button>`;
     li.querySelector('.title').textContent = t.title;
     li.querySelector('.pin').addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -773,21 +815,25 @@ function renderWorkflows() {
     li.className = 'card';
     li.innerHTML = `
       <h4></h4><div class="desc"></div><code></code>
-      <div class="tags"></div>
       <div class="wf-badges"></div>
       <div class="row">
-        <button class="accent-btn run">▶ 実行</button>
-        <button class="ghost-btn insert">挿入</button>
-        <button class="ghost-btn edit">編集</button>
-        <button class="danger-btn del">削除</button>
+        <button class="accent-btn run">${icon('play')}実行</button>
+        <button class="ghost-btn insert">${icon('insert')}挿入</button>
+        <button class="ghost-btn edit">${icon('edit')}編集</button>
+        <button class="danger-btn del">${icon('trash')}削除</button>
       </div>`;
     li.querySelector('h4').textContent = w.name;
     li.querySelector('.desc').textContent = w.description || '';
     li.querySelector('code').textContent = w.command;
-    li.querySelector('.tags').innerHTML = (w.tags || [])
-      .map(() => '<span class="tag"></span>').join('');
-    li.querySelectorAll('.tag').forEach((el, i) => (el.textContent = w.tags[i]));
+    // Tags, shortcut and the quick-button flag all flow in one wrapping meta
+    // row so the card reads as a single block rather than stacked ribbons.
     const badges = li.querySelector('.wf-badges');
+    for (const tag of w.tags || []) {
+      const s = document.createElement('span');
+      s.className = 'tag';
+      s.textContent = tag;
+      badges.appendChild(s);
+    }
     if (w.shortcut) {
       const kbd = document.createElement('kbd');
       kbd.textContent = prettyShortcut(w.shortcut);
@@ -796,7 +842,7 @@ function renderWorkflows() {
     if (w.show_button) {
       const b = document.createElement('span');
       b.className = 'wf-badge';
-      b.textContent = '★ クイックボタン';
+      b.innerHTML = `${icon('star')}クイックボタン`;
       badges.appendChild(b);
     }
     li.querySelector('.run').addEventListener('click', () => runWorkflow(w, true));
@@ -900,9 +946,9 @@ function renderHosts() {
       <h4></h4>
       <div class="meta"></div>
       <div class="row">
-        <button class="accent-btn connect">⇄ 接続</button>
-        <button class="ghost-btn edit">編集</button>
-        <button class="danger-btn del">削除</button>
+        <button class="accent-btn connect">${icon('login')}接続</button>
+        <button class="ghost-btn edit">${icon('edit')}編集</button>
+        <button class="danger-btn del">${icon('trash')}削除</button>
       </div>`;
     li.querySelector('h4').textContent = h.name || `${h.username}@${h.host}`;
     li.querySelector('.meta').textContent =
@@ -1084,12 +1130,12 @@ function renderProfiles() {
       <h4><span class="star"></span><span class="pname"></span></h4>
       <div class="meta"></div>
       <div class="row">
-        <button class="accent-btn launch">▶ 起動</button>
-        <button class="ghost-btn setdefault">★ 既定に</button>
-        <button class="ghost-btn edit">編集</button>
-        <button class="danger-btn del">削除</button>
+        <button class="accent-btn launch">${icon('play')}起動</button>
+        <button class="ghost-btn setdefault">${icon('star')}既定に</button>
+        <button class="ghost-btn edit">${icon('edit')}編集</button>
+        <button class="danger-btn del">${icon('trash')}削除</button>
       </div>`;
-    li.querySelector('.star').textContent = def ? '★ ' : '';
+    li.querySelector('.star').innerHTML = def ? icon('star') : '';
     li.querySelector('.pname').textContent = p.name;
     const cmd = p.command || 'システム既定シェル';
     const argsText = (p.args || []).length ? ' ' + p.args.join(' ') : '';
@@ -1900,6 +1946,8 @@ listen('session:exit', (ev) => {
 });
 
 (async function boot() {
+  // Paint every static [data-icon] placeholder in the chrome first.
+  initIcons();
   // The refresh/loadSettings helpers each swallow their own backend errors
   // (keeping defaults), so one failing store can't leave a blank window.
   await loadSettings();

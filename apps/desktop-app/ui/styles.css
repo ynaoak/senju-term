@@ -163,10 +163,31 @@ kbd {
   padding: 5px 10px;
   cursor: pointer;
   font-size: 0.9rem;
+  /* inline-flex so a leading icon and its label sit on one baseline with an
+     even gap, regardless of the button's text. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
   transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease),
     color var(--dur-1) var(--ease), transform var(--dur-1) var(--ease),
     box-shadow var(--dur-1) var(--ease);
 }
+
+/* Inline icon set: sized to the surrounding text, non-shrinking so labels
+   never squeeze them. */
+.ico { width: 16px; height: 16px; flex: 0 0 auto; display: inline-block; vertical-align: -0.18em; }
+.icon-btn .ico { width: 17px; height: 17px; }
+/* Fit the icon to each smaller control it appears in. */
+.card .row button .ico { width: 15px; height: 15px; }
+.card h4 .star { display: inline-flex; vertical-align: middle; }
+.card h4 .star:not(:empty) { margin-right: 5px; }
+.card h4 .star .ico { width: 15px; height: 15px; }
+.thread-item .close { display: inline-flex; align-items: center; }
+.thread-item .close .ico { width: 14px; height: 14px; }
+.pane-close .ico { width: 15px; height: 15px; }
+.pane-thread-btn .ptd-caret .ico { width: 13px; height: 13px; }
+.new-thread-group .ico { width: 15px; height: 15px; }
 /* A subtle press: the button dips, giving tactile feedback. */
 .icon-btn:active, .ghost-btn:active, .accent-btn:active, .danger-btn:active { transform: translateY(1px); }
 
@@ -597,6 +618,7 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 
 .card h4 { font-size: 0.95rem; margin-bottom: 2px; }
 .card .desc { color: var(--text-dim); font-size: 0.82rem; margin-bottom: 6px; }
+.card .desc:empty { display: none; }
 
 .card code {
   display: block;
@@ -614,9 +636,19 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 
 .card .meta { color: var(--text-dim); font-size: 0.8rem; margin-bottom: 8px; }
 
-.wf-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.wf-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
 .wf-badges:empty { display: none; }
-.wf-badge { font-size: 0.72rem; color: var(--accent); background: rgba(0, 229, 190, 0.12); border-radius: 10px; padding: 1px 8px; }
+.wf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--accent);
+  background: rgba(0, 229, 190, 0.12);
+  border-radius: 10px;
+  padding: 2px 9px;
+}
+.wf-badge .ico { width: 12px; height: 12px; }
 
 .card .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
 .card .row button { font-size: 0.82rem; padding: 4px 9px; }
@@ -627,8 +659,7 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
   color: var(--violet-bright);
   border-radius: 10px;
   font-size: 0.72rem;
-  padding: 1px 8px;
-  margin-right: 4px;
+  padding: 2px 9px;
 }
 
 .empty { color: var(--text-dim); text-align: center; padding: 24px 0; font-size: 0.9rem; }
