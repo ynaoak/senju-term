@@ -78,6 +78,10 @@
       <!-- 右: ワークフロー / SSH / プロファイル / 設定。タブはヘッダー中央 (#header-tabs) -->
       <aside id="sidebar">
         <section id="panel-workflows" class="panel active">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="workflows"></span>ワークフロー</h2>
+            <p class="panel-desc">よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。</p>
+          </header>
           <div class="panel-head">
             <input id="wf-search" type="search" placeholder="コマンドを検索…" />
             <button id="wf-add" class="accent-btn">＋ 登録</button>
@@ -86,6 +90,10 @@
         </section>
 
         <section id="panel-hosts" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="hosts"></span>SSH 接続</h2>
+            <p class="panel-desc">接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。</p>
+          </header>
           <div class="panel-head">
             <input id="host-search" type="search" placeholder="ホストを検索…" />
             <button id="host-add" class="accent-btn">＋ 登録</button>
@@ -94,28 +102,47 @@
         </section>
 
         <section id="panel-profiles" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="profiles"></span>ターミナルプロファイル</h2>
+            <p class="panel-desc">起動するシェルをプロファイルとして管理します。★ が「＋ 新規」で起動する既定です。</p>
+          </header>
           <div class="panel-head">
-            <span class="panel-note">起動するシェルを選べます。★ が既定です。</span>
+            <span class="panel-note"></span>
             <button id="profile-add" class="accent-btn">＋ 追加</button>
           </div>
           <ul id="profile-list" class="card-list"></ul>
         </section>
 
         <section id="panel-settings" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="settings"></span>設定</h2>
+            <p class="panel-desc">外観・ターミナル・起動の設定。変更は「保存」で反映され、開いているスレッドにも即時適用されます。</p>
+          </header>
           <form id="settings-form" class="form">
-            <label>フォントサイズ
-              <input name="font_size" type="number" min="8" max="32" />
-            </label>
-            <label>フォントファミリー (空欄 = 既定)
-              <input name="font_family" type="text" placeholder='"JetBrains Mono", monospace' />
-            </label>
-            <label>スクロールバック行数
-              <input name="scrollback" type="number" min="1000" max="100000" />
-            </label>
-            <label>既定のターミナルプロファイル
-              <select name="default_profile_id"></select>
-            </label>
-            <button type="submit" class="accent-btn">保存</button>
+            <fieldset class="settings-group">
+              <legend>外観</legend>
+              <label>フォントサイズ
+                <input name="font_size" type="number" min="8" max="32" />
+              </label>
+              <label>フォントファミリー (空欄 = 既定)
+                <input name="font_family" type="text" placeholder='"JetBrains Mono", monospace' />
+              </label>
+            </fieldset>
+            <fieldset class="settings-group">
+              <legend>ターミナル</legend>
+              <label>スクロールバック行数
+                <input name="scrollback" type="number" min="1000" max="100000" />
+              </label>
+            </fieldset>
+            <fieldset class="settings-group">
+              <legend>起動</legend>
+              <label>既定のターミナルプロファイル
+                <select name="default_profile_id"></select>
+              </label>
+            </fieldset>
+            <div class="settings-actions">
+              <button type="submit" class="accent-btn">保存</button>
+            </div>
           </form>
           <p class="hint">設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。</p>
         </section>
