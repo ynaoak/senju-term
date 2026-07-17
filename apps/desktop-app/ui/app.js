@@ -208,7 +208,7 @@ function createThread(info, paneIdx) {
     // is a selection; with nothing selected it's commonly a shell shortcut
     // (e.g. SIGINT-like copy fallback), so let it through untouched.
     if (key === 'c') return !term.hasSelection();
-    return !['p', 't', 'w', 'd', 'v', 'f', 'arrowup', 'arrowdown'].includes(key);
+    return !['p', 't', 'w', 'd', 'v', 'f', 'arrowup', 'arrowdown', '/', '?'].includes(key);
   });
   term.open(hostEl);
 
@@ -273,13 +273,13 @@ function createPane() {
         <button type="button" class="pane-thread-btn" title="このペインに表示するスレッド">
           <span class="ptd-icon"></span>
           <span class="ptd-label"></span>
-          <span class="ptd-caret">▾</span>
+          <span class="ptd-caret">${icon('chevronDown')}</span>
         </button>
         <ul class="pane-thread-menu hidden" role="listbox"></ul>
       </div>
       <span class="pane-kind"></span>
       <div class="spacer"></div>
-      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">✕</button>
+      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">${icon('x')}</button>
     </div>
     <div class="pane-body"></div>`;
   const pane = {
@@ -414,10 +414,13 @@ function setPaneThread(paneIdx, threadId) {
   } else {
     const empty = document.createElement('div');
     empty.className = 'pane-empty';
-    empty.innerHTML = '<p>スレッドがありません — 新しく作成するか、左の一覧から選択してください</p>';
+    empty.innerHTML = `
+      <div class="es-icon">${icon('terminal')}</div>
+      <p class="es-title">このペインは空です</p>
+      <p class="es-hint">新しいスレッドを作成するか、左の一覧から選択してください。</p>`;
     const btn = document.createElement('button');
     btn.className = 'accent-btn';
-    btn.textContent = '＋ 新しいスレッド';
+    btn.innerHTML = `${icon('plus')}<span>新しいスレッド</span>`;
     btn.addEventListener('click', () => newLocalThread({ paneIdx }));
     empty.appendChild(btn);
     pane.body.appendChild(empty);
@@ -489,7 +492,8 @@ function toggleSplit() {
 
 function updateSplitUi() {
   const split = state.panes.length >= 2;
-  $('#split-toggle').textContent = split ? '⬓ 分割解除' : '⬒ 分割';
+  // Update only the label span so the leading split icon stays put.
+  $('#split-toggle .split-label').textContent = split ? '分割解除' : '分割';
   document.querySelectorAll('.pane-close').forEach((b) => (b.style.display = split ? '' : 'none'));
 }
 
@@ -532,6 +536,72 @@ function pinIcon(pinned) {
   return `<svg class="mi" viewBox="0 0 24 24" aria-hidden="true"><path d="${
     pinned ? PIN_PATH.filled : PIN_PATH.outlined
   }"/></svg>`;
+}
+
+/* A small, coherent inline-SVG icon set (Lucide-style 24×24 strokes, plus a
+ * couple of filled marks) so the whole UI speaks one visual language instead
+ * of mixing emoji and Unicode glyphs. Inlined — no webfont/CDN. */
+const ICONS = {
+  menu: '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+  play: '<polygon points="6 4 20 12 6 20 6 4"/>',
+  insert: '<line x1="12" y1="4" x2="12" y2="16"/><polyline points="7 11 12 16 17 11"/><line x1="5" y1="20" x2="19" y2="20"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+  trash: '<polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>',
+  login: '<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/>',
+  star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+  chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+  search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
+  split: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="12" x2="21" y2="12"/>',
+  terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
+  zap: '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>',
+  server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
+  keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8"/><line x1="10" y1="8" x2="10" y2="8"/><line x1="14" y1="8" x2="14" y2="8"/><line x1="18" y1="8" x2="18" y2="8"/><line x1="6" y1="12" x2="6" y2="12"/><line x1="10" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="14" y2="12"/><line x1="18" y1="12" x2="18" y2="12"/><line x1="7" y1="16" x2="17" y2="16"/>',
+  settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+};
+const FILLED_ICONS = new Set(['play', 'star']);
+
+/** Returns inline SVG markup for a named icon. Stroke icons inherit
+ * currentColor; the few filled marks (play/star) fill with it instead. */
+function icon(name) {
+  const body = ICONS[name] || '';
+  const paint = FILLED_ICONS.has(name)
+    ? 'fill="currentColor" stroke="none"'
+    : 'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"';
+  return `<svg class="ico" viewBox="0 0 24 24" aria-hidden="true" ${paint}>${body}</svg>`;
+}
+
+/** Fills every `[data-icon]` placeholder in static markup with its icon. */
+function initIcons() {
+  for (const el of document.querySelectorAll('[data-icon]')) {
+    el.innerHTML = icon(el.dataset.icon);
+  }
+}
+
+/** Builds an illustrated empty-state row (icon + title + hint + optional CTA)
+ * for a card grid. `action` = { label, onClick } renders a primary button. */
+function emptyState(iconName, title, hint, action) {
+  const li = document.createElement('li');
+  li.className = 'empty-state';
+  li.innerHTML = `<div class="es-icon">${icon(iconName)}</div>
+    <div class="es-title"></div>
+    <div class="es-hint"></div>`;
+  li.querySelector('.es-title').textContent = title;
+  const hintEl = li.querySelector('.es-hint');
+  if (hint) hintEl.textContent = hint; else hintEl.remove();
+  if (action) {
+    const btn = document.createElement('button');
+    btn.className = 'accent-btn';
+    btn.innerHTML = `${icon('plus')}<span>${action.label}</span>`;
+    btn.addEventListener('click', action.onClick);
+    li.appendChild(btn);
+  }
+  return li;
 }
 
 /** Pinned threads first (in pin order), then the rest in creation order. */
@@ -626,7 +696,12 @@ function renderThreads() {
   const list = $('#thread-list');
   list.innerHTML = '';
   if (!state.threads.length) {
-    list.innerHTML = '<li class="empty">スレッドがありません</li>';
+    const li = document.createElement('li');
+    li.className = 'thread-empty';
+    li.innerHTML = `<div class="es-icon">${icon('terminal')}</div>
+      <p class="es-title">スレッドがありません</p>
+      <p class="es-hint">「＋ 新規」で作成できます。</p>`;
+    list.appendChild(li);
   }
   for (const t of orderedThreads()) {
     const li = document.createElement('li');
@@ -640,7 +715,7 @@ function renderThreads() {
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
       <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${pinIcon(t.pinned)}</button>
-      <button class="close" title="スレッドを終了">✕</button>`;
+      <button class="close" title="スレッドを終了">${icon('x')}</button>`;
     li.querySelector('.title').textContent = t.title;
     li.querySelector('.pin').addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -747,7 +822,8 @@ function renderQuickbar() {
     const btn = document.createElement('button');
     btn.className = 'wf-quick-btn';
     btn.title = (w.description || w.command) + (w.shortcut ? `  (${prettyShortcut(w.shortcut)})` : '');
-    btn.textContent = w.name;
+    btn.innerHTML = `${icon('play')}<span class="qb-name"></span>`;
+    btn.querySelector('.qb-name').textContent = w.name;
     if (w.shortcut) {
       const kbd = document.createElement('kbd');
       kbd.textContent = prettyShortcut(w.shortcut);
@@ -765,7 +841,11 @@ function renderWorkflows() {
   const items = state.workflows.filter((w) =>
     !q || [w.name, w.description, w.command, (w.tags || []).join(' ')].join(' ').toLowerCase().includes(q));
   if (!items.length) {
-    list.innerHTML = '<li class="empty">ワークフローがありません</li>';
+    list.appendChild(q
+      ? emptyState('search', '一致するワークフローがありません', `「${q}」に一致する項目は見つかりませんでした。`)
+      : emptyState('zap', 'ワークフローがまだありません',
+          'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。',
+          { label: 'ワークフローを登録', onClick: () => editWorkflow(null) }));
     return;
   }
   for (const w of items) {
@@ -773,21 +853,25 @@ function renderWorkflows() {
     li.className = 'card';
     li.innerHTML = `
       <h4></h4><div class="desc"></div><code></code>
-      <div class="tags"></div>
       <div class="wf-badges"></div>
       <div class="row">
-        <button class="accent-btn run">▶ 実行</button>
-        <button class="ghost-btn insert">挿入</button>
-        <button class="ghost-btn edit">編集</button>
-        <button class="danger-btn del">削除</button>
+        <button class="accent-btn run">${icon('play')}実行</button>
+        <button class="ghost-btn insert">${icon('insert')}挿入</button>
+        <button class="ghost-btn edit">${icon('edit')}編集</button>
+        <button class="danger-btn del">${icon('trash')}削除</button>
       </div>`;
     li.querySelector('h4').textContent = w.name;
     li.querySelector('.desc').textContent = w.description || '';
     li.querySelector('code').textContent = w.command;
-    li.querySelector('.tags').innerHTML = (w.tags || [])
-      .map(() => '<span class="tag"></span>').join('');
-    li.querySelectorAll('.tag').forEach((el, i) => (el.textContent = w.tags[i]));
+    // Tags, shortcut and the quick-button flag all flow in one wrapping meta
+    // row so the card reads as a single block rather than stacked ribbons.
     const badges = li.querySelector('.wf-badges');
+    for (const tag of w.tags || []) {
+      const s = document.createElement('span');
+      s.className = 'tag';
+      s.textContent = tag;
+      badges.appendChild(s);
+    }
     if (w.shortcut) {
       const kbd = document.createElement('kbd');
       kbd.textContent = prettyShortcut(w.shortcut);
@@ -796,7 +880,7 @@ function renderWorkflows() {
     if (w.show_button) {
       const b = document.createElement('span');
       b.className = 'wf-badge';
-      b.textContent = '★ クイックボタン';
+      b.innerHTML = `${icon('star')}クイックボタン`;
       badges.appendChild(b);
     }
     li.querySelector('.run').addEventListener('click', () => runWorkflow(w, true));
@@ -890,7 +974,11 @@ function renderHosts() {
   const items = state.hosts.filter((h) =>
     !q || [h.name, h.host, h.username].join(' ').toLowerCase().includes(q));
   if (!items.length) {
-    list.innerHTML = '<li class="empty">SSH ホストが未登録です</li>';
+    list.appendChild(q
+      ? emptyState('search', '一致するホストがありません', `「${q}」に一致する接続先は見つかりませんでした。`)
+      : emptyState('server', 'SSH 接続先がまだありません',
+          '接続先を登録すると、新規スレッド作成時や一覧からワンクリックで接続できます。',
+          { label: 'SSH ホストを登録', onClick: () => editHost(null) }));
     return;
   }
   for (const h of items) {
@@ -898,15 +986,16 @@ function renderHosts() {
     li.className = 'card';
     li.innerHTML = `
       <h4></h4>
-      <div class="meta"></div>
+      <div class="host-conn"></div>
+      <div class="host-badges"><span class="auth-badge">${icon('lock')}<span class="auth-label"></span></span></div>
       <div class="row">
-        <button class="accent-btn connect">⇄ 接続</button>
-        <button class="ghost-btn edit">編集</button>
-        <button class="danger-btn del">削除</button>
+        <button class="accent-btn connect">${icon('login')}接続</button>
+        <button class="ghost-btn edit">${icon('edit')}編集</button>
+        <button class="danger-btn del">${icon('trash')}削除</button>
       </div>`;
     li.querySelector('h4').textContent = h.name || `${h.username}@${h.host}`;
-    li.querySelector('.meta').textContent =
-      `${h.username}@${h.host}:${h.port} · ${AUTH_LABEL[h.auth_method] || h.auth_method}`;
+    li.querySelector('.host-conn').textContent = `${h.username}@${h.host}:${h.port}`;
+    li.querySelector('.auth-label').textContent = AUTH_LABEL[h.auth_method] || h.auth_method;
     li.querySelector('.connect').addEventListener('click', () => newSshThread(h));
     li.querySelector('.edit').addEventListener('click', () => editHost(h));
     li.querySelector('.del').addEventListener('click', async () => {
@@ -938,17 +1027,20 @@ function editHost(h) {
     title: isNew ? 'SSH ホストを登録' : 'SSH ホストを編集',
     okLabel: '保存',
     body: [
+      fieldSection('接続先'),
       field('表示名', 'name', h?.name || ''),
       field('ホスト', 'host', h?.host || '', { required: true, placeholder: 'example.com' }),
       field('ポート', 'port', String(h?.port ?? 22), { type: 'number' }),
       field('ユーザー名', 'username', h?.username || '', { required: true }),
+      fieldSection('認証'),
       fieldSelect('認証方式', 'auth_method', h?.auth_method || 'password', [
         ['password', 'パスワード'], ['key', '秘密鍵ファイル'], ['agent', 'ssh-agent'],
         ['keypassword', '秘密鍵 + パスワード'],
       ]),
       field('秘密鍵パス (認証方式: 秘密鍵 / 秘密鍵+パスワード)', 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
-      field('接続テスト用パスワード (保存されません)', 'test_password', '', { type: 'password' }),
-      field('接続テスト用 鍵パスフレーズ (保存されません)', 'test_passphrase', '', { type: 'password' }),
+      fieldSection('接続テスト (保存されません)'),
+      field('パスワード', 'test_password', '', { type: 'password' }),
+      field('鍵パスフレーズ', 'test_passphrase', '', { type: 'password' }),
     ],
     // The connection test uses the SAME fail-closed TOFU handshake as a real
     // connect: on first contact with an unknown host it does NOT send the
@@ -1073,7 +1165,9 @@ function renderProfiles() {
   const list = $('#profile-list');
   list.innerHTML = '';
   if (!state.profiles.length) {
-    list.innerHTML = '<li class="empty">プロファイルがありません</li>';
+    list.appendChild(emptyState('terminal', 'プロファイルがありません',
+      '起動するシェルをプロファイルとして登録できます。',
+      { label: 'プロファイルを追加', onClick: () => editProfile(null) }));
     return;
   }
   for (const p of state.profiles) {
@@ -1084,12 +1178,12 @@ function renderProfiles() {
       <h4><span class="star"></span><span class="pname"></span></h4>
       <div class="meta"></div>
       <div class="row">
-        <button class="accent-btn launch">▶ 起動</button>
-        <button class="ghost-btn setdefault">★ 既定に</button>
-        <button class="ghost-btn edit">編集</button>
-        <button class="danger-btn del">削除</button>
+        <button class="accent-btn launch">${icon('play')}起動</button>
+        <button class="ghost-btn setdefault">${icon('star')}既定に</button>
+        <button class="ghost-btn edit">${icon('edit')}編集</button>
+        <button class="danger-btn del">${icon('trash')}削除</button>
       </div>`;
-    li.querySelector('.star').textContent = def ? '★ ' : '';
+    li.querySelector('.star').innerHTML = def ? icon('star') : '';
     li.querySelector('.pname').textContent = p.name;
     const cmd = p.command || 'システム既定シェル';
     const argsText = (p.args || []).length ? ' ' + p.args.join(' ') : '';
@@ -1221,6 +1315,7 @@ function paletteEntries() {
     },
     { kind: 'action', label: 'ワークフローを登録', detail: '', run: () => editWorkflow(null) },
     { kind: 'action', label: 'SSH ホストを登録', detail: '', run: () => editHost(null) },
+    { kind: 'action', label: 'キーボードショートカット一覧', detail: 'Ctrl+Shift+/', run: openShortcuts },
   ];
   for (const p of state.profiles) {
     entries.push({
@@ -1367,6 +1462,10 @@ function fieldCheckbox(label, name, checked) {
 function fieldShortcut(label, name, value, opts = {}) {
   return { label, name, value, tag: 'shortcut', ...opts };
 }
+/** A non-input section header that groups the fields that follow it. */
+function fieldSection(label) {
+  return { tag: 'section', label };
+}
 
 /** Reads the current value of every field in the modal body. Checkboxes read
  * as booleans; shortcut inputs read their normalized combo (dataset), not the
@@ -1387,6 +1486,13 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
   const box = $('#modal-body');
   box.innerHTML = '';
   for (const f of body) {
+    if (f.tag === 'section') {
+      const sec = document.createElement('div');
+      sec.className = 'modal-section';
+      sec.textContent = f.label;
+      box.appendChild(sec);
+      continue;
+    }
     const label = document.createElement('label');
     label.textContent = f.label;
     let el;
@@ -1566,8 +1672,14 @@ let toastTimer = null;
 
 function toast(message, isError = false) {
   const el = $('#toast');
-  el.textContent = message;
   el.className = isError ? 'error' : '';
+  el.innerHTML = `<span class="toast-ico">${icon(isError ? 'alert' : 'info')}</span><span class="toast-msg"></span>`;
+  el.querySelector('.toast-msg').textContent = message;
+  el.classList.remove('hidden');
+  // Restart the slide-in each time so repeated toasts re-animate.
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add('hidden'), isError ? 5000 : 2500);
 }
@@ -1772,6 +1884,9 @@ window.addEventListener('keydown', (ev) => {
   } else if (mod && key === 'f') {
     ev.preventDefault();
     termSearch.open ? closeTermSearch() : openTermSearch();
+  } else if (mod && (key === '/' || key === '?')) {
+    ev.preventDefault();
+    shortcutsOverlay.open ? closeShortcuts() : openShortcuts();
   } else if (mod && key === 'arrowup') {
     ev.preventDefault();
     focusPane(0);
@@ -1871,6 +1986,91 @@ $('#term-search-prev').addEventListener('click', () => termFindPrevious());
 $('#term-search-next').addEventListener('click', () => termFindNext(false));
 $('#term-search-close').addEventListener('click', closeTermSearch);
 
+/* ---------------- keyboard shortcut cheat sheet ---------------- */
+
+const IS_MAC = /Mac/i.test(navigator.userAgent);
+
+// The app's built-in shortcuts, grouped for the help overlay. Workflow
+// shortcuts are user-defined (set in the workflow editor) so they're
+// described rather than enumerated.
+const SHORTCUTS = [
+  { group: '全般', items: [
+    ['Ctrl+Shift+P', 'コマンドパレットを開く'],
+    ['Ctrl+Shift+T', '新しいローカルスレッド'],
+    ['Ctrl+Shift+W', '表示中のスレッドを終了'],
+    ['Ctrl+Shift+/', 'このショートカット一覧'],
+  ] },
+  { group: 'ペイン', items: [
+    ['Ctrl+Shift+D', '上下に分割 / 分割を解除'],
+    ['Ctrl+Shift+↑', '上のペインにフォーカス'],
+    ['Ctrl+Shift+↓', '下のペインにフォーカス'],
+  ] },
+  { group: 'ターミナル', items: [
+    ['Ctrl+Shift+C', '選択範囲をコピー'],
+    ['Ctrl+Shift+V', 'クリップボードを貼り付け'],
+    ['Ctrl+Shift+F', 'ターミナル内を検索'],
+  ] },
+  { group: 'ワークフロー', items: [
+    ['任意のキー', 'ワークフロー編集画面で登録したショートカットで実行'],
+  ] },
+];
+
+/** Renders a "Ctrl+Shift+P" style combo as separate <kbd> chips, using mac
+ * glyphs on macOS. Non-combo strings (e.g. 任意のキー) become a single chip. */
+function kbdCombo(combo) {
+  const map = IS_MAC
+    ? { Ctrl: '⌘', Shift: '⇧', Alt: '⌥', Meta: '⌘' }
+    : { Ctrl: 'Ctrl', Shift: 'Shift', Alt: 'Alt', Meta: 'Meta' };
+  return combo.split('+')
+    .map((t) => `<kbd>${map[t] || t}</kbd>`)
+    .join('<span class="sc-plus">+</span>');
+}
+
+function renderShortcuts() {
+  const body = $('#sc-body');
+  body.innerHTML = '';
+  for (const g of SHORTCUTS) {
+    const sec = document.createElement('div');
+    sec.className = 'sc-group';
+    const h = document.createElement('div');
+    h.className = 'sc-group-title';
+    h.textContent = g.group;
+    sec.appendChild(h);
+    for (const [combo, desc] of g.items) {
+      const row = document.createElement('div');
+      row.className = 'sc-row';
+      row.innerHTML = `<span class="sc-keys">${kbdCombo(combo)}</span><span class="sc-desc"></span>`;
+      row.querySelector('.sc-desc').textContent = desc;
+      sec.appendChild(row);
+    }
+    body.appendChild(sec);
+  }
+}
+
+const shortcutsOverlay = { open: false };
+
+function openShortcuts() {
+  shortcutsOverlay.open = true;
+  renderShortcuts();
+  $('#shortcuts').classList.remove('hidden');
+  $('#sc-close').focus();
+}
+
+function closeShortcuts() {
+  shortcutsOverlay.open = false;
+  $('#shortcuts').classList.add('hidden');
+  focusedThread()?.term.focus();
+}
+
+$('#help-btn').addEventListener('click', openShortcuts);
+$('#sc-close').addEventListener('click', closeShortcuts);
+$('#shortcuts').addEventListener('mousedown', (ev) => {
+  if (ev.target === $('#shortcuts')) closeShortcuts();
+});
+$('#shortcuts').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') { ev.preventDefault(); closeShortcuts(); }
+});
+
 /* ---------------- backend events & boot ---------------- */
 
 listen('session:data', (ev) => {
@@ -1900,6 +2100,8 @@ listen('session:exit', (ev) => {
 });
 
 (async function boot() {
+  // Paint every static [data-icon] placeholder in the chrome first.
+  initIcons();
   // The refresh/loadSettings helpers each swallow their own backend errors
   // (keeping defaults), so one failing store can't leave a blank window.
   await loadSettings();

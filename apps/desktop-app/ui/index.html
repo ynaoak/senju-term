@@ -22,7 +22,7 @@
         <button class="win-btn min" data-win="minimize" title="最小化"></button>
         <button class="win-btn max" data-win="maximize" title="最大化"></button>
       </div>
-      <button id="toggle-threadbar" class="icon-btn" title="スレッド一覧を切替">☰</button>
+      <button id="toggle-threadbar" class="icon-btn" title="スレッド一覧を切替"><span data-icon="menu"></span></button>
       <div id="brand" data-tauri-drag-region>❯ Senju</div>
       <div class="spacer" data-tauri-drag-region></div>
       <!-- Tool-panel tabs, centered in the header. Each toggles its panel in
@@ -36,8 +36,9 @@
         <button class="hdr-tab" data-panel="settings">設定</button>
       </nav>
       <div class="spacer" data-tauri-drag-region></div>
-      <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)">⬒ 分割</button>
-      <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)">⌕ パレット <kbd>Ctrl⇧P</kbd></button>
+      <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)"><span class="split-ico" data-icon="split"></span><span class="split-label">分割</span></button>
+      <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)"><span data-icon="search"></span><span>パレット</span><kbd>Ctrl⇧P</kbd></button>
+      <button id="help-btn" class="icon-btn" title="キーボードショートカット (Ctrl+Shift+/)"><span data-icon="help"></span></button>
       <!-- Windows / Linux: window controls on the right. Plain Unicode glyphs
            so they render without the Segoe icon font (absent on Linux). -->
       <div id="win-controls" class="win-controls">
@@ -55,8 +56,8 @@
           <!-- Split button: click launches the default profile; ▾ opens a
                Windows-Terminal-style menu of all profiles. -->
           <div class="new-thread-group">
-            <button id="new-thread" class="accent-btn" title="新しいスレッド (既定プロファイル / Ctrl+Shift+T)">＋ 新規</button>
-            <button id="new-thread-menu" class="accent-btn caret" title="プロファイルを選択">▾</button>
+            <button id="new-thread" class="accent-btn" title="新しいスレッド (既定プロファイル / Ctrl+Shift+T)"><span data-icon="plus"></span><span>新規</span></button>
+            <button id="new-thread-menu" class="accent-btn caret" title="プロファイルを選択"><span data-icon="chevronDown"></span></button>
           </div>
         </div>
         <ul id="thread-list"></ul>
@@ -78,44 +79,71 @@
       <!-- 右: ワークフロー / SSH / プロファイル / 設定。タブはヘッダー中央 (#header-tabs) -->
       <aside id="sidebar">
         <section id="panel-workflows" class="panel active">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="zap"></span>ワークフロー</h2>
+            <p class="panel-desc">よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。</p>
+          </header>
           <div class="panel-head">
             <input id="wf-search" type="search" placeholder="コマンドを検索…" />
-            <button id="wf-add" class="accent-btn">＋ 登録</button>
+            <button id="wf-add" class="accent-btn"><span data-icon="plus"></span><span>登録</span></button>
           </div>
           <ul id="wf-list" class="card-list"></ul>
         </section>
 
         <section id="panel-hosts" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="server"></span>SSH 接続</h2>
+            <p class="panel-desc">接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。</p>
+          </header>
           <div class="panel-head">
             <input id="host-search" type="search" placeholder="ホストを検索…" />
-            <button id="host-add" class="accent-btn">＋ 登録</button>
+            <button id="host-add" class="accent-btn"><span data-icon="plus"></span><span>登録</span></button>
           </div>
           <ul id="host-list" class="card-list"></ul>
         </section>
 
         <section id="panel-profiles" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="terminal"></span>ターミナルプロファイル</h2>
+            <p class="panel-desc">起動するシェルをプロファイルとして管理します。★ が「＋ 新規」で起動する既定です。</p>
+          </header>
           <div class="panel-head">
-            <span class="panel-note">起動するシェルを選べます。★ が既定です。</span>
-            <button id="profile-add" class="accent-btn">＋ 追加</button>
+            <span class="panel-note"></span>
+            <button id="profile-add" class="accent-btn"><span data-icon="plus"></span><span>追加</span></button>
           </div>
           <ul id="profile-list" class="card-list"></ul>
         </section>
 
         <section id="panel-settings" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="settings"></span>設定</h2>
+            <p class="panel-desc">外観・ターミナル・起動の設定。変更は「保存」で反映され、開いているスレッドにも即時適用されます。</p>
+          </header>
           <form id="settings-form" class="form">
-            <label>フォントサイズ
-              <input name="font_size" type="number" min="8" max="32" />
-            </label>
-            <label>フォントファミリー (空欄 = 既定)
-              <input name="font_family" type="text" placeholder='"JetBrains Mono", monospace' />
-            </label>
-            <label>スクロールバック行数
-              <input name="scrollback" type="number" min="1000" max="100000" />
-            </label>
-            <label>既定のターミナルプロファイル
-              <select name="default_profile_id"></select>
-            </label>
-            <button type="submit" class="accent-btn">保存</button>
+            <fieldset class="settings-group">
+              <legend>外観</legend>
+              <label>フォントサイズ
+                <input name="font_size" type="number" min="8" max="32" />
+              </label>
+              <label>フォントファミリー (空欄 = 既定)
+                <input name="font_family" type="text" placeholder='"JetBrains Mono", monospace' />
+              </label>
+            </fieldset>
+            <fieldset class="settings-group">
+              <legend>ターミナル</legend>
+              <label>スクロールバック行数
+                <input name="scrollback" type="number" min="1000" max="100000" />
+              </label>
+            </fieldset>
+            <fieldset class="settings-group">
+              <legend>起動</legend>
+              <label>既定のターミナルプロファイル
+                <select name="default_profile_id"></select>
+              </label>
+            </fieldset>
+            <div class="settings-actions">
+              <button type="submit" class="accent-btn">保存</button>
+            </div>
           </form>
           <p class="hint">設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。</p>
         </section>
@@ -135,6 +163,12 @@
       <input id="palette-input" type="text" placeholder="コマンド・ワークフロー・SSH ホストを検索…"
              autocomplete="off" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" />
       <ul id="palette-results" role="listbox" aria-label="検索結果"></ul>
+      <div class="palette-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 選択</span>
+        <span><kbd>Enter</kbd> 実行</span>
+        <span><kbd>⇧</kbd><kbd>Enter</kbd> 挿入</span>
+        <span><kbd>Esc</kbd> 閉じる</span>
+      </div>
     </div>
   </div>
 
@@ -146,6 +180,17 @@
       <div class="modal-actions">
         <button id="modal-cancel" class="ghost-btn">キャンセル</button>
         <button id="modal-ok" class="accent-btn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- キーボードショートカット一覧 -->
+  <div id="shortcuts" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sc-title">
+    <div class="modal-box sc-box">
+      <h3 id="sc-title"><span class="sc-title-ico" data-icon="keyboard"></span>キーボードショートカット</h3>
+      <div id="sc-body"></div>
+      <div class="modal-actions">
+        <button id="sc-close" class="accent-btn">閉じる</button>
       </div>
     </div>
   </div>
