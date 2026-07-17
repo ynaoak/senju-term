@@ -27,6 +27,33 @@
   font-size: 14px;
 }
 
+/* Light theme: token overrides only — components below all read tokens, so
+   flipping `body.theme-light` restyles the whole app. The pane thread
+   dropdown keeps its explicit black-base/white-text look (user request). */
+body.theme-light {
+  --bg: #f5f7fa;
+  --bg-raised: #ffffff;
+  --bg-panel: #eceff3;
+  --border: #d4dae2;
+  --text: #23282f;
+  --text-dim: #5c6672;
+  --accent: #00806b;      /* darker teal: readable as text/icon on white */
+  --accent-dim: #0d8f79;  /* button fill */
+  --accent-ink: #ffffff;  /* text on an accent fill */
+  --violet: #6f42c1;
+  --violet-bright: #6f42c1;
+  --blue: #0969da;
+  --danger: #cf222e;
+  --accent-glow: rgba(0, 128, 107, 0.16);
+  --shadow-sm: 0 1px 2px rgba(140, 149, 159, 0.18);
+  --shadow-md: 0 6px 20px rgba(140, 149, 159, 0.25);
+  --shadow-lg: 0 18px 50px rgba(100, 110, 120, 0.35);
+}
+/* The few spots that hardcode dark-canvas colors. */
+body.theme-light #win-controls .win-btn:hover { background: rgba(0, 0, 0, 0.07); }
+body.theme-light .card:hover { border-color: #b8c2cd; }
+body.theme-light .sc-row { border-bottom-color: rgba(212, 218, 226, 0.7); }
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
 /* Respect the OS "reduce motion" setting: drop all animation/transition. */
@@ -471,6 +498,25 @@ input[type="number"]::-webkit-outer-spin-button {
   gap: 12px;
   color: var(--text-dim);
 }
+
+/* Command-block exit chip (OSC 133 shell integration): a small ✓ / ✗ badge
+   overlaid at the right edge of each finished command's prompt line. */
+.term-block-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.term-block-chip.ok { color: var(--accent); background: rgba(0, 229, 190, 0.12); }
+.term-block-chip.err { color: var(--danger); background: rgba(229, 83, 75, 0.16); }
+body.theme-light .term-block-chip.ok { background: rgba(0, 128, 107, 0.12); }
+body.theme-light .term-block-chip.err { background: rgba(207, 34, 46, 0.12); }
 
 /* ---------- in-terminal search bar (Ctrl+Shift+F) ---------- */
 /* Workflow quick-launch bar (shell view). */

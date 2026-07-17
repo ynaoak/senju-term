@@ -409,6 +409,7 @@ mod tests {
             default_profile_id: "abc".into(),
             font_family: "\"JetBrains Mono\", monospace".into(),
             scrollback: 5000,
+            theme: "light".into(),
         };
         s.save_settings(&new).unwrap();
         assert_eq!(s.settings(), new);
