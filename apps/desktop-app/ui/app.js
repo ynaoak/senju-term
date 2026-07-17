@@ -414,10 +414,13 @@ function setPaneThread(paneIdx, threadId) {
   } else {
     const empty = document.createElement('div');
     empty.className = 'pane-empty';
-    empty.innerHTML = '<p>スレッドがありません — 新しく作成するか、左の一覧から選択してください</p>';
+    empty.innerHTML = `
+      <div class="es-icon">${icon('terminal')}</div>
+      <p class="es-title">このペインは空です</p>
+      <p class="es-hint">新しいスレッドを作成するか、左の一覧から選択してください。</p>`;
     const btn = document.createElement('button');
     btn.className = 'accent-btn';
-    btn.textContent = '＋ 新しいスレッド';
+    btn.innerHTML = `${icon('plus')}<span>新しいスレッド</span>`;
     btn.addEventListener('click', () => newLocalThread({ paneIdx }));
     empty.appendChild(btn);
     pane.body.appendChild(empty);
@@ -692,7 +695,12 @@ function renderThreads() {
   const list = $('#thread-list');
   list.innerHTML = '';
   if (!state.threads.length) {
-    list.innerHTML = '<li class="empty">スレッドがありません</li>';
+    const li = document.createElement('li');
+    li.className = 'thread-empty';
+    li.innerHTML = `<div class="es-icon">${icon('terminal')}</div>
+      <p class="es-title">スレッドがありません</p>
+      <p class="es-hint">「＋ 新規」で作成できます。</p>`;
+    list.appendChild(li);
   }
   for (const t of orderedThreads()) {
     const li = document.createElement('li');
@@ -813,7 +821,8 @@ function renderQuickbar() {
     const btn = document.createElement('button');
     btn.className = 'wf-quick-btn';
     btn.title = (w.description || w.command) + (w.shortcut ? `  (${prettyShortcut(w.shortcut)})` : '');
-    btn.textContent = w.name;
+    btn.innerHTML = `${icon('play')}<span class="qb-name"></span>`;
+    btn.querySelector('.qb-name').textContent = w.name;
     if (w.shortcut) {
       const kbd = document.createElement('kbd');
       kbd.textContent = prettyShortcut(w.shortcut);

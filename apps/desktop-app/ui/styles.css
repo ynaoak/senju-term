@@ -497,7 +497,10 @@ input[type="number"]::-webkit-outer-spin-button {
   cursor: pointer;
   white-space: nowrap;
 }
-.wf-quick-btn:hover { border-color: var(--accent-dim); background: var(--bg); }
+.wf-quick-btn:hover { border-color: var(--accent-dim); background: var(--bg); transform: translateY(-1px); }
+.wf-quick-btn:active { transform: translateY(0); }
+.wf-quick-btn { transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), transform var(--dur-1) var(--ease); }
+.wf-quick-btn .ico { width: 13px; height: 13px; color: var(--accent); }
 .wf-quick-btn kbd { font-size: 0.68rem; }
 
 .term-search {
@@ -675,7 +678,7 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
   padding: 60px 20px;
   color: var(--text-dim);
 }
-.empty-state .es-icon {
+.es-icon {
   width: 64px;
   height: 64px;
   display: grid;
@@ -686,10 +689,25 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
   color: var(--accent);
   margin-bottom: 4px;
 }
-.empty-state .es-icon .ico { width: 28px; height: 28px; }
-.empty-state .es-title { color: var(--text); font-size: 1.02rem; font-weight: 600; }
-.empty-state .es-hint { max-width: 380px; font-size: 0.86rem; line-height: 1.6; }
+.es-icon .ico { width: 28px; height: 28px; }
+.es-title { color: var(--text); font-size: 1.02rem; font-weight: 600; }
+.es-hint { max-width: 380px; font-size: 0.86rem; line-height: 1.6; }
 .empty-state .accent-btn { margin-top: 10px; }
+
+/* Compact empty state for the narrow thread sidebar. */
+.thread-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 5px;
+  padding: 40px 16px;
+  color: var(--text-dim);
+}
+.thread-empty .es-icon { width: 46px; height: 46px; margin-bottom: 2px; }
+.thread-empty .es-icon .ico { width: 21px; height: 21px; }
+.thread-empty .es-title { font-size: 0.9rem; }
+.thread-empty .es-hint { font-size: 0.78rem; }
 
 .form { display: flex; flex-direction: column; gap: 10px; }
 .form label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
