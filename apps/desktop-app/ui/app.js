@@ -561,6 +561,7 @@ const ICONS = {
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
   help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
 };
 const FILLED_ICONS = new Set(['play', 'star']);
@@ -985,15 +986,16 @@ function renderHosts() {
     li.className = 'card';
     li.innerHTML = `
       <h4></h4>
-      <div class="meta"></div>
+      <div class="host-conn"></div>
+      <div class="host-badges"><span class="auth-badge">${icon('lock')}<span class="auth-label"></span></span></div>
       <div class="row">
         <button class="accent-btn connect">${icon('login')}接続</button>
         <button class="ghost-btn edit">${icon('edit')}編集</button>
         <button class="danger-btn del">${icon('trash')}削除</button>
       </div>`;
     li.querySelector('h4').textContent = h.name || `${h.username}@${h.host}`;
-    li.querySelector('.meta').textContent =
-      `${h.username}@${h.host}:${h.port} · ${AUTH_LABEL[h.auth_method] || h.auth_method}`;
+    li.querySelector('.host-conn').textContent = `${h.username}@${h.host}:${h.port}`;
+    li.querySelector('.auth-label').textContent = AUTH_LABEL[h.auth_method] || h.auth_method;
     li.querySelector('.connect').addEventListener('click', () => newSshThread(h));
     li.querySelector('.edit').addEventListener('click', () => editHost(h));
     li.querySelector('.del').addEventListener('click', async () => {
