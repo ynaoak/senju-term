@@ -1027,17 +1027,20 @@ function editHost(h) {
     title: isNew ? 'SSH ホストを登録' : 'SSH ホストを編集',
     okLabel: '保存',
     body: [
+      fieldSection('接続先'),
       field('表示名', 'name', h?.name || ''),
       field('ホスト', 'host', h?.host || '', { required: true, placeholder: 'example.com' }),
       field('ポート', 'port', String(h?.port ?? 22), { type: 'number' }),
       field('ユーザー名', 'username', h?.username || '', { required: true }),
+      fieldSection('認証'),
       fieldSelect('認証方式', 'auth_method', h?.auth_method || 'password', [
         ['password', 'パスワード'], ['key', '秘密鍵ファイル'], ['agent', 'ssh-agent'],
         ['keypassword', '秘密鍵 + パスワード'],
       ]),
       field('秘密鍵パス (認証方式: 秘密鍵 / 秘密鍵+パスワード)', 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
-      field('接続テスト用パスワード (保存されません)', 'test_password', '', { type: 'password' }),
-      field('接続テスト用 鍵パスフレーズ (保存されません)', 'test_passphrase', '', { type: 'password' }),
+      fieldSection('接続テスト (保存されません)'),
+      field('パスワード', 'test_password', '', { type: 'password' }),
+      field('鍵パスフレーズ', 'test_passphrase', '', { type: 'password' }),
     ],
     // The connection test uses the SAME fail-closed TOFU handshake as a real
     // connect: on first contact with an unknown host it does NOT send the
@@ -1459,6 +1462,10 @@ function fieldCheckbox(label, name, checked) {
 function fieldShortcut(label, name, value, opts = {}) {
   return { label, name, value, tag: 'shortcut', ...opts };
 }
+/** A non-input section header that groups the fields that follow it. */
+function fieldSection(label) {
+  return { tag: 'section', label };
+}
 
 /** Reads the current value of every field in the modal body. Checkboxes read
  * as booleans; shortcut inputs read their normalized combo (dataset), not the
@@ -1479,6 +1486,13 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
   const box = $('#modal-body');
   box.innerHTML = '';
   for (const f of body) {
+    if (f.tag === 'section') {
+      const sec = document.createElement('div');
+      sec.className = 'modal-section';
+      sec.textContent = f.label;
+      box.appendChild(sec);
+      continue;
+    }
     const label = document.createElement('label');
     label.textContent = f.label;
     let el;

@@ -802,6 +802,21 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 
 #palette-results { list-style: none; max-height: 46vh; overflow-y: auto; }
 
+/* Key-hint footer, so the palette teaches its own controls. */
+.palette-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+.palette-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.palette-foot kbd { font-size: 0.68rem; padding: 1px 5px; }
+
 #palette-results li {
   display: flex;
   align-items: center;
@@ -853,6 +868,19 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 #modal-body label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 #modal-body input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 #modal-body textarea { font-family: Consolas, monospace; min-height: 64px; resize: vertical; }
+/* Section header grouping fields inside a modal form (e.g. the SSH editor). */
+.modal-section {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+#modal-body .modal-section:first-child { margin-top: 0; }
+
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 /* An extra action button (e.g. 接続テスト) sits left of Cancel/OK. */
 .modal-actions .modal-extra:first-child { margin-right: auto; }

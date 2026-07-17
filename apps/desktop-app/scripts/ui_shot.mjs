@@ -123,6 +123,13 @@ await page.waitForTimeout(150);
 await page.evaluate(() => { const i = document.querySelector('#palette-input'); if (i) { i.value = 's'; i.dispatchEvent(new Event('input')); } });
 await page.waitForTimeout(150);
 await page.screenshot({ path: path.join(outDir, 'palette.png') });
+await page.keyboard.press('Escape');
+
+// SSH host editor modal (sectioned form).
+await page.evaluate(() => window.editHost && window.editHost(null));
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(outDir, 'modal-host.png') });
+await page.keyboard.press('Escape');
 
 await page.keyboard.press('Escape');
 
