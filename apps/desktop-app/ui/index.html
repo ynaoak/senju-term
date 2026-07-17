@@ -38,6 +38,7 @@
       <div class="spacer" data-tauri-drag-region></div>
       <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)"><span class="split-ico" data-icon="split"></span><span class="split-label">分割</span></button>
       <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)"><span data-icon="search"></span><span>パレット</span><kbd>Ctrl⇧P</kbd></button>
+      <button id="help-btn" class="icon-btn" title="キーボードショートカット (Ctrl+Shift+/)"><span data-icon="help"></span></button>
       <!-- Windows / Linux: window controls on the right. Plain Unicode glyphs
            so they render without the Segoe icon font (absent on Linux). -->
       <div id="win-controls" class="win-controls">
@@ -173,6 +174,17 @@
       <div class="modal-actions">
         <button id="modal-cancel" class="ghost-btn">キャンセル</button>
         <button id="modal-ok" class="accent-btn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- キーボードショートカット一覧 -->
+  <div id="shortcuts" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sc-title">
+    <div class="modal-box sc-box">
+      <h3 id="sc-title"><span class="sc-title-ico" data-icon="keyboard"></span>キーボードショートカット</h3>
+      <div id="sc-body"></div>
+      <div class="modal-actions">
+        <button id="sc-close" class="accent-btn">閉じる</button>
       </div>
     </div>
   </div>

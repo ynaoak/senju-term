@@ -208,7 +208,7 @@ function createThread(info, paneIdx) {
     // is a selection; with nothing selected it's commonly a shell shortcut
     // (e.g. SIGINT-like copy fallback), so let it through untouched.
     if (key === 'c') return !term.hasSelection();
-    return !['p', 't', 'w', 'd', 'v', 'f', 'arrowup', 'arrowdown'].includes(key);
+    return !['p', 't', 'w', 'd', 'v', 'f', 'arrowup', 'arrowdown', '/', '?'].includes(key);
   });
   term.open(hostEl);
 
@@ -557,6 +557,7 @@ const ICONS = {
   keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8"/><line x1="10" y1="8" x2="10" y2="8"/><line x1="14" y1="8" x2="14" y2="8"/><line x1="18" y1="8" x2="18" y2="8"/><line x1="6" y1="12" x2="6" y2="12"/><line x1="10" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="14" y2="12"/><line x1="18" y1="12" x2="18" y2="12"/><line x1="7" y1="16" x2="17" y2="16"/>',
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
   info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
 };
 const FILLED_ICONS = new Set(['play', 'star']);
@@ -1300,6 +1301,7 @@ function paletteEntries() {
     },
     { kind: 'action', label: 'ワークフローを登録', detail: '', run: () => editWorkflow(null) },
     { kind: 'action', label: 'SSH ホストを登録', detail: '', run: () => editHost(null) },
+    { kind: 'action', label: 'キーボードショートカット一覧', detail: 'Ctrl+Shift+/', run: openShortcuts },
   ];
   for (const p of state.profiles) {
     entries.push({
@@ -1857,6 +1859,9 @@ window.addEventListener('keydown', (ev) => {
   } else if (mod && key === 'f') {
     ev.preventDefault();
     termSearch.open ? closeTermSearch() : openTermSearch();
+  } else if (mod && (key === '/' || key === '?')) {
+    ev.preventDefault();
+    shortcutsOverlay.open ? closeShortcuts() : openShortcuts();
   } else if (mod && key === 'arrowup') {
     ev.preventDefault();
     focusPane(0);
@@ -1955,6 +1960,91 @@ $('#term-search-input').addEventListener('keydown', (ev) => {
 $('#term-search-prev').addEventListener('click', () => termFindPrevious());
 $('#term-search-next').addEventListener('click', () => termFindNext(false));
 $('#term-search-close').addEventListener('click', closeTermSearch);
+
+/* ---------------- keyboard shortcut cheat sheet ---------------- */
+
+const IS_MAC = /Mac/i.test(navigator.userAgent);
+
+// The app's built-in shortcuts, grouped for the help overlay. Workflow
+// shortcuts are user-defined (set in the workflow editor) so they're
+// described rather than enumerated.
+const SHORTCUTS = [
+  { group: '全般', items: [
+    ['Ctrl+Shift+P', 'コマンドパレットを開く'],
+    ['Ctrl+Shift+T', '新しいローカルスレッド'],
+    ['Ctrl+Shift+W', '表示中のスレッドを終了'],
+    ['Ctrl+Shift+/', 'このショートカット一覧'],
+  ] },
+  { group: 'ペイン', items: [
+    ['Ctrl+Shift+D', '上下に分割 / 分割を解除'],
+    ['Ctrl+Shift+↑', '上のペインにフォーカス'],
+    ['Ctrl+Shift+↓', '下のペインにフォーカス'],
+  ] },
+  { group: 'ターミナル', items: [
+    ['Ctrl+Shift+C', '選択範囲をコピー'],
+    ['Ctrl+Shift+V', 'クリップボードを貼り付け'],
+    ['Ctrl+Shift+F', 'ターミナル内を検索'],
+  ] },
+  { group: 'ワークフロー', items: [
+    ['任意のキー', 'ワークフロー編集画面で登録したショートカットで実行'],
+  ] },
+];
+
+/** Renders a "Ctrl+Shift+P" style combo as separate <kbd> chips, using mac
+ * glyphs on macOS. Non-combo strings (e.g. 任意のキー) become a single chip. */
+function kbdCombo(combo) {
+  const map = IS_MAC
+    ? { Ctrl: '⌘', Shift: '⇧', Alt: '⌥', Meta: '⌘' }
+    : { Ctrl: 'Ctrl', Shift: 'Shift', Alt: 'Alt', Meta: 'Meta' };
+  return combo.split('+')
+    .map((t) => `<kbd>${map[t] || t}</kbd>`)
+    .join('<span class="sc-plus">+</span>');
+}
+
+function renderShortcuts() {
+  const body = $('#sc-body');
+  body.innerHTML = '';
+  for (const g of SHORTCUTS) {
+    const sec = document.createElement('div');
+    sec.className = 'sc-group';
+    const h = document.createElement('div');
+    h.className = 'sc-group-title';
+    h.textContent = g.group;
+    sec.appendChild(h);
+    for (const [combo, desc] of g.items) {
+      const row = document.createElement('div');
+      row.className = 'sc-row';
+      row.innerHTML = `<span class="sc-keys">${kbdCombo(combo)}</span><span class="sc-desc"></span>`;
+      row.querySelector('.sc-desc').textContent = desc;
+      sec.appendChild(row);
+    }
+    body.appendChild(sec);
+  }
+}
+
+const shortcutsOverlay = { open: false };
+
+function openShortcuts() {
+  shortcutsOverlay.open = true;
+  renderShortcuts();
+  $('#shortcuts').classList.remove('hidden');
+  $('#sc-close').focus();
+}
+
+function closeShortcuts() {
+  shortcutsOverlay.open = false;
+  $('#shortcuts').classList.add('hidden');
+  focusedThread()?.term.focus();
+}
+
+$('#help-btn').addEventListener('click', openShortcuts);
+$('#sc-close').addEventListener('click', closeShortcuts);
+$('#shortcuts').addEventListener('mousedown', (ev) => {
+  if (ev.target === $('#shortcuts')) closeShortcuts();
+});
+$('#shortcuts').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') { ev.preventDefault(); closeShortcuts(); }
+});
 
 /* ---------------- backend events & boot ---------------- */
 

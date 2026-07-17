@@ -126,6 +126,12 @@ await page.screenshot({ path: path.join(outDir, 'palette.png') });
 
 await page.keyboard.press('Escape');
 
+// Keyboard shortcut cheat sheet.
+await page.evaluate(() => window.openShortcuts && window.openShortcuts());
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(outDir, 'shortcuts.png') });
+await page.keyboard.press('Escape');
+
 // Empty state (search with no match) + a toast.
 await page.evaluate(() => {
   window.setView('hosts');

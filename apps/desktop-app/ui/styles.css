@@ -821,6 +821,36 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 .modal-status.ok { color: var(--accent); }
 .modal-status.err { color: var(--danger); }
 
+/* ---------- keyboard shortcut cheat sheet ---------- */
+.sc-box { max-height: 84vh; }
+#sc-title { display: flex; align-items: center; gap: 9px; }
+#sc-title .sc-title-ico { color: var(--accent); display: inline-flex; }
+#sc-title .sc-title-ico .ico { width: 20px; height: 20px; }
+#sc-body { overflow-y: auto; }
+.sc-group { margin-bottom: 16px; }
+.sc-group:last-child { margin-bottom: 4px; }
+.sc-group-title {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.sc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 2px;
+  border-bottom: 1px solid rgba(38, 45, 56, 0.5);
+}
+.sc-group .sc-row:last-child { border-bottom: none; }
+.sc-desc { color: var(--text); font-size: 0.9rem; }
+.sc-keys { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; white-space: nowrap; }
+.sc-keys kbd { font-size: 0.78rem; padding: 2px 7px; }
+.sc-plus { color: var(--text-dim); font-size: 0.72rem; margin: 0 1px; }
+
 /* ---------- toast ---------- */
 #toast {
   position: fixed;
