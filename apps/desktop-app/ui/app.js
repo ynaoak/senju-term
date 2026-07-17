@@ -556,6 +556,8 @@ const ICONS = {
   server: '<rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/>',
   keyboard: '<rect x="2" y="4" width="20" height="16" rx="2"/><line x1="6" y1="8" x2="6" y2="8"/><line x1="10" y1="8" x2="10" y2="8"/><line x1="14" y1="8" x2="14" y2="8"/><line x1="18" y1="8" x2="18" y2="8"/><line x1="6" y1="12" x2="6" y2="12"/><line x1="10" y1="12" x2="10" y2="12"/><line x1="14" y1="12" x2="14" y2="12"/><line x1="18" y1="12" x2="18" y2="12"/><line x1="7" y1="16" x2="17" y2="16"/>',
   settings: '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
+  info: '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>',
+  alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
 };
 const FILLED_ICONS = new Set(['play', 'star']);
 
@@ -574,6 +576,27 @@ function initIcons() {
   for (const el of document.querySelectorAll('[data-icon]')) {
     el.innerHTML = icon(el.dataset.icon);
   }
+}
+
+/** Builds an illustrated empty-state row (icon + title + hint + optional CTA)
+ * for a card grid. `action` = { label, onClick } renders a primary button. */
+function emptyState(iconName, title, hint, action) {
+  const li = document.createElement('li');
+  li.className = 'empty-state';
+  li.innerHTML = `<div class="es-icon">${icon(iconName)}</div>
+    <div class="es-title"></div>
+    <div class="es-hint"></div>`;
+  li.querySelector('.es-title').textContent = title;
+  const hintEl = li.querySelector('.es-hint');
+  if (hint) hintEl.textContent = hint; else hintEl.remove();
+  if (action) {
+    const btn = document.createElement('button');
+    btn.className = 'accent-btn';
+    btn.innerHTML = `${icon('plus')}<span>${action.label}</span>`;
+    btn.addEventListener('click', action.onClick);
+    li.appendChild(btn);
+  }
+  return li;
 }
 
 /** Pinned threads first (in pin order), then the rest in creation order. */
@@ -807,7 +830,11 @@ function renderWorkflows() {
   const items = state.workflows.filter((w) =>
     !q || [w.name, w.description, w.command, (w.tags || []).join(' ')].join(' ').toLowerCase().includes(q));
   if (!items.length) {
-    list.innerHTML = '<li class="empty">ワークフローがありません</li>';
+    list.appendChild(q
+      ? emptyState('search', '一致するワークフローがありません', `「${q}」に一致する項目は見つかりませんでした。`)
+      : emptyState('zap', 'ワークフローがまだありません',
+          'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。',
+          { label: 'ワークフローを登録', onClick: () => editWorkflow(null) }));
     return;
   }
   for (const w of items) {
@@ -936,7 +963,11 @@ function renderHosts() {
   const items = state.hosts.filter((h) =>
     !q || [h.name, h.host, h.username].join(' ').toLowerCase().includes(q));
   if (!items.length) {
-    list.innerHTML = '<li class="empty">SSH ホストが未登録です</li>';
+    list.appendChild(q
+      ? emptyState('search', '一致するホストがありません', `「${q}」に一致する接続先は見つかりませんでした。`)
+      : emptyState('server', 'SSH 接続先がまだありません',
+          '接続先を登録すると、新規スレッド作成時や一覧からワンクリックで接続できます。',
+          { label: 'SSH ホストを登録', onClick: () => editHost(null) }));
     return;
   }
   for (const h of items) {
@@ -1119,7 +1150,9 @@ function renderProfiles() {
   const list = $('#profile-list');
   list.innerHTML = '';
   if (!state.profiles.length) {
-    list.innerHTML = '<li class="empty">プロファイルがありません</li>';
+    list.appendChild(emptyState('terminal', 'プロファイルがありません',
+      '起動するシェルをプロファイルとして登録できます。',
+      { label: 'プロファイルを追加', onClick: () => editProfile(null) }));
     return;
   }
   for (const p of state.profiles) {
@@ -1612,8 +1645,14 @@ let toastTimer = null;
 
 function toast(message, isError = false) {
   const el = $('#toast');
-  el.textContent = message;
   el.className = isError ? 'error' : '';
+  el.innerHTML = `<span class="toast-ico">${icon(isError ? 'alert' : 'info')}</span><span class="toast-msg"></span>`;
+  el.querySelector('.toast-msg').textContent = message;
+  el.classList.remove('hidden');
+  // Restart the slide-in each time so repeated toasts re-animate.
+  el.style.animation = 'none';
+  void el.offsetWidth;
+  el.style.animation = '';
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.add('hidden'), isError ? 5000 : 2500);
 }

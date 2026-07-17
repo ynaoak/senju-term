@@ -664,6 +664,33 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 
 .empty { color: var(--text-dim); text-align: center; padding: 24px 0; font-size: 0.9rem; }
 
+/* Illustrated empty state spanning the whole card grid. */
+.empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+.empty-state .es-icon {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.empty-state .es-icon .ico { width: 28px; height: 28px; }
+.empty-state .es-title { color: var(--text); font-size: 1.02rem; font-weight: 600; }
+.empty-state .es-hint { max-width: 380px; font-size: 0.86rem; line-height: 1.6; }
+.empty-state .accent-btn { margin-top: 10px; }
+
 .form { display: flex; flex-direction: column; gap: 10px; }
 .form label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
 .hint { color: var(--text-dim); font-size: 0.8rem; margin-top: 14px; }
@@ -705,13 +732,22 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 }
 
 .overlay.hidden { display: none; }
+/* Overlays fade in; their boxes rise and settle — a calm entrance. */
+.overlay:not(.hidden) { animation: overlay-in var(--dur-2) var(--ease); }
+.overlay:not(.hidden) .palette-box,
+.overlay:not(.hidden) .modal-box { animation: pop-in var(--dur-3) var(--ease); }
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
 
 .palette-box, .modal-box {
   width: min(640px, 92vw);
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-lg);
   overflow: hidden;
 }
 
@@ -775,7 +811,7 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 #modal-body label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
 /* Checkbox field: sits inline with its label rather than stacked. */
 #modal-body label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
-#modal-body input[type="checkbox"] { width: auto; }
+#modal-body input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
 #modal-body textarea { font-family: Consolas, monospace; min-height: 64px; resize: vertical; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 /* An extra action button (e.g. 接続テスト) sits left of Cancel/OK. */
@@ -791,17 +827,30 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
   bottom: 18px;
   right: 18px;
   left: auto;
-  transform: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 380px;
   background: var(--bg-raised);
   border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
   border-radius: var(--radius);
-  padding: 9px 16px;
+  padding: 11px 16px;
   z-index: 90;
-  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-md);
+  animation: toast-in var(--dur-3) var(--ease);
 }
-
-#toast.error { border-color: var(--danger); color: var(--danger); }
+#toast .toast-ico { display: inline-flex; color: var(--accent); flex: 0 0 auto; }
+#toast .toast-ico .ico { width: 18px; height: 18px; }
+#toast .toast-msg { font-size: 0.88rem; line-height: 1.45; }
+#toast.error { border-color: var(--danger); border-left-color: var(--danger); color: var(--danger); }
+#toast.error .toast-ico { color: var(--danger); }
 #toast.hidden { display: none; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
 
 /* ---------- profile picker popup menu ---------- */
 .popup-menu {

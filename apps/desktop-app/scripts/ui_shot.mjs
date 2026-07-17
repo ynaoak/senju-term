@@ -53,7 +53,7 @@ const STUB = () => {
         switch (cmd) {
           case 'get_settings': return store.settings;
           case 'save_settings': store.settings = args.settings; return null;
-          case 'list_workflows': return store.workflows;
+          case 'list_workflows': return window.__EMPTY__ ? [] : store.workflows;
           case 'list_ssh_hosts': return store.hosts;
           case 'list_profiles': return store.profiles;
           case 'workflow_placeholders': return [];
@@ -123,6 +123,29 @@ await page.waitForTimeout(150);
 await page.evaluate(() => { const i = document.querySelector('#palette-input'); if (i) { i.value = 's'; i.dispatchEvent(new Event('input')); } });
 await page.waitForTimeout(150);
 await page.screenshot({ path: path.join(outDir, 'palette.png') });
+
+await page.keyboard.press('Escape');
+
+// Empty state (search with no match) + a toast.
+await page.evaluate(() => {
+  window.setView('hosts');
+  const i = document.querySelector('#host-search');
+  i.value = 'zzzznomatch';
+  i.dispatchEvent(new Event('input'));
+  window.toast('設定を保存しました');
+});
+await page.waitForTimeout(300);
+await page.screenshot({ path: path.join(outDir, 'empty-and-toast.png') });
+
+// Empty state with CTA: load a second page whose stub starts with no hosts.
+const page2 = await ctx.newPage();
+await page2.addInitScript(STUB);
+await page2.addInitScript(() => { window.__EMPTY__ = true; });
+await page2.goto(pathToFileURL(path.join(uiDir, 'index.html')).href);
+await page2.waitForTimeout(400);
+await page2.evaluate(() => { window.setView('workflows'); });
+await page2.waitForTimeout(200);
+await page2.screenshot({ path: path.join(outDir, 'empty-cta.png') });
 
 await browser.close();
 console.log('shots ->', outDir);
