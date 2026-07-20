@@ -21,6 +21,7 @@ const state = {
   workflows: [],
   hosts: [],
   profiles: [],
+  launchSets: [],      // { id, name, items: [{ profile_id, ssh_host_id, workflow_id }] }
   settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', shell_integration: true },
   renaming: null,      // thread id currently being renamed inline in the sidebar
 };
@@ -195,6 +196,16 @@ function confirmTrustHost(host, keyType, fingerprint) {
   });
 }
 
+// cmd.exe (and other console apps that never call `title`) report their own
+// full exe path as the window title (e.g. "C:\Windows\System32\cmd.exe") —
+// shorten that to just the exe name so thread tabs stay compact. Unix shell
+// titles use forward slashes and never hit this (no backslash), so they pass
+// through unchanged.
+function shortenExeTitle(title) {
+  const idx = title.lastIndexOf('\\');
+  return idx >= 0 ? title.slice(idx + 1) : title;
+}
+
 function createThread(info, paneIdx) {
   const hostEl = document.createElement('div');
   hostEl.className = 'term-host';
@@ -299,7 +310,7 @@ function createThread(info, paneIdx) {
   // unless the user gave it a custom name (task 2).
   term.onTitleChange((title) => {
     if (thread.customTitle || !title) return;
-    thread.title = title;
+    thread.title = shortenExeTitle(title);
     renderThreads();
   });
   state.threads.push(thread);
@@ -639,6 +650,7 @@ const ICONS = {
   lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
+  layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
 };
 const FILLED_ICONS = new Set(['play', 'star']);
 
@@ -1336,6 +1348,223 @@ function editProfile(p) {
   });
 }
 
+/* ---------------- launch sets (batch-open shells + workflows) ---------------- */
+
+async function refreshLaunchSets() {
+  try {
+    state.launchSets = await invoke('list_launch_sets');
+  } catch (e) {
+    toast(`起動セットの読み込みに失敗: ${e}`, true);
+  }
+  renderLaunchSets();
+}
+
+/** Human-readable "a → b → c" summary of a set's items, by profile/host name
+ * (falling back to a "(削除済み)" label if the reference no longer exists). */
+function launchSetSummary(set) {
+  return set.items
+    .map((it) => {
+      if (it.ssh_host_id) {
+        const h = state.hosts.find((x) => x.id === it.ssh_host_id);
+        return h ? `⇄ ${h.name || h.host}` : 'SSH (削除済み)';
+      }
+      const p = state.profiles.find((x) => x.id === it.profile_id);
+      return p ? p.name : 'プロファイル (削除済み)';
+    })
+    .join(' → ');
+}
+
+function renderLaunchSets() {
+  const list = $('#launchset-list');
+  list.innerHTML = '';
+  if (!state.launchSets.length) {
+    list.appendChild(emptyState('layers', '起動セットがまだありません',
+      'いつも開くシェル・SSH 接続・ワークフローをまとめて登録すると、ワンクリックで一括起動できます。',
+      { label: '起動セットを登録', onClick: () => editLaunchSet(null) }));
+    return;
+  }
+  for (const set of state.launchSets) {
+    const li = document.createElement('li');
+    li.className = 'card';
+    li.innerHTML = `
+      <h4></h4>
+      <div class="desc"></div>
+      <div class="row">
+        <button class="accent-btn launch">${icon('play')}起動</button>
+        <button class="ghost-btn edit">${icon('edit')}編集</button>
+        <button class="danger-btn del">${icon('trash')}削除</button>
+      </div>`;
+    li.querySelector('h4').textContent = set.name;
+    li.querySelector('.desc').textContent =
+      `${set.items.length} 項目: ${launchSetSummary(set)}`;
+    li.querySelector('.launch').addEventListener('click', () => runLaunchSet(set));
+    li.querySelector('.edit').addEventListener('click', () => editLaunchSet(set));
+    li.querySelector('.del').addEventListener('click', async () => {
+      if (!(await confirmModal(`「${set.name}」を削除しますか?`))) return;
+      await invoke('delete_launch_set', { id: set.id });
+      refreshLaunchSets();
+    });
+    list.appendChild(li);
+  }
+}
+
+/** Opens every item in order (local shell or SSH connection), running each
+ * item's workflow once its shell is actually ready. An SSH item that needs a
+ * password still prompts (secrets are never persisted, so this can't be
+ * skipped) — that pauses the batch on its modal like any manual connect. If
+ * an item is cancelled or its profile/host was since deleted, its step (and
+ * workflow) is skipped rather than acting on the wrong thread. */
+async function runLaunchSet(set) {
+  if (!set.items.length) return;
+  setView('shell');
+  for (const item of set.items) {
+    const before = state.threads.length;
+    if (item.ssh_host_id) {
+      const host = state.hosts.find((h) => h.id === item.ssh_host_id);
+      if (!host) {
+        toast('登録済みの SSH ホストが見つかりません(削除済みの可能性があります)', true);
+        continue;
+      }
+      await newSshThread(host);
+    } else {
+      if (item.profile_id && !state.profiles.some((p) => p.id === item.profile_id)) {
+        toast('登録済みのプロファイルが見つかりません(削除済みの可能性があります)', true);
+        continue;
+      }
+      await newLocalThread({ profileId: item.profile_id || null });
+    }
+    if (state.threads.length === before) continue; // cancelled/failed — its workflow doesn't run
+    if (item.workflow_id) {
+      const wf = state.workflows.find((w) => w.id === item.workflow_id);
+      if (wf) await runWorkflow(wf, true);
+    }
+  }
+  toast(`「${set.name}」を起動しました`);
+}
+
+/** One repeatable row in the launch-set editor: which shell/host to open,
+ * and which workflow (if any) to auto-run once it's ready. */
+function buildItemRow(item) {
+  const li = document.createElement('li');
+  li.className = 'li-row';
+
+  const targetSel = document.createElement('select');
+  targetSel.className = 'li-target';
+  const profileGroup = document.createElement('optgroup');
+  profileGroup.label = 'ローカルプロファイル';
+  for (const p of state.profiles) {
+    const o = document.createElement('option');
+    o.value = `profile:${p.id}`;
+    o.textContent = p.name;
+    profileGroup.appendChild(o);
+  }
+  targetSel.appendChild(profileGroup);
+  if (state.hosts.length) {
+    const hostGroup = document.createElement('optgroup');
+    hostGroup.label = 'SSH ホスト';
+    for (const h of state.hosts) {
+      const o = document.createElement('option');
+      o.value = `ssh:${h.id}`;
+      o.textContent = h.name || h.host;
+      hostGroup.appendChild(o);
+    }
+    targetSel.appendChild(hostGroup);
+  }
+  const current = item?.ssh_host_id ? `ssh:${item.ssh_host_id}`
+    : item?.profile_id ? `profile:${item.profile_id}` : '';
+  if (current) targetSel.value = current;
+
+  const wfSel = document.createElement('select');
+  wfSel.className = 'li-workflow';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '(自動実行なし)';
+  wfSel.appendChild(none);
+  for (const w of state.workflows) {
+    const o = document.createElement('option');
+    o.value = w.id;
+    o.textContent = w.name;
+    wfSel.appendChild(o);
+  }
+  wfSel.value = item?.workflow_id || '';
+
+  const removeBtn = document.createElement('button');
+  removeBtn.type = 'button';
+  removeBtn.className = 'icon-btn li-remove';
+  removeBtn.title = 'この項目を削除';
+  removeBtn.innerHTML = icon('x');
+  removeBtn.addEventListener('click', () => li.remove());
+
+  li.appendChild(targetSel);
+  li.appendChild(wfSel);
+  li.appendChild(removeBtn);
+  return li;
+}
+
+/** Builds the modal's repeatable item-list editor. Read back at submit time
+ * via `readItemListRows()` — see `collectModalValues()`. */
+function buildItemListEditor(initialItems) {
+  const wrap = document.createElement('div');
+  wrap.className = 'li-editor';
+  wrap.dataset.itemlist = '1';
+  wrap.dataset.name = 'items';
+
+  const rows = document.createElement('ul');
+  rows.className = 'li-rows';
+  for (const it of initialItems.length ? initialItems : [null]) {
+    rows.appendChild(buildItemRow(it));
+  }
+  wrap.appendChild(rows);
+
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'ghost-btn li-add';
+  addBtn.innerHTML = `${icon('plus')}<span>項目を追加</span>`;
+  addBtn.addEventListener('click', () => rows.appendChild(buildItemRow(null)));
+  wrap.appendChild(addBtn);
+
+  return wrap;
+}
+
+/** Reads the item-list editor's live DOM back into `LaunchSetItem[]` at
+ * submit time — simpler and less error-prone than keeping a JSON blob in
+ * sync with every add/remove. Rows with no selectable target (no profiles or
+ * hosts exist at all) are skipped. */
+function readItemListRows(container) {
+  const out = [];
+  for (const row of container.querySelectorAll('.li-row')) {
+    const [kind, id] = row.querySelector('.li-target').value.split(':');
+    if (!id) continue;
+    out.push({
+      profile_id: kind === 'profile' ? id : '',
+      ssh_host_id: kind === 'ssh' ? id : '',
+      workflow_id: row.querySelector('.li-workflow').value,
+    });
+  }
+  return out;
+}
+
+function editLaunchSet(set) {
+  const isNew = !set;
+  openModal({
+    title: isNew ? '起動セットを登録' : '起動セットを編集',
+    okLabel: '保存',
+    body: [
+      fieldSection('基本情報'),
+      field('名前', 'name', set?.name || '', { required: true }),
+      fieldSection('起動する項目(上から順に開きます)'),
+      fieldItemList('項目', 'items', set?.items || []),
+    ],
+    onOk: async (values) => {
+      if (!values.items.length) throw new Error('少なくとも 1 つの項目を追加してください');
+      await invoke('save_launch_set', {
+        set: { id: set?.id || '', name: values.name.trim(), items: values.items },
+      });
+      refreshLaunchSets();
+    },
+  });
+}
+
 /* ---------------- settings ---------------- */
 
 function renderProfileSettingOptions() {
@@ -1410,6 +1639,7 @@ function paletteEntries() {
     },
     { kind: 'action', label: 'ワークフローを登録', detail: '', run: () => editWorkflow(null) },
     { kind: 'action', label: 'SSH ホストを登録', detail: '', run: () => editHost(null) },
+    { kind: 'action', label: '起動セットを登録', detail: '', run: () => editLaunchSet(null) },
     { kind: 'action', label: 'キーボードショートカット一覧', detail: 'Ctrl+Shift+/', run: openShortcuts },
   ];
   for (const p of state.profiles) {
@@ -1443,6 +1673,14 @@ function paletteEntries() {
       detail: w.command,
       run: () => runWorkflow(w, true),
       insert: () => runWorkflow(w, false),
+    });
+  }
+  for (const set of state.launchSets) {
+    entries.push({
+      kind: 'set',
+      label: `起動セット: ${set.name}`,
+      detail: `${set.items.length} 項目`,
+      run: () => runLaunchSet(set),
     });
   }
   return entries;
@@ -1500,7 +1738,7 @@ function renderPalette() {
     const li = document.createElement('li');
     li.className = i === palette.selected ? 'selected' : '';
     li.innerHTML = `<span class="kind-badge ${e.kind}">${
-      { wf: 'CMD', ssh: 'SSH', action: 'ACT', thread: 'THR' }[e.kind]
+      { wf: 'CMD', ssh: 'SSH', action: 'ACT', thread: 'THR', set: 'SET' }[e.kind]
     }</span><span class="label"></span><span class="detail"></span>`;
     li.querySelector('.label').textContent = e.label;
     li.querySelector('.detail').textContent = e.detail;
@@ -1561,16 +1799,26 @@ function fieldShortcut(label, name, value, opts = {}) {
 function fieldSection(label) {
   return { tag: 'section', label };
 }
+/** A repeatable list editor (see buildItemListEditor) — used by the launch-set
+ * editor to pick which shells/hosts + workflows it opens. */
+function fieldItemList(label, name, items) {
+  return { label, name, items: items || [], tag: 'itemlist' };
+}
 
 /** Reads the current value of every field in the modal body. Checkboxes read
  * as booleans; shortcut inputs read their normalized combo (dataset), not the
- * pretty display value. */
+ * pretty display value; item-list editors are read from their live DOM (see
+ * readItemListRows) rather than a single input's value. */
 function collectModalValues() {
   const values = {};
   for (const el of $('#modal-body').querySelectorAll('input, textarea, select')) {
+    if (el.closest('[data-itemlist]')) continue;
     if (el.type === 'checkbox') values[el.name] = el.checked;
     else if ('shortcut' in el.dataset) values[el.name] = el.dataset.shortcut;
     else values[el.name] = el.value;
+  }
+  for (const list of $('#modal-body').querySelectorAll('[data-itemlist]')) {
+    values[list.dataset.name] = readItemListRows(list);
   }
   return values;
 }
@@ -1635,6 +1883,8 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
         el.dataset.shortcut = sc;
         el.value = prettyShortcut(sc);
       });
+    } else if (f.tag === 'itemlist') {
+      el = buildItemListEditor(f.items);
     } else {
       el = document.createElement('input');
       el.type = f.type || 'text';
@@ -1836,6 +2086,7 @@ $('#palette-btn').addEventListener('click', openPalette);
 $('#wf-add').addEventListener('click', () => editWorkflow(null));
 $('#host-add').addEventListener('click', () => editHost(null));
 $('#profile-add').addEventListener('click', () => editProfile(null));
+$('#launchset-add').addEventListener('click', () => editLaunchSet(null));
 $('#wf-search').addEventListener('input', renderWorkflows);
 $('#host-search').addEventListener('input', renderHosts);
 
@@ -1876,6 +2127,28 @@ function toggleProfileMenu(anchor) {
       item.addEventListener('click', () => {
         closeProfileMenu();
         newSshThread(h);
+      });
+      menu.appendChild(item);
+    }
+  }
+  // Launch sets: batch-open every item (shells/hosts + their workflows) at once.
+  if (state.launchSets.length) {
+    const setSep = document.createElement('div');
+    setSep.className = 'popup-sep';
+    menu.appendChild(setSep);
+    const setLabel = document.createElement('div');
+    setLabel.className = 'popup-label';
+    setLabel.textContent = '起動セット';
+    menu.appendChild(setLabel);
+    for (const set of state.launchSets) {
+      const item = document.createElement('button');
+      item.className = 'popup-item';
+      item.innerHTML = `<span class="pi-name"></span><span class="pi-cmd"></span>`;
+      item.querySelector('.pi-name').textContent = `▤ ${set.name}`;
+      item.querySelector('.pi-cmd').textContent = `${set.items.length} 項目`;
+      item.addEventListener('click', () => {
+        closeProfileMenu();
+        runLaunchSet(set);
       });
       menu.appendChild(item);
     }
@@ -1988,12 +2261,24 @@ function termCtxOutsideClick(ev) {
 
 $('#terminals').addEventListener('contextmenu', (ev) => {
   const body = ev.target.closest('.pane-body');
-  if (!body) return; // quickbar/search bar keep the native menu
+  if (!body) return; // no action here — the global suppressor below handles it
   ev.preventDefault();
   // Run in the pane that was right-clicked, not whichever had focus.
   const idx = state.panes.findIndex((p) => p.body === body);
   if (idx >= 0 && idx !== state.focusedPane) focusPane(idx);
   openTermContextMenu(ev.clientX, ev.clientY);
+});
+
+// Global fallback: suppress the webview's native context menu (Reload /
+// Inspect Element / …) everywhere it has no defined action. Only two kinds
+// of places DO have one — a text input/textarea (real cut/copy/paste) and a
+// terminal pane body (its own workflow-launcher menu, handled above) — so
+// this only needs to special-case those two and preventDefault on everything
+// else (header chrome, sidebar rows, cards, buttons, blank space, …).
+document.addEventListener('contextmenu', (ev) => {
+  if (ev.target.closest('.pane-body')) return;
+  if (ev.target.closest('input, textarea')) return;
+  ev.preventDefault();
 });
 
 $('#term-context-menu').addEventListener('keydown', (ev) => {
@@ -2449,7 +2734,7 @@ listen('session:exit', (ev) => {
   // (keeping defaults), so one failing store can't leave a blank window.
   await loadSettings();
   // Profiles must load before the first thread so the default profile applies.
-  await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles()]);
+  await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles(), refreshLaunchSets()]);
   const pane = createPane();
   $('#terminals').appendChild(pane.root);
   state.panes.push(pane);

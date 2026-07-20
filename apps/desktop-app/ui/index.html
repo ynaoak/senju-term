@@ -33,6 +33,7 @@
         <button class="hdr-tab" data-panel="workflows">ワークフロー</button>
         <button class="hdr-tab" data-panel="hosts">SSH</button>
         <button class="hdr-tab" data-panel="profiles">端末</button>
+        <button class="hdr-tab" data-panel="launchsets">起動セット</button>
         <button class="hdr-tab" data-panel="settings">設定</button>
       </nav>
       <div class="spacer" data-tauri-drag-region></div>
@@ -112,6 +113,18 @@
             <button id="profile-add" class="accent-btn"><span data-icon="plus"></span><span>追加</span></button>
           </div>
           <ul id="profile-list" class="card-list"></ul>
+        </section>
+
+        <section id="panel-launchsets" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="layers"></span>起動セット</h2>
+            <p class="panel-desc">いつも開くシェル・SSH 接続・ワークフローをまとめて登録し、ワンクリックで一括起動できます。</p>
+          </header>
+          <div class="panel-head">
+            <span class="panel-note"></span>
+            <button id="launchset-add" class="accent-btn"><span data-icon="plus"></span><span>登録</span></button>
+          </div>
+          <ul id="launchset-list" class="card-list"></ul>
         </section>
 
         <section id="panel-settings" class="panel">

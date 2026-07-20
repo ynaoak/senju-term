@@ -943,6 +943,7 @@ label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 .kind-badge.ssh { background: rgba(137, 87, 229, 0.18); color: var(--violet-bright); }
 .kind-badge.action { background: rgba(139, 149, 163, 0.18); color: var(--text-dim); }
 .kind-badge.thread { background: rgba(88, 166, 255, 0.16); color: var(--blue); }
+.kind-badge.set { background: rgba(227, 179, 65, 0.16); color: #e3b341; }
 
 #palette-results .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #palette-results .detail {
@@ -983,6 +984,22 @@ label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
   border-bottom: 1px solid var(--border);
 }
 #modal-body .modal-section:first-child { margin-top: 0; }
+
+/* Launch-set editor: a repeatable list of (shell/host + workflow) rows. */
+.li-editor { display: flex; flex-direction: column; gap: 8px; }
+.li-rows { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.li-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.li-row .li-target, .li-row .li-workflow { flex: 1 1 0; min-width: 0; }
+.li-row .li-remove { flex: 0 0 auto; }
+.li-add { align-self: flex-start; }
 
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 /* An extra action button (e.g. 接続テスト) sits left of Cancel/OK. */

@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 
 use senju_core::sessions::{SessionInfo, SshSecrets, SshTestReport};
 use senju_core::template;
-use senju_core::{LocalSpec, Profile, SessionManager, Settings, SshHost, Stores, Workflow};
+use senju_core::{LaunchSet, LocalSpec, Profile, SessionManager, Settings, SshHost, Stores, Workflow};
 
 struct AppState {
     stores: Stores,
@@ -316,6 +316,29 @@ fn delete_profile(state: State<AppState>, id: String) -> CmdResult<()> {
     state.stores.delete_profile(&id).map_err(|e| e.to_string())
 }
 
+// -- Launch sets ----------------------------------------------------------------------
+
+#[tauri::command]
+fn list_launch_sets(state: State<AppState>) -> Vec<LaunchSet> {
+    state.stores.list_launch_sets()
+}
+
+#[tauri::command]
+fn save_launch_set(state: State<AppState>, set: LaunchSet) -> CmdResult<LaunchSet> {
+    state
+        .stores
+        .save_launch_set(set)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_launch_set(state: State<AppState>, id: String) -> CmdResult<()> {
+    state
+        .stores
+        .delete_launch_set(&id)
+        .map_err(|e| e.to_string())
+}
+
 // -- Settings -----------------------------------------------------------------------
 
 #[tauri::command]
@@ -445,6 +468,9 @@ pub fn run() {
             list_profiles,
             save_profile,
             delete_profile,
+            list_launch_sets,
+            save_launch_set,
+            delete_launch_set,
             get_settings,
             save_settings
         ])

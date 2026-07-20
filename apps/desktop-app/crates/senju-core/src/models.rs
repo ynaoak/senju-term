@@ -76,6 +76,36 @@ pub struct Profile {
     pub cwd: String,
 }
 
+/// One shell/connection to open as part of a [`LaunchSet`]. Exactly one of
+/// `profile_id` / `ssh_host_id` is meant to be set (a local profile or an SSH
+/// host); the UI enforces that exclusivity, the model itself doesn't. An
+/// empty `profile_id` with an empty `ssh_host_id` falls back to the OS
+/// default shell, same as an unset profile elsewhere in the app.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct LaunchSetItem {
+    #[serde(default)]
+    pub profile_id: String,
+    #[serde(default)]
+    pub ssh_host_id: String,
+    /// Workflow run immediately after the shell/connection is ready. Empty
+    /// means just open the shell with nothing auto-run.
+    #[serde(default)]
+    pub workflow_id: String,
+}
+
+/// A named, ordered set of shells/connections (each optionally paired with a
+/// workflow to auto-run) that the user launches together in one action —
+/// e.g. "毎朝の環境" opening a local shell, an SSH host, and a log-tail
+/// workflow at once.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LaunchSet {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub items: Vec<LaunchSetItem>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Settings {
     #[serde(default = "default_font_size")]

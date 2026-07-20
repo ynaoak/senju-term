@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::models::{Profile, Settings, SshHost, Workflow};
+use crate::models::{LaunchSet, Profile, Settings, SshHost, Workflow};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -119,6 +119,33 @@ impl Stores {
             .and_then(pick)
             .or_else(|| (!default_id.is_empty()).then(|| pick(&default_id)).flatten())
             .or_else(|| profiles.first().cloned())
+    }
+
+    // -- Launch sets ------------------------------------------------------------
+
+    pub fn list_launch_sets(&self) -> Vec<LaunchSet> {
+        self.read("launch-sets", Vec::new)
+    }
+
+    pub fn save_launch_set(&self, mut set: LaunchSet) -> Result<LaunchSet, StoreError> {
+        if set.name.trim().is_empty() {
+            return Err(StoreError::Invalid("名前を入力してください".into()));
+        }
+        if set.id.is_empty() {
+            set.id = uuid::Uuid::new_v4().to_string();
+        }
+        let _g = self.guard();
+        let mut items = self.read("launch-sets", Vec::new);
+        upsert(&mut items, set.clone(), |s| &s.id);
+        self.write("launch-sets", &items)?;
+        Ok(set)
+    }
+
+    pub fn delete_launch_set(&self, id: &str) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items: Vec<LaunchSet> = self.read("launch-sets", Vec::new);
+        items.retain(|s| s.id != id);
+        self.write("launch-sets", &items)
     }
 
     // -- Settings -------------------------------------------------------------
@@ -292,6 +319,7 @@ fn default_workflows() -> Vec<Workflow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::LaunchSetItem;
     use crate::models::SshAuthMethod;
 
     fn stores() -> (tempfile::TempDir, Stores) {
@@ -365,6 +393,40 @@ mod tests {
         assert!(s.list_profiles().iter().any(|p| p.id == saved.id));
         s.delete_profile(&saved.id).unwrap();
         assert!(!s.list_profiles().iter().any(|p| p.id == saved.id));
+    }
+
+    #[test]
+    fn launch_set_crud_roundtrip() {
+        let (_d, s) = stores();
+        assert!(s.list_launch_sets().is_empty());
+        let saved = s
+            .save_launch_set(LaunchSet {
+                id: String::new(),
+                name: "毎朝の環境".into(),
+                items: vec![
+                    LaunchSetItem { profile_id: "p1".into(), ssh_host_id: String::new(), workflow_id: String::new() },
+                    LaunchSetItem { profile_id: String::new(), ssh_host_id: "h1".into(), workflow_id: "w1".into() },
+                ],
+            })
+            .unwrap();
+        assert!(!saved.id.is_empty());
+        assert_eq!(s.list_launch_sets(), vec![saved.clone()]);
+
+        // Update in place (same id) rather than appending a duplicate.
+        let updated = s.save_launch_set(LaunchSet { name: "更新後".into(), ..saved.clone() }).unwrap();
+        assert_eq!(s.list_launch_sets(), vec![updated]);
+
+        s.delete_launch_set(&saved.id).unwrap();
+        assert!(s.list_launch_sets().is_empty());
+    }
+
+    #[test]
+    fn rejects_unnamed_launch_set() {
+        let (_d, s) = stores();
+        assert!(matches!(
+            s.save_launch_set(LaunchSet { id: String::new(), name: "  ".into(), items: vec![] }),
+            Err(StoreError::Invalid(_))
+        ));
     }
 
     #[test]
