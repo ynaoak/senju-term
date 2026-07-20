@@ -1900,6 +1900,110 @@ function openSidebarPanel(name) {
   setView(name);
 }
 
+/* ---------------- terminal right-click menu (workflow launcher) ---------------- */
+
+/** Right-clicking a terminal pane opens a workflow launcher at the cursor.
+ * Click runs the workflow in that pane; Shift+click only inserts the filled
+ * command without executing it (same distinction as the palette). */
+function openTermContextMenu(x, y) {
+  const menu = $('#term-context-menu');
+  menu.innerHTML = '';
+
+  const label = document.createElement('div');
+  label.className = 'popup-label';
+  label.textContent = 'ワークフローを実行';
+  menu.appendChild(label);
+
+  if (!state.workflows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'popup-empty';
+    empty.textContent = 'ワークフローが未登録です';
+    menu.appendChild(empty);
+  }
+  for (const w of state.workflows) {
+    const item = document.createElement('button');
+    item.className = 'popup-item';
+    item.setAttribute('role', 'menuitem');
+    item.innerHTML = `
+      <span class="pi-line">${icon('play')}<span class="pi-name"></span></span>
+      <span class="pi-cmd"></span>`;
+    item.querySelector('.pi-name').textContent = w.name;
+    if (w.shortcut) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = prettyShortcut(w.shortcut);
+      item.querySelector('.pi-line').appendChild(kbd);
+    }
+    item.querySelector('.pi-cmd').textContent = w.command;
+    item.title = (w.description || w.command) + ' — Shift+クリックで実行せず挿入';
+    item.addEventListener('click', (ev) => {
+      closeTermContextMenu();
+      runWorkflow(w, !ev.shiftKey);
+    });
+    menu.appendChild(item);
+  }
+
+  const sep = document.createElement('div');
+  sep.className = 'popup-sep';
+  menu.appendChild(sep);
+  const manage = document.createElement('button');
+  manage.className = 'popup-item muted';
+  manage.setAttribute('role', 'menuitem');
+  manage.textContent = state.workflows.length ? '⚙ ワークフローを管理…' : '＋ ワークフローを登録…';
+  manage.addEventListener('click', () => {
+    closeTermContextMenu();
+    if (state.workflows.length) setView('workflows');
+    else editWorkflow(null);
+  });
+  menu.appendChild(manage);
+
+  // Position at the cursor, clamped inside the window (unhide first so the
+  // menu has measurable dimensions).
+  menu.classList.remove('hidden');
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+  // Focus the first row so ↑/↓/Enter/Escape work immediately.
+  menu.querySelector('button.popup-item')?.focus();
+  setTimeout(() => window.addEventListener('mousedown', termCtxOutsideClick), 0);
+}
+
+function closeTermContextMenu() {
+  $('#term-context-menu').classList.add('hidden');
+  window.removeEventListener('mousedown', termCtxOutsideClick);
+}
+
+function termCtxOutsideClick(ev) {
+  if (!$('#term-context-menu').contains(ev.target)) closeTermContextMenu();
+}
+
+$('#terminals').addEventListener('contextmenu', (ev) => {
+  const body = ev.target.closest('.pane-body');
+  if (!body) return; // quickbar/search bar keep the native menu
+  ev.preventDefault();
+  // Run in the pane that was right-clicked, not whichever had focus.
+  const idx = state.panes.findIndex((p) => p.body === body);
+  if (idx >= 0 && idx !== state.focusedPane) focusPane(idx);
+  openTermContextMenu(ev.clientX, ev.clientY);
+});
+
+$('#term-context-menu').addEventListener('keydown', (ev) => {
+  const items = [...ev.currentTarget.querySelectorAll('button.popup-item')];
+  const idx = items.indexOf(document.activeElement);
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    closeTermContextMenu();
+    focusedThread()?.term.focus();
+  } else if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    (items[idx + 1] || items[0])?.focus(); // wrap around
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    (items[idx - 1] || items[items.length - 1])?.focus();
+  }
+});
+
+// A stale menu position makes no sense after a resize — just close it.
+window.addEventListener('resize', closeTermContextMenu);
+
 /* ---------------- window controls (custom titlebar) ---------------- */
 
 async function refreshMaxIcon() {
@@ -2127,6 +2231,7 @@ const SHORTCUTS = [
   ] },
   { group: 'ワークフロー', items: [
     ['任意のキー', 'ワークフロー編集画面で登録したショートカットで実行'],
+    ['右クリック', 'ターミナル上のメニューから実行 (Shift+クリックで挿入のみ)'],
   ] },
 ];
 
