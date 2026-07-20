@@ -17,6 +17,6 @@ portable-pty = "0.9"
 # stock Rust toolchain builds Senju on Windows/macOS/Linux out of the box.
 russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 dirs = "6"
-
-[dev-dependencies]
+# Generates the throwaway rcfile/ZDOTDIR used to auto-inject shell integration
+# (see sessions::shell_integration) — a real dependency now, not just tests.
 tempfile = "3"

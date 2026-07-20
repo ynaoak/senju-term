@@ -21,7 +21,7 @@ const state = {
   workflows: [],
   hosts: [],
   profiles: [],
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark' },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', shell_integration: true },
   renaming: null,      // thread id currently being renamed inline in the sidebar
 };
 
@@ -258,10 +258,20 @@ function createThread(info, paneIdx) {
       const open = openBlock();
       if (open) open.done = true;
       const marker = term.registerMarker(0);
-      if (marker) blocks.push({ marker, sawOutput: false, done: false });
+      if (marker) {
+        blocks.push({
+          marker, bodyMarker: null, sawOutput: false, done: false,
+          collapsed: false, foldDeco: null,
+        });
+      }
     } else if (kind === 'C') {
       const b = openBlock();
-      if (b) b.sawOutput = true;
+      if (b) {
+        b.sawOutput = true;
+        // First byte of output/command-echo: the fold boundary (command line
+        // itself stays visible; only what follows is ever collapsed).
+        if (!b.bodyMarker) b.bodyMarker = term.registerMarker(0);
+      }
     } else if (kind === 'D') {
       const b = openBlock();
       if (b) {
@@ -270,17 +280,7 @@ function createThread(info, paneIdx) {
         // empty Enter or the shell's startup D would otherwise add noise.
         if (b.sawOutput && !b.marker.isDisposed) {
           const exit = arg !== undefined ? parseInt(arg, 10) : NaN;
-          const ok = exit === 0;
-          const deco = term.registerDecoration({ marker: b.marker });
-          deco?.onRender((el) => {
-            el.classList.add('term-block-chip', ok ? 'ok' : 'err');
-            el.textContent = ok ? '✓' : `✗ ${Number.isNaN(exit) ? '?' : exit}`;
-            el.title = ok ? 'コマンド成功 (exit 0)' : `コマンド失敗 (exit ${exit})`;
-            // Pin to the row's right edge — xterm re-sets style.left on every
-            // render, so undo it here (onRender fires after each layout).
-            el.style.left = 'auto';
-            el.style.right = '10px';
-          });
+          renderBlockToolbar(term, blocks, b, exit);
         }
       }
     }
@@ -638,6 +638,7 @@ const ICONS = {
   help: '<circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   lock: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+  copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
 };
 const FILLED_ICONS = new Set(['play', 'star']);
 
@@ -814,14 +815,22 @@ function renderThreads() {
   });
 }
 
-/** Sends text to the focused pane's thread; `run` appends Enter. */
+/** Sends text to the focused pane's thread; `run` submits it — each line of
+ * a multi-line workflow gets its own Enter (not just the last one), the same
+ * as if the user had typed each line and pressed Enter in turn. A bare '\n'
+ * left in the middle of the buffer isn't reliably treated as "submit this
+ * line" by every shell/REPL, so every line break is normalized to '\r' (and
+ * a trailing one added) rather than relying on that. `挿入`(run:false) is
+ * left untouched — it's meant to land in the input for the user to review
+ * before running anything. */
 function sendToActive(text, run) {
   const thread = focusedThread();
   if (!thread) {
     toast('アクティブなターミナルがありません', true);
     return;
   }
-  invoke('session_write', { id: thread.id, data: run ? text + '\r' : text }).catch((e) => toast(String(e), true));
+  const data = run ? text.replace(/\r\n|\r|\n/g, '\r') + '\r' : text;
+  invoke('session_write', { id: thread.id, data }).catch((e) => toast(String(e), true));
   thread.term.focus();
 }
 
@@ -1354,6 +1363,7 @@ async function loadSettings() {
   f.font_family.value = state.settings.font_family;
   f.scrollback.value = state.settings.scrollback;
   f.theme.value = state.settings.theme === 'light' ? 'light' : 'dark';
+  f.shell_integration.checked = state.settings.shell_integration !== false;
   applyTheme();
 }
 
@@ -1367,6 +1377,7 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     font_family: f.elements.font_family.value.trim(),
     scrollback: parseInt(f.elements.scrollback.value, 10) || 10000,
     theme: f.elements.theme.value === 'light' ? 'light' : 'dark',
+    shell_integration: f.elements.shell_integration.checked,
   };
   await invoke('save_settings', { settings: state.settings });
   applyTheme();
@@ -2179,6 +2190,118 @@ $('#term-search-input').addEventListener('keydown', (ev) => {
 $('#term-search-prev').addEventListener('click', () => termFindPrevious());
 $('#term-search-next').addEventListener('click', () => termFindNext(false));
 $('#term-search-close').addEventListener('click', closeTermSearch);
+
+/* ---------------- command-block toolbar: copy / fold (OSC 133) ---------------- */
+
+/** The block's [startLine, endLine] row range in the terminal buffer.
+ * `end` is the row right before the next block's prompt, or the current
+ * write position if this is the newest known block (no next marker yet). */
+function blockRange(term, blocks, block) {
+  const idx = blocks.indexOf(block);
+  const start = block.marker.line;
+  const next = blocks[idx + 1];
+  let end;
+  if (next && !next.marker.isDisposed) {
+    end = next.marker.line - 1;
+  } else {
+    const buf = term.buffer.active;
+    end = buf.baseY + buf.cursorY;
+  }
+  return { start, end: Math.max(start, end) };
+}
+
+/** Plain-text contents of a block (prompt line through its last output row),
+ * trimmed of trailing blank lines. */
+function blockText(term, blocks, block) {
+  const { start, end } = blockRange(term, blocks, block);
+  const buf = term.buffer.active;
+  const lines = [];
+  for (let i = start; i <= end; i++) {
+    const line = buf.getLine(i);
+    if (line) lines.push(line.translateToString(true));
+  }
+  while (lines.length && !lines[lines.length - 1]) lines.pop();
+  return lines.join('\n');
+}
+
+/** Toggles a visual fold over a block's output rows (command line stays
+ * visible). xterm.js has no concept of hiding buffer rows — this overlays an
+ * opaque "N 行を折りたたみ済み" panel on xterm's 'top' decoration layer, which
+ * paints above the text canvas. The underlying rows are untouched (scrollback
+ * size, selection and search still see them); only the visible paint is
+ * covered. */
+function toggleFold(term, blocks, block) {
+  if (block.collapsed) {
+    block.foldDeco?.dispose();
+    block.foldDeco = null;
+    block.collapsed = false;
+    return;
+  }
+  if (!block.bodyMarker || block.bodyMarker.isDisposed) return;
+  const { end } = blockRange(term, blocks, block);
+  const startLine = block.bodyMarker.line;
+  const rows = end - startLine + 1;
+  if (rows <= 1) return; // nothing worth hiding
+  const deco = term.registerDecoration({
+    marker: block.bodyMarker, anchor: 'left', x: 0, width: term.cols,
+    height: rows, layer: 'top',
+  });
+  if (!deco) return;
+  deco.onRender((el) => {
+    el.classList.add('term-block-fold');
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.textContent = `▸ ${rows} 行を折りたたみ済み — クリックで展開`;
+    el.addEventListener('click', () => toggleFold(term, blocks, block));
+  });
+  block.foldDeco = deco;
+  block.collapsed = true;
+}
+
+/** Renders the small always-on-hover toolbar (copy / fold / exit chip)
+ * pinned to a finished block's prompt-line right edge. */
+function renderBlockToolbar(term, blocks, block, exit) {
+  // Wide enough (in cells) for copy + fold + chip side by side — xterm's
+  // decoration box defaults to 1 cell, which would force our flex row to
+  // wrap. `layer: 'top'` keeps the buttons clickable above the text canvas.
+  const deco = term.registerDecoration({ marker: block.marker, width: 10, layer: 'top' });
+  if (!deco) return;
+  deco.onRender((el) => {
+    // xterm resets style.left on every re-render (scroll/resize) — reassert
+    // the right-edge pin unconditionally, but only build content once.
+    el.style.left = 'auto';
+    el.style.right = '10px';
+    if (el.dataset.bound) return;
+    el.dataset.bound = '1';
+    el.classList.add('term-block-toolbar');
+    const ok = exit === 0;
+    el.innerHTML = `
+      <button type="button" class="term-block-btn copy" title="ブロックをコピー">${icon('copy')}</button>
+      <button type="button" class="term-block-btn fold" title="出力を折りたたむ">${icon('chevronDown')}</button>
+      <span class="term-block-chip ${ok ? 'ok' : 'err'}" title="${ok ? 'コマンド成功 (exit 0)' : `コマンド失敗 (exit ${exit})`}">${ok ? '✓' : `✗ ${Number.isNaN(exit) ? '?' : exit}`}</span>`;
+    el.querySelector('.copy').addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(blockText(term, blocks, block));
+        toast('ブロックをコピーしました');
+      } catch (e) {
+        toast(`コピーに失敗: ${e}`, true);
+      }
+    });
+    const foldBtn = el.querySelector('.fold');
+    if (!block.bodyMarker) {
+      foldBtn.disabled = true;
+      foldBtn.title = '出力がありません';
+    } else {
+      foldBtn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        toggleFold(term, blocks, block);
+        foldBtn.classList.toggle('active', block.collapsed);
+        foldBtn.title = block.collapsed ? '出力を展開する' : '出力を折りたたむ';
+      });
+    }
+  });
+}
 
 /* ---------------- command-block navigation (OSC 133) ---------------- */
 

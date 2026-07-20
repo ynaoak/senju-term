@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
+use super::shell_integration;
 use super::{EventSink, LocalSpec, SessionError, SessionMap};
 
 /// Shared PTY writer handle. Cloned out of the session map so the (blocking)
@@ -16,6 +17,11 @@ pub(crate) struct LocalSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: LocalWriter,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
+    // Keeps the generated shell-integration rcfile/ZDOTDIR alive for the
+    // session's lifetime — the shell only reads it at startup, but holding it
+    // for the whole session (rather than deleting right after spawn) avoids
+    // any race with a slow-starting shell.
+    _integration_guard: Option<tempfile::TempDir>,
 }
 
 impl LocalSession {
@@ -24,6 +30,7 @@ impl LocalSession {
         spec: &LocalSpec,
         cols: u16,
         rows: u16,
+        shell_integration_enabled: bool,
         sink: Arc<dyn EventSink>,
         sessions: SessionMap,
     ) -> Result<(Self, String), SessionError> {
@@ -43,9 +50,29 @@ impl LocalSession {
             })
             .map_err(|e| SessionError::Pty(e.to_string()))?;
 
+        // Best-effort: a recognized shell (bash/zsh/fish) gets OSC 133 hooks
+        // spliced into its launch, so the frontend's command-block UI works
+        // without the user editing any rc file themselves.
+        let integration = shell_integration_enabled
+            .then(|| shell_integration::build(&shell, &spec.args))
+            .flatten();
+
         let mut cmd = CommandBuilder::new(&shell);
+        if let Some(integ) = &integration {
+            for arg in &integ.prefix_args {
+                cmd.arg(arg);
+            }
+        }
         for arg in &spec.args {
             cmd.arg(arg);
+        }
+        if let Some(integ) = &integration {
+            for arg in &integ.suffix_args {
+                cmd.arg(arg);
+            }
+            for (k, v) in &integ.env {
+                cmd.env(k, v);
+            }
         }
         cmd.env("TERM", "xterm-256color");
         cmd.env("TERM_PROGRAM", "senju-term");
@@ -96,6 +123,7 @@ impl LocalSession {
                 master: Mutex::new(pair.master),
                 writer: Arc::new(Mutex::new(writer)),
                 killer: Mutex::new(killer),
+                _integration_guard: integration.and_then(|i| i.guard),
             },
             title,
         ))

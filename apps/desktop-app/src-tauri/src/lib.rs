@@ -141,9 +141,10 @@ fn create_local_session(
             ..Default::default()
         },
     };
+    let shell_integration = state.stores.settings().shell_integration;
     state
         .sessions
-        .create_local(&spec, cols, rows)
+        .create_local(&spec, cols, rows, shell_integration)
         .map_err(|e| e.to_string())
 }
 

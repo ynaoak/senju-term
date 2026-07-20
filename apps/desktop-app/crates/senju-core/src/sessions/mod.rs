@@ -4,6 +4,7 @@
 //! the UI layer only deals with a single data/exit event stream.
 
 mod local;
+mod shell_integration;
 mod ssh;
 
 pub use ssh::SshTestReport;
@@ -137,11 +138,14 @@ impl SessionManager {
     }
 
     /// Spawns a local shell described by `spec` (a resolved terminal profile).
+    /// `shell_integration` opts into auto-injecting OSC 133 hooks (see
+    /// `shell_integration` module) for a recognized shell (bash/zsh/fish).
     pub fn create_local(
         &self,
         spec: &LocalSpec,
         cols: u16,
         rows: u16,
+        shell_integration: bool,
     ) -> Result<SessionInfo, SessionError> {
         let id = uuid::Uuid::new_v4().to_string();
         let (session, title) = local::LocalSession::spawn(
@@ -149,6 +153,7 @@ impl SessionManager {
             spec,
             cols,
             rows,
+            shell_integration,
             self.sink.clone(),
             self.sessions.clone(),
         )?;
@@ -346,7 +351,7 @@ mod tests {
     async fn local_session_echoes_and_exits() {
         let sink = Arc::new(Capture::default());
         let mgr = SessionManager::new(sink.clone());
-        let info = mgr.create_local(&sh_spec(), 80, 24).unwrap();
+        let info = mgr.create_local(&sh_spec(), 80, 24, false).unwrap();
         assert_eq!(info.kind, "local");
 
         mgr.write(&info.id, b"echo senju-$((20+3))\n").await.unwrap();
@@ -368,11 +373,45 @@ mod tests {
             .is_some()));
     }
 
+    /// End-to-end: a real bash session with `shell_integration: true` should
+    /// actually emit OSC 133 markers when a command runs — not just the unit
+    /// tests inside the `shell_integration` module (which only check the
+    /// generated rcfile's *content*, not that bash really reads it).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shell_integration_makes_bash_emit_osc_133() {
+        let sink = Arc::new(Capture::default());
+        let mgr = SessionManager::new(sink.clone());
+        let spec = LocalSpec { command: "bash".into(), ..Default::default() };
+        let info = mgr.create_local(&spec, 80, 24, true).unwrap();
+
+        fn has(haystack: &[u8], marker: &[u8]) -> bool {
+            haystack.windows(marker.len()).any(|w| w == marker)
+        }
+
+        mgr.write(&info.id, b"echo hi\n").await.unwrap();
+        assert!(
+            wait_until(Duration::from_secs(10), || has(
+                &sink.data.lock().unwrap(),
+                b"\x1b]133;D"
+            )),
+            "expected an OSC 133;D (command-done) marker, got: {}",
+            String::from_utf8_lossy(&sink.data.lock().unwrap())
+        );
+        let out = sink.data.lock().unwrap();
+        for marker in [&b"\x1b]133;A"[..], b"\x1b]133;B", b"\x1b]133;C"] {
+            assert!(
+                has(&out, marker),
+                "missing {marker:?} in: {}",
+                String::from_utf8_lossy(&out)
+            );
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn kill_terminates_session() {
         let sink = Arc::new(Capture::default());
         let mgr = SessionManager::new(sink.clone());
-        let info = mgr.create_local(&sh_spec(), 80, 24).unwrap();
+        let info = mgr.create_local(&sh_spec(), 80, 24, false).unwrap();
         mgr.kill(&info.id);
         assert!(wait_until(Duration::from_secs(10), || sink
             .exited

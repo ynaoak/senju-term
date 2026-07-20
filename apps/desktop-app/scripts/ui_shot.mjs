@@ -23,7 +23,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const STUB = () => {
   const uid = () => 'id-' + Math.random().toString(36).slice(2, 9);
   const store = {
-    settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000 },
+    settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, shell_integration: true },
     workflows: [
       { id: uid(), name: 'デプロイ (staging)', description: 'ステージング環境へデプロイ', command: 'deploy {{env:staging}}', tags: ['ops', 'deploy'], shortcut: 'ctrl+shift+g', show_button: true },
       { id: uid(), name: 'ログ追尾', description: 'アプリログを tail', command: 'tail -f /var/log/app.log', tags: ['debug'], shortcut: '', show_button: true },
@@ -115,6 +115,46 @@ for (const v of VIEWS) {
   await page.evaluate((name) => window.setView && window.setView(name), v);
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(outDir, `${v}.png`) });
+}
+
+// Command-block toolbar: hover to reveal copy/fold buttons, then fold one.
+// Uses raw mouse coordinates (not locator.hover()/.click()) because xterm's
+// decoration re-renders on every frame (cursor blink), which never satisfies
+// Playwright's actionability "stable bounding box" check on a locator.
+await page.evaluate(() => window.setView && window.setView('shell'));
+await page.waitForTimeout(200);
+async function centerOf(selector) {
+  const box = await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) return null;
+    const r = el.getBoundingClientRect();
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  }, selector);
+  return box;
+}
+const toolbarCenter = await centerOf('.term-block-toolbar');
+if (toolbarCenter) {
+  await page.mouse.move(toolbarCenter.x, toolbarCenter.y);
+  await page.waitForTimeout(150);
+  await page.screenshot({ path: path.join(outDir, 'block-toolbar-hover.png') });
+  const foldCenter = await centerOf('.term-block-toolbar .fold');
+  if (foldCenter) {
+    await page.mouse.click(foldCenter.x, foldCenter.y);
+    await page.waitForTimeout(150);
+    await page.screenshot({ path: path.join(outDir, 'block-folded.png') });
+    await page.mouse.click(foldCenter.x, foldCenter.y); // unfold for later shots
+    await page.waitForTimeout(150);
+  }
+  // Copy: grant clipboard perms, click, then read back what landed there.
+  await ctx.grantPermissions(['clipboard-read', 'clipboard-write']);
+  const copyCenter = await centerOf('.term-block-toolbar .copy');
+  if (copyCenter) {
+    await page.mouse.click(copyCenter.x, copyCenter.y);
+    await page.waitForTimeout(150);
+    const clip = await page.evaluate(() => navigator.clipboard.readText());
+    console.log('clipboard after block copy ->', JSON.stringify(clip));
+    await page.screenshot({ path: path.join(outDir, 'block-copy-toast.png') });
+  }
 }
 
 // Split view
