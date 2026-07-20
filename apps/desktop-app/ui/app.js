@@ -815,14 +815,22 @@ function renderThreads() {
   });
 }
 
-/** Sends text to the focused pane's thread; `run` appends Enter. */
+/** Sends text to the focused pane's thread; `run` submits it — each line of
+ * a multi-line workflow gets its own Enter (not just the last one), the same
+ * as if the user had typed each line and pressed Enter in turn. A bare '\n'
+ * left in the middle of the buffer isn't reliably treated as "submit this
+ * line" by every shell/REPL, so every line break is normalized to '\r' (and
+ * a trailing one added) rather than relying on that. `挿入`(run:false) is
+ * left untouched — it's meant to land in the input for the user to review
+ * before running anything. */
 function sendToActive(text, run) {
   const thread = focusedThread();
   if (!thread) {
     toast('アクティブなターミナルがありません', true);
     return;
   }
-  invoke('session_write', { id: thread.id, data: run ? text + '\r' : text }).catch((e) => toast(String(e), true));
+  const data = run ? text.replace(/\r\n|\r|\n/g, '\r') + '\r' : text;
+  invoke('session_write', { id: thread.id, data }).catch((e) => toast(String(e), true));
   thread.term.focus();
 }
 
