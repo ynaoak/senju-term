@@ -93,6 +93,11 @@ pub struct Settings {
     /// Terminal scrollback size, in lines.
     #[serde(default = "default_scrollback")]
     pub scrollback: u32,
+    /// UI color theme: "dark" (default) or "light". Stored as a free string
+    /// so older settings files (missing the field) deserialize to the default
+    /// and future themes don't need a schema change.
+    #[serde(default = "default_theme")]
+    pub theme: String,
 }
 
 fn default_font_size() -> u16 {
@@ -103,6 +108,10 @@ fn default_scrollback() -> u32 {
     10000
 }
 
+fn default_theme() -> String {
+    "dark".into()
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -111,6 +120,7 @@ impl Default for Settings {
             default_profile_id: String::new(),
             font_family: String::new(),
             scrollback: default_scrollback(),
+            theme: default_theme(),
         }
     }
 }

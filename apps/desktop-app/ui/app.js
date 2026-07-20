@@ -21,24 +21,50 @@ const state = {
   workflows: [],
   hosts: [],
   profiles: [],
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000 },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark' },
   renaming: null,      // thread id currently being renamed inline in the sidebar
 };
 
 /* ---------------- terminal threads ---------------- */
 
-const TERM_THEME = {
-  background: '#0d1117',
-  foreground: '#d7dde5',
-  cursor: '#00e5be',
-  cursorAccent: '#0d1117',
-  selectionBackground: 'rgba(0, 229, 190, 0.25)',
-  black: '#161b22', red: '#e5534b', green: '#3fb950', yellow: '#d29922',
-  blue: '#58a6ff', magenta: '#b393f0', cyan: '#39c5cf', white: '#d7dde5',
-  brightBlack: '#6e7681', brightRed: '#ff7b72', brightGreen: '#56d364',
-  brightYellow: '#e3b341', brightBlue: '#79c0ff', brightMagenta: '#d2a8ff',
-  brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
+const TERM_THEMES = {
+  dark: {
+    background: '#0d1117',
+    foreground: '#d7dde5',
+    cursor: '#00e5be',
+    cursorAccent: '#0d1117',
+    selectionBackground: 'rgba(0, 229, 190, 0.25)',
+    black: '#161b22', red: '#e5534b', green: '#3fb950', yellow: '#d29922',
+    blue: '#58a6ff', magenta: '#b393f0', cyan: '#39c5cf', white: '#d7dde5',
+    brightBlack: '#6e7681', brightRed: '#ff7b72', brightGreen: '#56d364',
+    brightYellow: '#e3b341', brightBlue: '#79c0ff', brightMagenta: '#d2a8ff',
+    brightCyan: '#56d4dd', brightWhite: '#f0f6fc',
+  },
+  // GitHub-Light-inspired ANSI ramp so colored CLI output stays readable on
+  // a white canvas.
+  light: {
+    background: '#ffffff',
+    foreground: '#24292f',
+    cursor: '#0d8f79',
+    cursorAccent: '#ffffff',
+    selectionBackground: 'rgba(13, 143, 121, 0.22)',
+    black: '#24292f', red: '#cf222e', green: '#116329', yellow: '#4d2d00',
+    blue: '#0969da', magenta: '#8250df', cyan: '#1b7c83', white: '#6e7781',
+    brightBlack: '#57606a', brightRed: '#a40e26', brightGreen: '#1a7f37',
+    brightYellow: '#633c01', brightBlue: '#218bff', brightMagenta: '#a475f9',
+    brightCyan: '#3192aa', brightWhite: '#8c959f',
+  },
 };
+
+function currentTermTheme() {
+  return TERM_THEMES[state.settings.theme] || TERM_THEMES.dark;
+}
+
+/** Applies the configured UI theme to the chrome and every live terminal. */
+function applyTheme() {
+  document.body.classList.toggle('theme-light', state.settings.theme === 'light');
+  for (const t of state.threads) t.term.options.theme = currentTermTheme();
+}
 
 const DEFAULT_FONT_STACK =
   '"Cascadia Code", "JetBrains Mono", Consolas, "Noto Sans Mono CJK JP", monospace';
@@ -177,7 +203,7 @@ function createThread(info, paneIdx) {
   const term = new Terminal({
     fontSize: state.settings.font_size,
     fontFamily: fontFamilyStack(),
-    theme: TERM_THEME,
+    theme: currentTermTheme(),
     cursorBlink: true,
     allowProposedApi: true,
     scrollback: state.settings.scrollback,
@@ -201,8 +227,10 @@ function createThread(info, paneIdx) {
     // Let a registered workflow shortcut bubble to the window handler instead
     // of being typed into the shell.
     if (ev.type === 'keydown' && workflowForShortcut(ev)) return false;
-    const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
     const key = ev.key.toLowerCase();
+    // Ctrl+Alt+↑/↓ = command-block navigation; bubble to the window handler.
+    if (ev.ctrlKey && ev.altKey && (key === 'arrowup' || key === 'arrowdown')) return false;
+    const mod = (ev.ctrlKey || ev.metaKey) && ev.shiftKey;
     if (!mod) return true;
     // Ctrl+Shift+C only leaves the terminal (for the app to copy) when there
     // is a selection; with nothing selected it's commonly a shell shortcut
@@ -212,13 +240,60 @@ function createThread(info, paneIdx) {
   });
   term.open(hostEl);
 
+  // --- Command blocks (Warp-style), driven by OSC 133 shell integration ---
+  // A = prompt start, B = command start, C = output start, D[;exit] = done.
+  // Shells emit these via small rc snippets (see README). Threads whose shell
+  // doesn't emit them simply have no blocks — everything else works as-is.
+  const blocks = [];
+  const openBlock = () => blocks.length && !blocks[blocks.length - 1].done
+    ? blocks[blocks.length - 1] : null;
+  term.parser.registerOscHandler(133, (data) => {
+    const [kind, arg] = data.split(';');
+    if (kind === 'A') {
+      // New prompt: drop disposed markers (scrolled out of scrollback), close
+      // any dangling block, then open a fresh one at the prompt line.
+      for (let i = blocks.length - 1; i >= 0; i--) {
+        if (blocks[i].marker.isDisposed) blocks.splice(i, 1);
+      }
+      const open = openBlock();
+      if (open) open.done = true;
+      const marker = term.registerMarker(0);
+      if (marker) blocks.push({ marker, sawOutput: false, done: false });
+    } else if (kind === 'C') {
+      const b = openBlock();
+      if (b) b.sawOutput = true;
+    } else if (kind === 'D') {
+      const b = openBlock();
+      if (b) {
+        b.done = true;
+        // Chip only for blocks that actually ran a command (C seen) — an
+        // empty Enter or the shell's startup D would otherwise add noise.
+        if (b.sawOutput && !b.marker.isDisposed) {
+          const exit = arg !== undefined ? parseInt(arg, 10) : NaN;
+          const ok = exit === 0;
+          const deco = term.registerDecoration({ marker: b.marker });
+          deco?.onRender((el) => {
+            el.classList.add('term-block-chip', ok ? 'ok' : 'err');
+            el.textContent = ok ? '✓' : `✗ ${Number.isNaN(exit) ? '?' : exit}`;
+            el.title = ok ? 'コマンド成功 (exit 0)' : `コマンド失敗 (exit ${exit})`;
+            // Pin to the row's right edge — xterm re-sets style.left on every
+            // render, so undo it here (onRender fires after each layout).
+            el.style.left = 'auto';
+            el.style.right = '10px';
+          });
+        }
+      }
+    }
+    return true;
+  });
+
   term.onData((data) => invoke('session_write', { id: info.id, data }).catch(() => {}));
   term.onResize(({ cols, rows }) =>
     invoke('session_resize', { id: info.id, cols, rows }).catch(() => {}));
 
   const thread = {
     id: info.id, title: info.title, kind: info.kind, pinned: false,
-    term, fit, hostEl, search, customTitle: false, activity: false,
+    term, fit, hostEl, search, customTitle: false, activity: false, blocks,
   };
   // OSC-2 title changes (`\e]0;...\a`) rename the thread automatically,
   // unless the user gave it a custom name (task 2).
@@ -796,9 +871,11 @@ function workflowForShortcut(ev) {
 
 // Combos the app itself owns (all Ctrl+Shift+…), which a workflow shortcut
 // could never win, so binding them is pointless/confusing.
-const RESERVED_SHORTCUTS = new Set(
-  ['p', 't', 'w', 'd', 'c', 'v', 'f', 'arrowup', 'arrowdown'].map((k) => `ctrl+shift+${k}`),
-);
+const RESERVED_SHORTCUTS = new Set([
+  ...['p', 't', 'w', 'd', 'c', 'v', 'f', 'arrowup', 'arrowdown'].map((k) => `ctrl+shift+${k}`),
+  // Command-block navigation (OSC 133).
+  'ctrl+alt+arrowup', 'ctrl+alt+arrowdown',
+]);
 
 /** Returns a reason string if `sc` is a bad workflow shortcut, else null. */
 function shortcutConflict(sc, excludeId) {
@@ -914,10 +991,13 @@ function editWorkflow(w) {
     title: isNew ? 'ワークフローを登録' : 'ワークフローを編集',
     okLabel: '保存',
     body: [
+      fieldSection('基本情報'),
       field('名前', 'name', w?.name || '', { required: true }),
       field('説明', 'description', w?.description || ''),
-      fieldTextarea('コマンド ( {{名前}} / {{名前:既定値}} でプレースホルダ )', 'command', w?.command || '', { required: true }),
       field('タグ (カンマ区切り)', 'tags', (w?.tags || []).join(', ')),
+      fieldSection('コマンド'),
+      fieldTextarea('テンプレート ( {{名前}} / {{名前:既定値}} でプレースホルダ )', 'command', w?.command || '', { required: true }),
+      fieldSection('起動方法'),
       fieldShortcut('ショートカット (任意・Ctrl / Alt / Meta 必須)', 'shortcut', w?.shortcut || '', { excludeId: w?.id || '' }),
       fieldCheckbox('シェル表示にクイックボタンを表示', 'show_button', !!w?.show_button),
     ],
@@ -1273,6 +1353,8 @@ async function loadSettings() {
   f.font_size.value = state.settings.font_size;
   f.font_family.value = state.settings.font_family;
   f.scrollback.value = state.settings.scrollback;
+  f.theme.value = state.settings.theme === 'light' ? 'light' : 'dark';
+  applyTheme();
 }
 
 $('#settings-form').addEventListener('submit', async (ev) => {
@@ -1284,8 +1366,10 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     default_profile_id: f.elements.default_profile_id.value,
     font_family: f.elements.font_family.value.trim(),
     scrollback: parseInt(f.elements.scrollback.value, 10) || 10000,
+    theme: f.elements.theme.value === 'light' ? 'light' : 'dark',
   };
   await invoke('save_settings', { settings: state.settings });
+  applyTheme();
   for (const t of state.threads) {
     t.term.options.fontSize = state.settings.font_size;
     t.term.options.fontFamily = fontFamilyStack();
@@ -1816,6 +1900,110 @@ function openSidebarPanel(name) {
   setView(name);
 }
 
+/* ---------------- terminal right-click menu (workflow launcher) ---------------- */
+
+/** Right-clicking a terminal pane opens a workflow launcher at the cursor.
+ * Click runs the workflow in that pane; Shift+click only inserts the filled
+ * command without executing it (same distinction as the palette). */
+function openTermContextMenu(x, y) {
+  const menu = $('#term-context-menu');
+  menu.innerHTML = '';
+
+  const label = document.createElement('div');
+  label.className = 'popup-label';
+  label.textContent = 'ワークフローを実行';
+  menu.appendChild(label);
+
+  if (!state.workflows.length) {
+    const empty = document.createElement('div');
+    empty.className = 'popup-empty';
+    empty.textContent = 'ワークフローが未登録です';
+    menu.appendChild(empty);
+  }
+  for (const w of state.workflows) {
+    const item = document.createElement('button');
+    item.className = 'popup-item';
+    item.setAttribute('role', 'menuitem');
+    item.innerHTML = `
+      <span class="pi-line">${icon('play')}<span class="pi-name"></span></span>
+      <span class="pi-cmd"></span>`;
+    item.querySelector('.pi-name').textContent = w.name;
+    if (w.shortcut) {
+      const kbd = document.createElement('kbd');
+      kbd.textContent = prettyShortcut(w.shortcut);
+      item.querySelector('.pi-line').appendChild(kbd);
+    }
+    item.querySelector('.pi-cmd').textContent = w.command;
+    item.title = (w.description || w.command) + ' — Shift+クリックで実行せず挿入';
+    item.addEventListener('click', (ev) => {
+      closeTermContextMenu();
+      runWorkflow(w, !ev.shiftKey);
+    });
+    menu.appendChild(item);
+  }
+
+  const sep = document.createElement('div');
+  sep.className = 'popup-sep';
+  menu.appendChild(sep);
+  const manage = document.createElement('button');
+  manage.className = 'popup-item muted';
+  manage.setAttribute('role', 'menuitem');
+  manage.textContent = state.workflows.length ? '⚙ ワークフローを管理…' : '＋ ワークフローを登録…';
+  manage.addEventListener('click', () => {
+    closeTermContextMenu();
+    if (state.workflows.length) setView('workflows');
+    else editWorkflow(null);
+  });
+  menu.appendChild(manage);
+
+  // Position at the cursor, clamped inside the window (unhide first so the
+  // menu has measurable dimensions).
+  menu.classList.remove('hidden');
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+  // Focus the first row so ↑/↓/Enter/Escape work immediately.
+  menu.querySelector('button.popup-item')?.focus();
+  setTimeout(() => window.addEventListener('mousedown', termCtxOutsideClick), 0);
+}
+
+function closeTermContextMenu() {
+  $('#term-context-menu').classList.add('hidden');
+  window.removeEventListener('mousedown', termCtxOutsideClick);
+}
+
+function termCtxOutsideClick(ev) {
+  if (!$('#term-context-menu').contains(ev.target)) closeTermContextMenu();
+}
+
+$('#terminals').addEventListener('contextmenu', (ev) => {
+  const body = ev.target.closest('.pane-body');
+  if (!body) return; // quickbar/search bar keep the native menu
+  ev.preventDefault();
+  // Run in the pane that was right-clicked, not whichever had focus.
+  const idx = state.panes.findIndex((p) => p.body === body);
+  if (idx >= 0 && idx !== state.focusedPane) focusPane(idx);
+  openTermContextMenu(ev.clientX, ev.clientY);
+});
+
+$('#term-context-menu').addEventListener('keydown', (ev) => {
+  const items = [...ev.currentTarget.querySelectorAll('button.popup-item')];
+  const idx = items.indexOf(document.activeElement);
+  if (ev.key === 'Escape') {
+    ev.preventDefault();
+    closeTermContextMenu();
+    focusedThread()?.term.focus();
+  } else if (ev.key === 'ArrowDown') {
+    ev.preventDefault();
+    (items[idx + 1] || items[0])?.focus(); // wrap around
+  } else if (ev.key === 'ArrowUp') {
+    ev.preventDefault();
+    (items[idx - 1] || items[items.length - 1])?.focus();
+  }
+});
+
+// A stale menu position makes no sense after a resize — just close it.
+window.addEventListener('resize', closeTermContextMenu);
+
 /* ---------------- window controls (custom titlebar) ---------------- */
 
 async function refreshMaxIcon() {
@@ -1887,6 +2075,12 @@ window.addEventListener('keydown', (ev) => {
   } else if (mod && (key === '/' || key === '?')) {
     ev.preventDefault();
     shortcutsOverlay.open ? closeShortcuts() : openShortcuts();
+  } else if (ev.ctrlKey && ev.altKey && key === 'arrowup') {
+    ev.preventDefault();
+    blockJump(-1);
+  } else if (ev.ctrlKey && ev.altKey && key === 'arrowdown') {
+    ev.preventDefault();
+    blockJump(1);
   } else if (mod && key === 'arrowup') {
     ev.preventDefault();
     focusPane(0);
@@ -1986,6 +2180,29 @@ $('#term-search-prev').addEventListener('click', () => termFindPrevious());
 $('#term-search-next').addEventListener('click', () => termFindNext(false));
 $('#term-search-close').addEventListener('click', closeTermSearch);
 
+/* ---------------- command-block navigation (OSC 133) ---------------- */
+
+/** Scrolls the focused terminal to the previous (-1) / next (+1) command
+ * block's prompt line. No-op when the shell emits no OSC 133 markers. */
+function blockJump(dir) {
+  const thread = focusedThread();
+  if (!thread || !thread.blocks?.length) return;
+  const lines = thread.blocks
+    .filter((b) => !b.marker.isDisposed)
+    .map((b) => b.marker.line)
+    .sort((a, b) => a - b);
+  if (!lines.length) return;
+  const cur = thread.term.buffer.active.viewportY;
+  let target;
+  if (dir < 0) {
+    // Last block line strictly above the viewport top.
+    target = [...lines].reverse().find((l) => l < cur);
+  } else {
+    target = lines.find((l) => l > cur);
+  }
+  if (target !== undefined) thread.term.scrollToLine(target);
+}
+
 /* ---------------- keyboard shortcut cheat sheet ---------------- */
 
 const IS_MAC = /Mac/i.test(navigator.userAgent);
@@ -2009,9 +2226,12 @@ const SHORTCUTS = [
     ['Ctrl+Shift+C', '選択範囲をコピー'],
     ['Ctrl+Shift+V', 'クリップボードを貼り付け'],
     ['Ctrl+Shift+F', 'ターミナル内を検索'],
+    ['Ctrl+Alt+↑', '前のコマンドブロックへ (要シェル統合)'],
+    ['Ctrl+Alt+↓', '次のコマンドブロックへ (要シェル統合)'],
   ] },
   { group: 'ワークフロー', items: [
     ['任意のキー', 'ワークフロー編集画面で登録したショートカットで実行'],
+    ['右クリック', 'ターミナル上のメニューから実行 (Shift+クリックで挿入のみ)'],
   ] },
 ];
 

@@ -46,12 +46,16 @@ const STUB = () => {
   let sess = 0;
   const listeners = {};
   const emit = (name, payload) => (listeners[name] || []).forEach((cb) => cb({ payload }));
+  // btoa() alone throws on non-Latin1 (➜, Japanese); encode UTF-8 first, the
+  // same byte-oriented base64 the Rust backend sends.
+  const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
   window.__TAURI__ = {
     core: {
       invoke: async (cmd, args) => {
         switch (cmd) {
-          case 'get_settings': return store.settings;
+          case 'get_settings':
+            return { ...store.settings, theme: window.__LIGHT__ ? 'light' : 'dark' };
           case 'save_settings': store.settings = args.settings; return null;
           case 'list_workflows': return window.__EMPTY__ ? [] : store.workflows;
           case 'list_ssh_hosts': return store.hosts;
@@ -61,11 +65,19 @@ const STUB = () => {
           case 'create_local_session': {
             const id = 'sess-' + (++sess);
             const title = ['zsh', 'bash', 'node', 'vim ~/notes.md'][sess % 4] || 'zsh';
+            // Emit OSC 133-framed sample output so command-block chips render.
+            const A = '\x1b]133;A\x07', B = '\x1b]133;B\x07', C = '\x1b]133;C\x07';
+            const D = (code) => `\x1b]133;D;${code}\x07`;
+            const prompt = `\x1b[38;5;44m➜  \x1b[38;5;39m~/senju-term\x1b[0m \x1b[38;5;245m(main)\x1b[0m $ `;
             setTimeout(() => {
-              emit('session:data', { id, data: btoa(
+              emit('session:data', { id, data: b64(
                 `\x1b[38;5;44mSenju Term\x1b[0m — welcome\r\n` +
                 `\x1b[38;5;245mLast login: Wed Jul 17\x1b[0m\r\n` +
-                `\x1b[38;5;44m➜  \x1b[38;5;39m~/senju-term\x1b[0m \x1b[38;5;245m(main)\x1b[0m $ \r\n`) });
+                `${A}${prompt}${B}cargo test -p senju-core\r\n` +
+                `${C}running 26 tests\r\ntest result: \x1b[32mok\x1b[0m. 26 passed; 0 failed\r\n${D(0)}` +
+                `${A}${prompt}${B}cat missing.txt\r\n` +
+                `${C}cat: missing.txt: No such file or directory\r\n${D(1)}` +
+                `${A}${prompt}`) });
             }, 30);
             return { id, title, kind: 'local' };
           }
@@ -149,6 +161,18 @@ await page.evaluate(() => {
 });
 await page.waitForTimeout(300);
 await page.screenshot({ path: path.join(outDir, 'empty-and-toast.png') });
+
+// Light theme: shell + workflows on a fresh page with theme=light settings.
+const lightPage = await ctx.newPage();
+await lightPage.addInitScript(STUB);
+await lightPage.addInitScript(() => { window.__LIGHT__ = true; });
+await lightPage.goto(pathToFileURL(path.join(uiDir, 'index.html')).href);
+await lightPage.waitForTimeout(500);
+await lightPage.screenshot({ path: path.join(outDir, 'light-shell.png') });
+await lightPage.evaluate(() => window.setView('workflows'));
+await lightPage.waitForTimeout(250);
+await lightPage.screenshot({ path: path.join(outDir, 'light-workflows.png') });
+await lightPage.close();
 
 // Empty state with CTA: load a second page whose stub starts with no hosts.
 const page2 = await ctx.newPage();
