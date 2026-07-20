@@ -44,3 +44,5 @@ python3 -m http.server 8000
 ## デプロイ
 
 `web-lp/` 配下の静的ファイルをそのまま任意のホスティング(GitHub Pages / Cloudflare Pages / Vercel / Netlify など)へ配置するだけで公開できます。ビルドコマンドは不要です。
+
+Cloudflare Pages への具体的なビルド設定・手順は [`docs/deploy-cloudflare-pages.md`](../../docs/deploy-cloudflare-pages.md) にまとめています。
