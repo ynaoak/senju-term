@@ -70,7 +70,7 @@ html, body, #app { height: 100%; overflow: hidden; }
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: "Segoe UI", "Hiragino Sans", "Noto Sans CJK JP", sans-serif;
+  font-family: "Noto Sans", "Noto Sans JP", "Segoe UI", "Hiragino Sans", sans-serif;
   user-select: none;
 }
 
