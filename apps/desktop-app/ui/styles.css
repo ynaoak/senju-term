@@ -499,13 +499,44 @@ input[type="number"]::-webkit-outer-spin-button {
   color: var(--text-dim);
 }
 
-/* Command-block exit chip (OSC 133 shell integration): a small ✓ / ✗ badge
-   overlaid at the right edge of each finished command's prompt line. */
+/* Command-block toolbar (OSC 133 shell integration): copy / fold buttons +
+   a ✓ / ✗ exit chip, overlaid at the right edge of each finished command's
+   prompt line. The buttons fade in on hover; the chip always shows. */
+.term-block-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 100%;
+  padding: 0 2px;
+}
+.term-block-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease), background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.term-block-toolbar:hover .term-block-btn { opacity: 1; }
+.term-block-btn:focus-visible { opacity: 1; }
+.term-block-btn:hover { background: var(--bg-panel); color: var(--text); }
+.term-block-btn .ico { width: 12px; height: 12px; }
+.term-block-btn.fold.active .ico { transform: rotate(180deg); }
+.term-block-btn:disabled { opacity: 0 !important; pointer-events: none; }
+
 .term-block-chip {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  height: 100%;
+  height: 18px;
   padding: 0 6px;
   border-radius: 6px;
   font-size: 0.72rem;
@@ -517,6 +548,24 @@ input[type="number"]::-webkit-outer-spin-button {
 .term-block-chip.err { color: var(--danger); background: rgba(229, 83, 75, 0.16); }
 body.theme-light .term-block-chip.ok { background: rgba(0, 128, 107, 0.12); }
 body.theme-light .term-block-chip.err { background: rgba(207, 34, 46, 0.12); }
+
+/* Fold overlay: paints over a collapsed block's output rows on xterm's 'top'
+   decoration layer (see toggleFold() — the underlying rows are untouched). */
+.term-block-fold {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  background: var(--bg-panel);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.term-block-fold:hover { border-color: var(--accent-dim); color: var(--text); }
 
 /* ---------- in-terminal search bar (Ctrl+Shift+F) ---------- */
 /* Workflow quick-launch bar (shell view). */
