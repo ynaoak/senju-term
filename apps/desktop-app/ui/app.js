@@ -196,6 +196,16 @@ function confirmTrustHost(host, keyType, fingerprint) {
   });
 }
 
+// cmd.exe (and other console apps that never call `title`) report their own
+// full exe path as the window title (e.g. "C:\Windows\System32\cmd.exe") —
+// shorten that to just the exe name so thread tabs stay compact. Unix shell
+// titles use forward slashes and never hit this (no backslash), so they pass
+// through unchanged.
+function shortenExeTitle(title) {
+  const idx = title.lastIndexOf('\\');
+  return idx >= 0 ? title.slice(idx + 1) : title;
+}
+
 function createThread(info, paneIdx) {
   const hostEl = document.createElement('div');
   hostEl.className = 'term-host';
@@ -300,7 +310,7 @@ function createThread(info, paneIdx) {
   // unless the user gave it a custom name (task 2).
   term.onTitleChange((title) => {
     if (thread.customTitle || !title) return;
-    thread.title = title;
+    thread.title = shortenExeTitle(title);
     renderThreads();
   });
   state.threads.push(thread);
