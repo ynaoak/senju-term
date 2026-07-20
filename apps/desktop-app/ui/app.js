@@ -21,7 +21,7 @@ const state = {
   workflows: [],
   hosts: [],
   profiles: [],
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark' },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', shell_integration: true },
   renaming: null,      // thread id currently being renamed inline in the sidebar
 };
 
@@ -1355,6 +1355,7 @@ async function loadSettings() {
   f.font_family.value = state.settings.font_family;
   f.scrollback.value = state.settings.scrollback;
   f.theme.value = state.settings.theme === 'light' ? 'light' : 'dark';
+  f.shell_integration.checked = state.settings.shell_integration !== false;
   applyTheme();
 }
 
@@ -1368,6 +1369,7 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     font_family: f.elements.font_family.value.trim(),
     scrollback: parseInt(f.elements.scrollback.value, 10) || 10000,
     theme: f.elements.theme.value === 'light' ? 'light' : 'dark',
+    shell_integration: f.elements.shell_integration.checked,
   };
   await invoke('save_settings', { settings: state.settings });
   applyTheme();

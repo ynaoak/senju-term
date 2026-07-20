@@ -140,6 +140,11 @@
               <label>スクロールバック行数
                 <input name="scrollback" type="number" min="1000" max="100000" />
               </label>
+              <label class="checkbox-row">
+                <input name="shell_integration" type="checkbox" />
+                シェル統合を自動で有効化(コマンドブロック用)
+              </label>
+              <p class="field-hint">bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。</p>
             </fieldset>
             <fieldset class="settings-group">
               <legend>起動</legend>

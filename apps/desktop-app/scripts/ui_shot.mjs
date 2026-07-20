@@ -23,7 +23,7 @@ fs.mkdirSync(outDir, { recursive: true });
 const STUB = () => {
   const uid = () => 'id-' + Math.random().toString(36).slice(2, 9);
   const store = {
-    settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000 },
+    settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, shell_integration: true },
     workflows: [
       { id: uid(), name: 'デプロイ (staging)', description: 'ステージング環境へデプロイ', command: 'deploy {{env:staging}}', tags: ['ops', 'deploy'], shortcut: 'ctrl+shift+g', show_button: true },
       { id: uid(), name: 'ログ追尾', description: 'アプリログを tail', command: 'tail -f /var/log/app.log', tags: ['debug'], shortcut: '', show_button: true },

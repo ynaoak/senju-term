@@ -98,6 +98,12 @@ pub struct Settings {
     /// and future themes don't need a schema change.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Auto-inject OSC 133 shell-integration hooks (command-block markers)
+    /// into recognized local shells (bash/zsh/fish) at launch, without
+    /// touching the user's own rc files. Defaults on; older settings files
+    /// (missing the field) also default on.
+    #[serde(default = "default_shell_integration")]
+    pub shell_integration: bool,
 }
 
 fn default_font_size() -> u16 {
@@ -112,6 +118,10 @@ fn default_theme() -> String {
     "dark".into()
 }
 
+fn default_shell_integration() -> bool {
+    true
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -121,6 +131,7 @@ impl Default for Settings {
             font_family: String::new(),
             scrollback: default_scrollback(),
             theme: default_theme(),
+            shell_integration: default_shell_integration(),
         }
     }
 }
