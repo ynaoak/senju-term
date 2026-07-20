@@ -50,19 +50,15 @@
           >
         </div>
 
-        <!-- ミニターミナルのモック -->
-        <div class="term-mock" role="img" aria-label="Senju Term のターミナル画面イメージ">
-          <div class="term-bar">
-            <span class="dot dot-r"></span>
-            <span class="dot dot-y"></span>
-            <span class="dot dot-g"></span>
-            <span class="term-title">senju — zsh</span>
-          </div>
-          <pre class="term-body"><span class="c-dim"># ワークフローをワンキーで呼び出し</span>
-<span class="c-accent">➜</span> deploy <span class="c-dim">{{env:staging}}</span>
-<span class="c-accent">➜</span> ssh <span class="c-blue">prod-web-01</span>
-<span class="c-dim">TOFU: SHA256 フィンガープリントを確認して接続…</span>
-<span class="c-accent">➜</span> <span class="cursor">▋</span></pre>
+        <!-- 実機スクリーンショット(scripts/lp_shots.mjs で生成) -->
+        <div class="shot-frame shot-hero">
+          <img
+            src="./assets/screenshot-hero.png"
+            alt="Senju Term のシェル画面。ワークフローのクイック起動バー、固定したスレッド、コマンドブロックの成功/失敗チップを表示。"
+            width="2560"
+            height="1630"
+            loading="eager"
+          />
         </div>
       </div>
     </section>
@@ -139,14 +135,14 @@
             <li>シェル表示のクイック起動バーにボタン常時表示</li>
           </ul>
         </div>
-        <div class="panel">
-          <div class="panel-head">Workflows</div>
-          <ul class="wf-list">
-            <li><span class="wf-name">deploy</span><span class="wf-tag">ops</span></li>
-            <li><span class="wf-name">tail logs</span><span class="wf-tag">debug</span></li>
-            <li><span class="wf-name">db backup</span><span class="wf-tag">ops</span></li>
-            <li><span class="wf-name">git sync</span><span class="wf-tag">git</span></li>
-          </ul>
+        <div class="shot-frame">
+          <img
+            src="./assets/screenshot-workflows.png"
+            alt="Senju Term のワークフロー一覧画面。登録したコマンドテンプレートがタグ・ショートカット・クイックボタン付きで並ぶ。"
+            width="2560"
+            height="1061"
+            loading="lazy"
+          />
         </div>
       </div>
     </section>
@@ -154,13 +150,14 @@
     <!-- SSH -->
     <section id="ssh" class="section">
       <div class="wrap two-col">
-        <div class="panel">
-          <div class="panel-head">SSH 接続</div>
-          <dl class="ssh-props">
-            <dt>認証</dt><dd>パスワード / 秘密鍵 / ssh-agent / 鍵+パスワード併用</dd>
-            <dt>検証</dt><dd>known_hosts (TOFU)・SHA256 フィンガープリント確認</dd>
-            <dt>保存前</dt><dd>接続テストで到達性・認証・ホスト鍵を確認</dd>
-          </dl>
+        <div class="shot-frame">
+          <img
+            src="./assets/screenshot-ssh.png"
+            alt="Senju Term の SSH 接続一覧画面。登録したホストが認証方式のバッジ付きで並ぶ。"
+            width="2560"
+            height="617"
+            loading="lazy"
+          />
         </div>
         <div>
           <h2 class="section-title">SSH 接続管理</h2>
