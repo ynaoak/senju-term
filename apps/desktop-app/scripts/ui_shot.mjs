@@ -40,7 +40,15 @@ const STUB = () => {
       { id: 'p2', name: 'bash', command: '/bin/bash', args: ['-l'], cwd: '~/work' },
       { id: 'p3', name: 'Python REPL', command: 'python3', args: [], cwd: '' },
     ],
+    launchSets: [
+      { id: 'ls1', name: '毎朝の環境', items: [
+        { profile_id: 'p1', ssh_host_id: '', workflow_id: '' },
+        { profile_id: '', ssh_host_id: '', workflow_id: '' },
+      ] },
+    ],
   };
+  // Filled in below once host ids are known.
+  store.launchSets[0].items[1].ssh_host_id = store.hosts[0].id;
   store.settings.default_profile_id = 'p1';
 
   let sess = 0;
@@ -60,6 +68,9 @@ const STUB = () => {
           case 'list_workflows': return window.__EMPTY__ ? [] : store.workflows;
           case 'list_ssh_hosts': return store.hosts;
           case 'list_profiles': return store.profiles;
+          case 'list_launch_sets': return store.launchSets;
+          case 'save_launch_set': return args.set;
+          case 'delete_launch_set': return null;
           case 'workflow_placeholders': return [];
           case 'fill_workflow': return args.command;
           case 'create_local_session': {
@@ -101,7 +112,7 @@ const STUB = () => {
   };
 };
 
-const VIEWS = ['shell', 'workflows', 'hosts', 'profiles', 'settings'];
+const VIEWS = ['shell', 'workflows', 'hosts', 'profiles', 'launchsets', 'settings'];
 
 const browser = await chromium.launch({ executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' });
 const ctx = await browser.newContext({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 2 });
@@ -181,6 +192,14 @@ await page.keyboard.press('Escape');
 await page.evaluate(() => window.editHost && window.editHost(null));
 await page.waitForTimeout(200);
 await page.screenshot({ path: path.join(outDir, 'modal-host.png') });
+await page.keyboard.press('Escape');
+
+// Launch-set editor modal (repeatable item-list editor).
+await page.evaluate(() => window.editLaunchSet && window.editLaunchSet(null));
+await page.waitForTimeout(200);
+await page.evaluate(() => document.querySelector('.li-add')?.click());
+await page.waitForTimeout(100);
+await page.screenshot({ path: path.join(outDir, 'modal-launchset.png') });
 await page.keyboard.press('Escape');
 
 await page.keyboard.press('Escape');
