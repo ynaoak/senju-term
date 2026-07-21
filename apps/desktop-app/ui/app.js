@@ -638,6 +638,9 @@ const ICONS = {
   star: '<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
   x: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
   chevronDown: '<polyline points="6 9 12 15 18 9"/>',
+  chevronUp: '<polyline points="18 15 12 9 6 15"/>',
+  chevronRight: '<polyline points="9 18 15 12 9 6"/>',
+  folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
   search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
   split: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="12" x2="21" y2="12"/>',
   terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
@@ -932,65 +935,201 @@ function renderQuickbar() {
   }
 }
 
+/** Path segments of a workflow's group, trimmed and empties dropped.
+ * `"Deploy / Staging"` → `["Deploy", "Staging"]`; ungrouped → `[]`. */
+function groupParts(w) {
+  return (w.group || '').split('/').map((x) => x.trim()).filter(Boolean);
+}
+
+/** Canonical group path — the same normalization the backend stores. */
+function normalizeGroup(s) {
+  return (s || '').split('/').map((x) => x.trim()).filter(Boolean).join('/');
+}
+
+/** Distinct existing group paths (plus every ancestor prefix) for the editor's
+ * autocomplete, so users can nest under an existing group without retyping. */
+function existingGroups() {
+  const set = new Set();
+  for (const w of state.workflows) {
+    const parts = groupParts(w);
+    for (let i = 1; i <= parts.length; i++) set.add(parts.slice(0, i).join('/'));
+  }
+  return [...set].sort();
+}
+
+/** Builds a tree of workflows keyed by their `/`-separated group path. Each
+ * node keeps its direct `workflows` (in stored order) and child `groups` (in
+ * first-appearance order) — used by both the grouped panel and the right-click
+ * flyout menu. */
+function buildWorkflowTree(workflows) {
+  const root = { name: '', path: '', groups: new Map(), workflows: [] };
+  for (const w of workflows) {
+    let node = root;
+    for (const part of groupParts(w)) {
+      if (!node.groups.has(part)) {
+        node.groups.set(part, {
+          name: part,
+          path: node.path ? `${node.path}/${part}` : part,
+          groups: new Map(),
+          workflows: [],
+        });
+      }
+      node = node.groups.get(part);
+    }
+    node.workflows.push(w);
+  }
+  return root;
+}
+
+/** Total workflows in a node, including all descendants. */
+function countWorkflows(node) {
+  let n = node.workflows.length;
+  for (const [, c] of node.groups) n += countWorkflows(c);
+  return n;
+}
+
+/** Moves a workflow one slot up/down among its same-group siblings by swapping
+ * their positions in the stored order, then persisting via `reorder_workflows`.
+ * Swapping two same-group items never disturbs any other group's order. */
+async function moveWorkflow(w, dir) {
+  const groupOf = (x) => groupParts(x).join('/');
+  const g = groupOf(w);
+  const sibs = state.workflows.filter((x) => groupOf(x) === g);
+  const si = sibs.findIndex((x) => x.id === w.id);
+  const target = sibs[si + dir];
+  if (!target) return; // already at the group's edge
+  const ids = state.workflows.map((x) => x.id);
+  const ai = ids.indexOf(w.id);
+  const bi = ids.indexOf(target.id);
+  [ids[ai], ids[bi]] = [ids[bi], ids[ai]];
+  try {
+    await invoke('reorder_workflows', { ids });
+    await refreshWorkflows();
+  } catch (e) {
+    toast(`並べ替えに失敗: ${e}`, true);
+  }
+}
+
+/** One workflow card. `opts.showGroup` adds a group badge (used in the flat
+ * search view); `opts.moveUp`/`opts.moveDown` add ▲▼ reorder buttons, each
+ * disabled at the group's edge. */
+function workflowCard(w, opts = {}) {
+  const li = document.createElement('li');
+  li.className = 'card';
+  li.innerHTML = `
+    <h4></h4><div class="desc"></div><code></code>
+    <div class="wf-badges"></div>
+    <div class="row">
+      <button class="accent-btn run">${icon('play')}実行</button>
+      <button class="ghost-btn insert">${icon('insert')}挿入</button>
+      <button class="ghost-btn edit">${icon('edit')}編集</button>
+      <button class="danger-btn del">${icon('trash')}削除</button>
+    </div>`;
+  li.querySelector('h4').textContent = w.name;
+  li.querySelector('.desc').textContent = w.description || '';
+  li.querySelector('code').textContent = w.command;
+  const badges = li.querySelector('.wf-badges');
+  if (opts.showGroup && groupParts(w).length) {
+    const g = document.createElement('span');
+    g.className = 'wf-badge wf-group-badge';
+    g.innerHTML = `${icon('folder')}<span></span>`;
+    g.querySelector('span').textContent = groupParts(w).join(' / ');
+    badges.appendChild(g);
+  }
+  for (const tag of w.tags || []) {
+    const s = document.createElement('span');
+    s.className = 'tag';
+    s.textContent = tag;
+    badges.appendChild(s);
+  }
+  if (w.shortcut) {
+    const kbd = document.createElement('kbd');
+    kbd.textContent = prettyShortcut(w.shortcut);
+    badges.appendChild(kbd);
+  }
+  if (w.show_button) {
+    const b = document.createElement('span');
+    b.className = 'wf-badge';
+    b.innerHTML = `${icon('star')}クイックボタン`;
+    badges.appendChild(b);
+  }
+  if (opts.moveUp !== undefined || opts.moveDown !== undefined) {
+    const reorder = document.createElement('div');
+    reorder.className = 'wf-reorder';
+    const up = document.createElement('button');
+    up.className = 'icon-btn';
+    up.title = '上へ移動';
+    up.innerHTML = icon('chevronUp');
+    up.disabled = !opts.moveUp;
+    up.addEventListener('click', () => moveWorkflow(w, -1));
+    const down = document.createElement('button');
+    down.className = 'icon-btn';
+    down.title = '下へ移動';
+    down.innerHTML = icon('chevronDown');
+    down.disabled = !opts.moveDown;
+    down.addEventListener('click', () => moveWorkflow(w, 1));
+    reorder.appendChild(up);
+    reorder.appendChild(down);
+    li.querySelector('.row').appendChild(reorder);
+  }
+  li.querySelector('.run').addEventListener('click', () => runWorkflow(w, true));
+  li.querySelector('.insert').addEventListener('click', () => runWorkflow(w, false));
+  li.querySelector('.edit').addEventListener('click', () => editWorkflow(w));
+  li.querySelector('.del').addEventListener('click', async () => {
+    if (!(await confirmModal(`「${w.name}」を削除しますか?`))) return;
+    await invoke('delete_workflow', { id: w.id });
+    refreshWorkflows();
+  });
+  return li;
+}
+
+/** Renders a group node into the panel: its direct workflows (reorderable
+ * among themselves), then a header + recursion for each subgroup. */
+function renderWorkflowNode(list, node, depth) {
+  node.workflows.forEach((w, i) => {
+    list.appendChild(workflowCard(w, {
+      moveUp: i > 0,
+      moveDown: i < node.workflows.length - 1,
+    }));
+  });
+  for (const [, child] of node.groups) {
+    const head = document.createElement('li');
+    head.className = 'wf-group-head';
+    head.style.setProperty('--depth', depth);
+    head.innerHTML = `${icon('folder')}<span class="wf-group-name"></span><span class="wf-group-count"></span>`;
+    head.querySelector('.wf-group-name').textContent = child.name;
+    head.querySelector('.wf-group-count').textContent = countWorkflows(child);
+    list.appendChild(head);
+    renderWorkflowNode(list, child, depth + 1);
+  }
+}
+
 function renderWorkflows() {
   const q = $('#wf-search').value.trim().toLowerCase();
   const list = $('#wf-list');
   list.innerHTML = '';
-  const items = state.workflows.filter((w) =>
-    !q || [w.name, w.description, w.command, (w.tags || []).join(' ')].join(' ').toLowerCase().includes(q));
-  if (!items.length) {
-    list.appendChild(q
-      ? emptyState('search', '一致するワークフローがありません', `「${q}」に一致する項目は見つかりませんでした。`)
-      : emptyState('zap', 'ワークフローがまだありません',
-          'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。',
-          { label: 'ワークフローを登録', onClick: () => editWorkflow(null) }));
+  if (!state.workflows.length) {
+    list.appendChild(emptyState('zap', 'ワークフローがまだありません',
+      'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。',
+      { label: 'ワークフローを登録', onClick: () => editWorkflow(null) }));
     return;
   }
-  for (const w of items) {
-    const li = document.createElement('li');
-    li.className = 'card';
-    li.innerHTML = `
-      <h4></h4><div class="desc"></div><code></code>
-      <div class="wf-badges"></div>
-      <div class="row">
-        <button class="accent-btn run">${icon('play')}実行</button>
-        <button class="ghost-btn insert">${icon('insert')}挿入</button>
-        <button class="ghost-btn edit">${icon('edit')}編集</button>
-        <button class="danger-btn del">${icon('trash')}削除</button>
-      </div>`;
-    li.querySelector('h4').textContent = w.name;
-    li.querySelector('.desc').textContent = w.description || '';
-    li.querySelector('code').textContent = w.command;
-    // Tags, shortcut and the quick-button flag all flow in one wrapping meta
-    // row so the card reads as a single block rather than stacked ribbons.
-    const badges = li.querySelector('.wf-badges');
-    for (const tag of w.tags || []) {
-      const s = document.createElement('span');
-      s.className = 'tag';
-      s.textContent = tag;
-      badges.appendChild(s);
+  // Searching flattens across groups (reordering makes no sense in a filtered
+  // view) and shows each match's group as a badge.
+  if (q) {
+    const items = state.workflows.filter((w) =>
+      [w.name, w.description, w.command, w.group, (w.tags || []).join(' ')]
+        .join(' ').toLowerCase().includes(q));
+    if (!items.length) {
+      list.appendChild(emptyState('search', '一致するワークフローがありません',
+        `「${q}」に一致する項目は見つかりませんでした。`));
+      return;
     }
-    if (w.shortcut) {
-      const kbd = document.createElement('kbd');
-      kbd.textContent = prettyShortcut(w.shortcut);
-      badges.appendChild(kbd);
-    }
-    if (w.show_button) {
-      const b = document.createElement('span');
-      b.className = 'wf-badge';
-      b.innerHTML = `${icon('star')}クイックボタン`;
-      badges.appendChild(b);
-    }
-    li.querySelector('.run').addEventListener('click', () => runWorkflow(w, true));
-    li.querySelector('.insert').addEventListener('click', () => runWorkflow(w, false));
-    li.querySelector('.edit').addEventListener('click', () => editWorkflow(w));
-    li.querySelector('.del').addEventListener('click', async () => {
-      if (!(await confirmModal(`「${w.name}」を削除しますか?`))) return;
-      await invoke('delete_workflow', { id: w.id });
-      refreshWorkflows();
-    });
-    list.appendChild(li);
+    for (const w of items) list.appendChild(workflowCard(w, { showGroup: true }));
+    return;
   }
+  // Unfiltered: grouped, hierarchical view with per-group reordering.
+  renderWorkflowNode(list, buildWorkflowTree(state.workflows), 0);
 }
 
 /** Fills placeholders (prompting the user when the template has any) and
@@ -1015,6 +1154,8 @@ function editWorkflow(w) {
       fieldSection('基本情報'),
       field('名前', 'name', w?.name || '', { required: true }),
       field('説明', 'description', w?.description || ''),
+      field('グループ (階層は / 区切り。例: Deploy/Staging)', 'group', w?.group || '',
+        { list: existingGroups(), placeholder: '未入力 = 未分類' }),
       field('タグ (カンマ区切り)', 'tags', (w?.tags || []).join(', ')),
       fieldSection('コマンド'),
       fieldTextarea('テンプレート ( {{名前}} / {{名前:既定値}} でプレースホルダ )', 'command', w?.command || '', { required: true }),
@@ -1030,6 +1171,7 @@ function editWorkflow(w) {
           description: values.description.trim(),
           command: values.command,
           tags: values.tags.split(',').map((t) => t.trim()).filter(Boolean),
+          group: normalizeGroup(values.group),
           shortcut: values.shortcut || '',
           show_button: !!values.show_button,
         },
@@ -1669,7 +1811,7 @@ function paletteEntries() {
   for (const w of state.workflows) {
     entries.push({
       kind: 'wf',
-      label: w.name,
+      label: groupParts(w).length ? `${groupParts(w).join('/')} / ${w.name}` : w.name,
       detail: w.command,
       run: () => runWorkflow(w, true),
       insert: () => runWorkflow(w, false),
@@ -1892,6 +2034,18 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
       if (f.placeholder) el.placeholder = f.placeholder;
       // Keep passwords/passphrases out of the browser's autofill store.
       if (el.type === 'password') el.autocomplete = 'new-password';
+      // Optional autocomplete suggestions (e.g. existing workflow groups).
+      if (Array.isArray(f.list) && f.list.length) {
+        const dl = document.createElement('datalist');
+        dl.id = `dl-${f.name}`;
+        for (const opt of f.list) {
+          const o = document.createElement('option');
+          o.value = opt;
+          dl.appendChild(o);
+        }
+        el.setAttribute('list', dl.id);
+        label.appendChild(dl);
+      }
     }
     el.name = f.name;
     if (f.required) el.required = true;
@@ -2186,77 +2340,163 @@ function openSidebarPanel(name) {
 
 /* ---------------- terminal right-click menu (workflow launcher) ---------------- */
 
+// The open menu chain: index 0 is the root (#term-context-menu), each deeper
+// index is a flyout submenu element appended to <body>. `level` in the helpers
+// below is an index into this array.
+let ctxMenuStack = [];
+
 /** Right-clicking a terminal pane opens a workflow launcher at the cursor.
- * Click runs the workflow in that pane; Shift+click only inserts the filled
- * command without executing it (same distinction as the palette). */
+ * Workflows are grouped: each group is a submenu you hover/arrow into, mirroring
+ * the panel's hierarchy. Click runs the workflow in that pane; Shift+click only
+ * inserts the filled command without executing it (same as the palette). */
 function openTermContextMenu(x, y) {
+  closeTermContextMenu();
   const menu = $('#term-context-menu');
-  menu.innerHTML = '';
-
-  const label = document.createElement('div');
-  label.className = 'popup-label';
-  label.textContent = 'ワークフローを実行';
-  menu.appendChild(label);
-
-  if (!state.workflows.length) {
-    const empty = document.createElement('div');
-    empty.className = 'popup-empty';
-    empty.textContent = 'ワークフローが未登録です';
-    menu.appendChild(empty);
-  }
-  for (const w of state.workflows) {
-    const item = document.createElement('button');
-    item.className = 'popup-item';
-    item.setAttribute('role', 'menuitem');
-    item.innerHTML = `
-      <span class="pi-line">${icon('play')}<span class="pi-name"></span></span>
-      <span class="pi-cmd"></span>`;
-    item.querySelector('.pi-name').textContent = w.name;
-    if (w.shortcut) {
-      const kbd = document.createElement('kbd');
-      kbd.textContent = prettyShortcut(w.shortcut);
-      item.querySelector('.pi-line').appendChild(kbd);
-    }
-    item.querySelector('.pi-cmd').textContent = w.command;
-    item.title = (w.description || w.command) + ' — Shift+クリックで実行せず挿入';
-    item.addEventListener('click', (ev) => {
-      closeTermContextMenu();
-      runWorkflow(w, !ev.shiftKey);
-    });
-    menu.appendChild(item);
-  }
-
-  const sep = document.createElement('div');
-  sep.className = 'popup-sep';
-  menu.appendChild(sep);
-  const manage = document.createElement('button');
-  manage.className = 'popup-item muted';
-  manage.setAttribute('role', 'menuitem');
-  manage.textContent = state.workflows.length ? '⚙ ワークフローを管理…' : '＋ ワークフローを登録…';
-  manage.addEventListener('click', () => {
-    closeTermContextMenu();
-    if (state.workflows.length) setView('workflows');
-    else editWorkflow(null);
-  });
-  menu.appendChild(manage);
+  ctxMenuStack = [menu];
+  fillWorkflowMenu(menu, buildWorkflowTree(state.workflows), 0, true);
 
   // Position at the cursor, clamped inside the window (unhide first so the
   // menu has measurable dimensions).
   menu.classList.remove('hidden');
   menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
-  // Focus the first row so ↑/↓/Enter/Escape work immediately.
+  // Focus the first row so ↑/↓/→/←/Enter/Escape work immediately.
   menu.querySelector('button.popup-item')?.focus();
   setTimeout(() => window.addEventListener('mousedown', termCtxOutsideClick), 0);
 }
 
+/** Populates a menu element from a workflow-tree node: subgroups (as flyout
+ * openers) first, then the node's own workflows. The root also gets the header
+ * label and the manage/register footer. */
+function fillWorkflowMenu(menuEl, node, level, isRoot) {
+  menuEl.innerHTML = '';
+  if (isRoot) {
+    const label = document.createElement('div');
+    label.className = 'popup-label';
+    label.textContent = 'ワークフローを実行';
+    menuEl.appendChild(label);
+    if (!state.workflows.length) {
+      const empty = document.createElement('div');
+      empty.className = 'popup-empty';
+      empty.textContent = 'ワークフローが未登録です';
+      menuEl.appendChild(empty);
+    }
+  }
+  for (const [, child] of node.groups) menuEl.appendChild(groupMenuItem(child, level));
+  for (const w of node.workflows) menuEl.appendChild(workflowMenuItem(w, level));
+  if (isRoot) {
+    const sep = document.createElement('div');
+    sep.className = 'popup-sep';
+    menuEl.appendChild(sep);
+    const manage = document.createElement('button');
+    manage.className = 'popup-item muted';
+    manage.setAttribute('role', 'menuitem');
+    manage.textContent = state.workflows.length ? '⚙ ワークフローを管理…' : '＋ ワークフローを登録…';
+    manage.addEventListener('mouseenter', () => closeSubmenusFrom(1));
+    manage.addEventListener('click', () => {
+      closeTermContextMenu();
+      if (state.workflows.length) setView('workflows');
+      else editWorkflow(null);
+    });
+    menuEl.appendChild(manage);
+  }
+}
+
+/** A leaf (runnable) workflow row. Hovering it collapses any deeper submenu. */
+function workflowMenuItem(w, level) {
+  const item = document.createElement('button');
+  item.className = 'popup-item';
+  item.setAttribute('role', 'menuitem');
+  item.innerHTML = `
+    <span class="pi-line">${icon('play')}<span class="pi-name"></span></span>
+    <span class="pi-cmd"></span>`;
+  item.querySelector('.pi-name').textContent = w.name;
+  if (w.shortcut) {
+    const kbd = document.createElement('kbd');
+    kbd.textContent = prettyShortcut(w.shortcut);
+    item.querySelector('.pi-line').appendChild(kbd);
+  }
+  item.querySelector('.pi-cmd').textContent = w.command;
+  item.title = (w.description || w.command) + ' — Shift+クリックで実行せず挿入';
+  item.addEventListener('mouseenter', () => closeSubmenusFrom(level + 1));
+  item.addEventListener('click', (ev) => {
+    closeTermContextMenu();
+    runWorkflow(w, !ev.shiftKey);
+  });
+  return item;
+}
+
+/** A group row that opens a flyout submenu on hover / click / →. */
+function groupMenuItem(node, level) {
+  const item = document.createElement('button');
+  item.className = 'popup-item popup-group';
+  item.setAttribute('role', 'menuitem');
+  item.setAttribute('aria-haspopup', 'true');
+  item.innerHTML = `
+    <span class="pi-line">${icon('folder')}<span class="pi-name"></span><span class="pi-count"></span>${icon('chevronRight')}</span>`;
+  item.querySelector('.pi-name').textContent = node.name;
+  item.querySelector('.pi-count').textContent = countWorkflows(node);
+  const open = () => openWorkflowSubmenu(item, node, level + 1);
+  item._openSubmenu = open;
+  item.addEventListener('mouseenter', open);
+  item.addEventListener('click', open);
+  return item;
+}
+
+/** Opens (or replaces) the flyout submenu for a group at `level`, positioned to
+ * the parent item's right and flipped left / clamped up when it would overflow. */
+function openWorkflowSubmenu(parentItem, node, level) {
+  closeSubmenusFrom(level);
+  ctxMenuStack[level - 1]?.querySelectorAll('.popup-group.open')
+    .forEach((el) => el.classList.remove('open'));
+  parentItem.classList.add('open');
+
+  const sub = document.createElement('div');
+  sub.className = 'popup-menu term-context-submenu';
+  sub.setAttribute('role', 'menu');
+  sub._parentItem = parentItem;
+  document.body.appendChild(sub);
+  fillWorkflowMenu(sub, node, level, false);
+  sub.addEventListener('keydown', termMenuKeydown);
+
+  const r = parentItem.getBoundingClientRect();
+  let left = r.right - 4;
+  if (left + sub.offsetWidth > window.innerWidth - 8) left = Math.max(8, r.left - sub.offsetWidth + 4);
+  let top = r.top - 5;
+  if (top + sub.offsetHeight > window.innerHeight - 8) top = Math.max(8, window.innerHeight - sub.offsetHeight - 8);
+  sub.style.left = `${left}px`;
+  sub.style.top = `${top}px`;
+
+  ctxMenuStack[level] = sub;
+  ctxMenuStack.length = level + 1;
+  return sub;
+}
+
+/** Removes every open submenu at `level` or deeper, and clears the "open"
+ * highlight on the parent menu's group rows. Never removes the root (index 0). */
+function closeSubmenusFrom(level) {
+  const lvl = Math.max(1, level);
+  ctxMenuStack[lvl - 1]?.querySelectorAll?.('.popup-group.open')
+    .forEach((el) => el.classList.remove('open'));
+  for (let i = ctxMenuStack.length - 1; i >= lvl; i--) {
+    ctxMenuStack[i]?.remove();
+    ctxMenuStack[i] = undefined;
+  }
+  ctxMenuStack.length = Math.min(ctxMenuStack.length, lvl);
+}
+
 function closeTermContextMenu() {
-  $('#term-context-menu').classList.add('hidden');
+  for (let i = ctxMenuStack.length - 1; i >= 1; i--) ctxMenuStack[i]?.remove();
+  ctxMenuStack = [];
+  const root = $('#term-context-menu');
+  root.classList.add('hidden');
+  root.querySelectorAll('.popup-group.open').forEach((el) => el.classList.remove('open'));
   window.removeEventListener('mousedown', termCtxOutsideClick);
 }
 
 function termCtxOutsideClick(ev) {
-  if (!$('#term-context-menu').contains(ev.target)) closeTermContextMenu();
+  if (ctxMenuStack.some((m) => m && m.contains(ev.target))) return;
+  closeTermContextMenu();
 }
 
 $('#terminals').addEventListener('contextmenu', (ev) => {
@@ -2281,9 +2521,15 @@ document.addEventListener('contextmenu', (ev) => {
   ev.preventDefault();
 });
 
-$('#term-context-menu').addEventListener('keydown', (ev) => {
-  const items = [...ev.currentTarget.querySelectorAll('button.popup-item')];
+/** Keyboard nav shared by the root menu and every flyout submenu: ↑/↓ move
+ * within a menu (wrapping), → opens a group's submenu, ← returns to the parent,
+ * Escape closes everything. Enter/Space activate the focused row natively. */
+function termMenuKeydown(ev) {
+  const menu = ev.currentTarget;
+  const items = [...menu.querySelectorAll('button.popup-item')];
   const idx = items.indexOf(document.activeElement);
+  const cur = items[idx];
+  const level = ctxMenuStack.indexOf(menu);
   if (ev.key === 'Escape') {
     ev.preventDefault();
     closeTermContextMenu();
@@ -2294,8 +2540,21 @@ $('#term-context-menu').addEventListener('keydown', (ev) => {
   } else if (ev.key === 'ArrowUp') {
     ev.preventDefault();
     (items[idx - 1] || items[items.length - 1])?.focus();
+  } else if (ev.key === 'ArrowRight' || (ev.key === 'Enter' && cur?.classList.contains('popup-group'))) {
+    if (cur?.classList.contains('popup-group')) {
+      ev.preventDefault();
+      cur._openSubmenu().querySelector('button.popup-item')?.focus();
+    }
+  } else if (ev.key === 'ArrowLeft') {
+    if (level > 0) {
+      ev.preventDefault();
+      const parentItem = menu._parentItem;
+      closeSubmenusFrom(level);
+      parentItem?.focus();
+    }
   }
-});
+}
+$('#term-context-menu').addEventListener('keydown', termMenuKeydown);
 
 // A stale menu position makes no sense after a resize — just close it.
 window.addEventListener('resize', closeTermContextMenu);

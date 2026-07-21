@@ -25,10 +25,12 @@ const STUB = () => {
   const store = {
     settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, shell_integration: true },
     workflows: [
-      { id: uid(), name: 'デプロイ (staging)', description: 'ステージング環境へデプロイ', command: 'deploy {{env:staging}}', tags: ['ops', 'deploy'], shortcut: 'ctrl+shift+g', show_button: true },
-      { id: uid(), name: 'ログ追尾', description: 'アプリログを tail', command: 'tail -f /var/log/app.log', tags: ['debug'], shortcut: '', show_button: true },
-      { id: uid(), name: 'DB バックアップ', description: '', command: 'pg_dump {{db}} > backup.sql', tags: ['ops'], shortcut: '', show_button: false },
-      { id: uid(), name: 'git 同期', description: 'fetch & rebase', command: 'git fetch && git rebase origin/main', tags: ['git'], shortcut: 'alt+g', show_button: false },
+      { id: uid(), name: 'デプロイ (staging)', description: 'ステージング環境へデプロイ', command: 'deploy {{env:staging}}', tags: ['ops', 'deploy'], group: 'Deploy/Staging', shortcut: 'ctrl+shift+g', show_button: true },
+      { id: uid(), name: 'デプロイ (本番)', description: '本番環境へデプロイ', command: 'deploy {{env:prod}}', tags: ['ops', 'deploy'], group: 'Deploy/本番', shortcut: '', show_button: false },
+      { id: uid(), name: 'ログ追尾', description: 'アプリログを tail', command: 'tail -f /var/log/app.log', tags: ['debug'], group: 'Deploy', shortcut: '', show_button: true },
+      { id: uid(), name: 'DB バックアップ', description: '', command: 'pg_dump {{db}} > backup.sql', tags: ['ops'], group: 'DB', shortcut: '', show_button: false },
+      { id: uid(), name: 'DB 復元', description: '', command: 'psql {{db}} < backup.sql', tags: ['ops'], group: 'DB', shortcut: '', show_button: false },
+      { id: uid(), name: 'git 同期', description: 'fetch & rebase', command: 'git fetch && git rebase origin/main', tags: ['git'], group: '', shortcut: 'alt+g', show_button: false },
     ],
     hosts: [
       { id: uid(), name: 'prod-web-01', host: '10.0.1.11', port: 22, username: 'deploy', auth_method: 'key', key_path: '~/.ssh/id_ed25519' },
@@ -94,6 +96,11 @@ const STUB = () => {
           }
           case 'session_write': case 'session_resize': case 'session_kill': return null;
           case 'save_workflow': case 'delete_workflow': return null;
+          case 'reorder_workflows': {
+            const byId = new Map(store.workflows.map((w) => [w.id, w]));
+            store.workflows = args.ids.map((id) => byId.get(id)).filter(Boolean);
+            return null;
+          }
           case 'save_ssh_host': case 'delete_ssh_host': return null;
           case 'save_profile': case 'delete_profile': return null;
           case 'open_external': return null;
@@ -203,6 +210,22 @@ await page.screenshot({ path: path.join(outDir, 'modal-launchset.png') });
 await page.keyboard.press('Escape');
 
 await page.keyboard.press('Escape');
+
+// Right-click workflow launcher with its group flyout(s) open — the
+// hierarchical menu. Dispatch mouseenter (not real hover) so the flyouts open
+// deterministically regardless of cursor position.
+await page.evaluate(() => window.setView && window.setView('shell'));
+await page.waitForTimeout(150);
+await page.evaluate(() => window.openTermContextMenu && window.openTermContextMenu(360, 200));
+await page.waitForTimeout(120);
+await page.evaluate(() =>
+  document.querySelector('#term-context-menu .popup-group')?.dispatchEvent(new MouseEvent('mouseenter')));
+await page.waitForTimeout(120);
+await page.evaluate(() =>
+  document.querySelector('.term-context-submenu .popup-group')?.dispatchEvent(new MouseEvent('mouseenter')));
+await page.waitForTimeout(150);
+await page.screenshot({ path: path.join(outDir, 'workflow-menu.png') });
+await page.evaluate(() => window.closeTermContextMenu && window.closeTermContextMenu());
 
 // Keyboard shortcut cheat sheet.
 await page.evaluate(() => window.openShortcuts && window.openShortcuts());

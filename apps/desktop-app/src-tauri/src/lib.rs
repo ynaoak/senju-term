@@ -273,6 +273,14 @@ fn delete_workflow(state: State<AppState>, id: String) -> CmdResult<()> {
 }
 
 #[tauri::command]
+fn reorder_workflows(state: State<AppState>, ids: Vec<String>) -> CmdResult<()> {
+    state
+        .stores
+        .reorder_workflows(&ids)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn workflow_placeholders(command: String) -> Vec<template::Placeholder> {
     template::extract_placeholders(&command)
 }
@@ -460,6 +468,7 @@ pub fn run() {
             list_workflows,
             save_workflow,
             delete_workflow,
+            reorder_workflows,
             workflow_placeholders,
             fill_workflow,
             list_ssh_hosts,

@@ -58,6 +58,19 @@ impl Stores {
         self.write("workflows", &items)
     }
 
+    /// Reorders the stored workflows to match the given id order. Ids not in
+    /// the store are ignored; workflows whose id is absent from `ids` are kept
+    /// (in their existing relative order) at the end — so a stale or partial
+    /// list from the UI can never drop a workflow. The sort is stable.
+    pub fn reorder_workflows(&self, ids: &[String]) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items = self.read("workflows", default_workflows);
+        let rank: std::collections::HashMap<&str, usize> =
+            ids.iter().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
+        items.sort_by_key(|w| rank.get(w.id.as_str()).copied().unwrap_or(usize::MAX));
+        self.write("workflows", &items)
+    }
+
     // -- SSH hosts ------------------------------------------------------------
 
     pub fn list_ssh_hosts(&self) -> Vec<SshHost> {
@@ -285,33 +298,47 @@ fn default_profiles() -> Vec<Profile> {
 
 /// Seeded on first launch so the workflows panel isn't empty.
 fn default_workflows() -> Vec<Workflow> {
-    let wf = |name: &str, description: &str, command: &str, tags: &[&str]| Workflow {
-        id: uuid::Uuid::new_v4().to_string(),
-        name: name.into(),
-        description: description.into(),
-        command: command.into(),
-        tags: tags.iter().map(|t| t.to_string()).collect(),
-        shortcut: String::new(),
-        show_button: false,
+    // Ids are stable strings (not random UUIDs, like the seeded profiles) so
+    // the seeded set is identical across every read-before-first-persist.
+    // Otherwise a delete/reorder/update targeting a seed — before any save has
+    // written the file — would read a *freshly* re-seeded set with different
+    // ids, silently mismatch, and lose the change.
+    let wf = |id: &str, name: &str, description: &str, command: &str, tags: &[&str], group: &str| {
+        Workflow {
+            id: format!("seed:{id}"),
+            name: name.into(),
+            description: description.into(),
+            command: command.into(),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            group: group.into(),
+            shortcut: String::new(),
+            show_button: false,
+        }
     };
     vec![
         wf(
+            "git-log",
             "Git log graph",
             "Compact commit graph for the current repo",
             "git log --oneline --graph --decorate -n {{count:20}}",
             &["git"],
+            "Git",
         ),
         wf(
+            "find-large",
             "Find large files",
             "List the biggest files under a directory",
             "du -ah {{path:.}} | sort -rh | head -n {{count:20}}",
             &["disk"],
+            "システム",
         ),
         wf(
+            "search-files",
             "Search in files",
             "Recursive grep with line numbers",
             "grep -rn \"{{pattern}}\" {{path:.}}",
             &["search"],
+            "システム",
         ),
     ]
 }
@@ -341,6 +368,7 @@ mod tests {
                 description: String::new(),
                 command: "docker ps -a".into(),
                 tags: vec![],
+                group: String::new(),
                 shortcut: String::new(),
                 show_button: false,
             })
@@ -350,6 +378,28 @@ mod tests {
 
         s.delete_workflow(&saved.id).unwrap();
         assert!(!s.list_workflows().iter().any(|w| w.id == saved.id));
+    }
+
+    #[test]
+    fn reorder_workflows_reorders_and_keeps_unlisted() {
+        let (_d, s) = stores();
+        let ids: Vec<String> = s.list_workflows().iter().map(|w| w.id.clone()).collect();
+        assert!(ids.len() >= 3);
+
+        // Reverse the first three; pass only those ids. The unlisted remainder
+        // (none here, but the contract) stays at the end.
+        let reversed: Vec<String> = ids.iter().rev().cloned().collect();
+        s.reorder_workflows(&reversed).unwrap();
+        let after: Vec<String> = s.list_workflows().iter().map(|w| w.id.clone()).collect();
+        assert_eq!(after, reversed);
+
+        // A partial list moves the named ids to the front (in the given order)
+        // and never drops the ones it omits.
+        let only_last = vec![ids[0].clone()]; // ids[0] was originally first
+        s.reorder_workflows(&only_last).unwrap();
+        let after2: Vec<String> = s.list_workflows().iter().map(|w| w.id.clone()).collect();
+        assert_eq!(after2[0], ids[0]);
+        assert_eq!(after2.len(), ids.len(), "no workflow may be dropped");
     }
 
     #[test]

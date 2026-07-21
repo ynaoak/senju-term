@@ -13,6 +13,13 @@ pub struct Workflow {
     pub command: String,
     #[serde(default)]
     pub tags: Vec<String>,
+    /// Group path this workflow belongs to, used to organize the panel and to
+    /// build the right-click launcher's hierarchical (flyout) menu. Nesting is
+    /// expressed with `/` — e.g. `"Git"` or `"Deploy/Staging"`. Empty means
+    /// ungrouped (shown at the top level). The order of workflows within a
+    /// group follows their order in the stored list (see `reorder_workflows`).
+    #[serde(default)]
+    pub group: String,
     /// Optional keyboard shortcut that runs this workflow, stored normalized
     /// as e.g. `"ctrl+shift+g"`. Empty means no shortcut.
     #[serde(default)]
