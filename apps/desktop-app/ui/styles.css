@@ -711,6 +711,8 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
      buttons aligned across cards of differing content height in a row. */
   display: flex;
   flex-direction: column;
+  /* Anchors the drag drop-indicator pseudo-elements. */
+  position: relative;
 }
 .card:hover { border-color: #33404f; box-shadow: var(--shadow-md); transform: translateY(-1px); }
 
@@ -779,6 +781,27 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 .wf-reorder .icon-btn .ico { width: 14px; height: 14px; }
 .wf-reorder .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .wf-reorder .icon-btn:disabled:hover { background: var(--bg-raised); border-color: var(--border); }
+
+/* Drag handle: grab cursor, and its dots use the accent on hover. */
+.wf-drag-handle { cursor: grab; }
+.wf-drag-handle:active { cursor: grabbing; }
+.wf-drag-handle:hover .ico { color: var(--accent); }
+
+/* The card being dragged fades; drop targets show an accent insertion line on
+   the edge the drop would land against. */
+.card.dragging { opacity: 0.45; }
+.card.drop-before::before, .card.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--bg), 0 0 8px var(--accent-glow);
+}
+.card.drop-before::before { top: -8px; }
+.card.drop-after::after { bottom: -8px; }
 
 /* Group header row in the workflows panel, indented by nesting depth. It spans
    the whole grid row so the cards that follow start fresh underneath it. */
