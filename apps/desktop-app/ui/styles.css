@@ -773,6 +773,37 @@ body.row-resizing .pane-body { pointer-events: none; user-select: none; }
 .card .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
 .card .row button { font-size: 0.82rem; padding: 4px 9px; }
 
+/* Reorder ▲▼ pair, pushed to the right edge of a card's action row. */
+.wf-reorder { margin-left: auto; display: inline-flex; gap: 2px; }
+.wf-reorder .icon-btn { padding: 4px 6px; }
+.wf-reorder .icon-btn .ico { width: 14px; height: 14px; }
+.wf-reorder .icon-btn:disabled { opacity: 0.35; cursor: default; }
+.wf-reorder .icon-btn:disabled:hover { background: var(--bg-raised); border-color: var(--border); }
+
+/* Group header row in the workflows panel, indented by nesting depth. It spans
+   the whole grid row so the cards that follow start fresh underneath it. */
+.wf-group-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 6px 0 2px;
+  padding-left: calc(var(--depth, 0) * 16px);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+}
+.wf-group-head .ico { width: 14px; height: 14px; color: var(--accent); flex: 0 0 auto; }
+.wf-group-head .wf-group-name { color: var(--text); font-weight: 600; }
+.wf-group-head .wf-group-count {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.wf-group-badge { color: var(--text-dim) !important; background: var(--bg-raised) !important; }
+
 .tag {
   display: inline-block;
   background: rgba(137, 87, 229, 0.18);
@@ -1105,16 +1136,30 @@ label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 .popup-empty { color: var(--text-dim); font-size: 0.85rem; padding: 6px 10px 8px; }
 
 /* ---------- terminal right-click menu (workflow launcher) ---------- */
-#term-context-menu {
+#term-context-menu, .term-context-submenu {
   width: 264px;
   max-height: min(440px, 70vh);
   overflow-y: auto;
 }
-#term-context-menu .pi-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
-#term-context-menu .pi-line .ico { width: 12px; height: 12px; color: var(--accent); flex: 0 0 auto; }
-#term-context-menu .pi-name { flex: 1; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#term-context-menu .pi-line kbd { font-size: 0.68rem; flex: 0 0 auto; }
-#term-context-menu .pi-cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#term-context-menu .pi-line, .term-context-submenu .pi-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+#term-context-menu .pi-line .ico, .term-context-submenu .pi-line .ico { width: 12px; height: 12px; color: var(--accent); flex: 0 0 auto; }
+#term-context-menu .pi-name, .term-context-submenu .pi-name { flex: 1; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#term-context-menu .pi-line kbd, .term-context-submenu .pi-line kbd { font-size: 0.68rem; flex: 0 0 auto; }
+#term-context-menu .pi-cmd, .term-context-submenu .pi-cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A group row: the folder + name sit left, the count and ▸ chevron trail right.
+   The chevron's default accent color would fight the folder — dim it. */
+.popup-group .pi-line .pi-count {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.popup-group .pi-line > .ico:last-child { color: var(--text-dim); margin-left: 2px; }
+.popup-group.open { background: var(--bg-raised); }
+.popup-group.open .pi-line > .ico:last-child { color: var(--accent); }
 
 /* ---------- profiles panel ---------- */
 .panel-note { color: var(--text-dim); font-size: 0.8rem; flex: 1; }
