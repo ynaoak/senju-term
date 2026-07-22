@@ -19,34 +19,34 @@
     <header id="topbar" data-tauri-drag-region>
       <!-- macOS: native-style traffic-light window controls sit on the left -->
       <div id="win-controls-mac" class="win-controls mac">
-        <button class="win-btn close" data-win="close" title="閉じる"></button>
-        <button class="win-btn min" data-win="minimize" title="最小化"></button>
-        <button class="win-btn max" data-win="maximize" title="最大化"></button>
+        <button class="win-btn close" data-win="close" data-i18n-title="win.close"></button>
+        <button class="win-btn min" data-win="minimize" data-i18n-title="win.min"></button>
+        <button class="win-btn max" data-win="maximize" data-i18n-title="win.max"></button>
       </div>
-      <button id="toggle-threadbar" class="icon-btn" title="スレッド一覧を切替"><span data-icon="menu"></span></button>
+      <button id="toggle-threadbar" class="icon-btn" data-i18n-title="topbar.toggleThreadbar"><span data-icon="menu"></span></button>
       <div id="brand" data-tauri-drag-region>❯ Senju</div>
       <div class="spacer" data-tauri-drag-region></div>
       <!-- Tool-panel tabs, centered in the header. Each toggles its panel in
            the right sidebar; clicking the active one again hides the sidebar
            so the terminal can use the full window width. -->
       <nav id="header-tabs">
-        <button class="hdr-tab" data-panel="shell">シェル</button>
-        <button class="hdr-tab" data-panel="workflows">ワークフロー</button>
-        <button class="hdr-tab" data-panel="hosts">SSH</button>
-        <button class="hdr-tab" data-panel="profiles">端末</button>
-        <button class="hdr-tab" data-panel="launchsets">起動セット</button>
-        <button class="hdr-tab" data-panel="settings">設定</button>
+        <button class="hdr-tab" data-panel="shell" data-i18n="tab.shell">シェル</button>
+        <button class="hdr-tab" data-panel="workflows" data-i18n="tab.workflows">ワークフロー</button>
+        <button class="hdr-tab" data-panel="hosts" data-i18n="tab.hosts">SSH</button>
+        <button class="hdr-tab" data-panel="profiles" data-i18n="tab.profiles">端末</button>
+        <button class="hdr-tab" data-panel="launchsets" data-i18n="tab.launchsets">起動セット</button>
+        <button class="hdr-tab" data-panel="settings" data-i18n="tab.settings">設定</button>
       </nav>
       <div class="spacer" data-tauri-drag-region></div>
-      <button id="split-toggle" class="ghost-btn" title="ペインを上下分割 (Ctrl+Shift+D)"><span class="split-ico" data-icon="split"></span><span class="split-label">分割</span></button>
-      <button id="palette-btn" class="ghost-btn" title="コマンドパレット (Ctrl+Shift+P)"><span data-icon="search"></span><span>パレット</span><kbd>Ctrl⇧P</kbd></button>
-      <button id="help-btn" class="icon-btn" title="キーボードショートカット (Ctrl+Shift+/)"><span data-icon="help"></span></button>
+      <button id="split-toggle" class="ghost-btn" data-i18n-title="topbar.split.title"><span class="split-ico" data-icon="split"></span><span class="split-label" data-i18n="topbar.split">分割</span></button>
+      <button id="palette-btn" class="ghost-btn" data-i18n-title="topbar.palette.title"><span data-icon="search"></span><span data-i18n="topbar.palette">パレット</span><kbd>Ctrl⇧P</kbd></button>
+      <button id="help-btn" class="icon-btn" data-i18n-title="topbar.help.title"><span data-icon="help"></span></button>
       <!-- Windows / Linux: window controls on the right. Plain Unicode glyphs
            so they render without the Segoe icon font (absent on Linux). -->
       <div id="win-controls" class="win-controls">
-        <button class="win-btn" data-win="minimize" title="最小化">&#x2212;</button>
-        <button class="win-btn" data-win="maximize" title="最大化">&#x25A1;</button>
-        <button class="win-btn close" data-win="close" title="閉じる">&#x2715;</button>
+        <button class="win-btn" data-win="minimize" data-i18n-title="win.min">&#x2212;</button>
+        <button class="win-btn" data-win="maximize" data-i18n-title="win.max">&#x25A1;</button>
+        <button class="win-btn close" data-win="close" data-i18n-title="win.close">&#x2715;</button>
       </div>
     </header>
 
@@ -54,12 +54,12 @@
       <!-- 左: スレッド一覧 -->
       <aside id="threadbar">
         <div class="threadbar-head">
-          <span class="threadbar-title">スレッド</span>
+          <span class="threadbar-title" data-i18n="threadbar.title">スレッド</span>
           <!-- Split button: click launches the default profile; ▾ opens a
                Windows-Terminal-style menu of all profiles. -->
           <div class="new-thread-group">
-            <button id="new-thread" class="accent-btn" title="新しいスレッド (既定プロファイル / Ctrl+Shift+T)"><span data-icon="plus"></span><span>新規</span></button>
-            <button id="new-thread-menu" class="accent-btn caret" title="プロファイルを選択"><span data-icon="chevronDown"></span></button>
+            <button id="new-thread" class="accent-btn" data-i18n-title="threadbar.new.title"><span data-icon="plus"></span><span data-i18n="threadbar.new">新規</span></button>
+            <button id="new-thread-menu" class="accent-btn caret" data-i18n-title="threadbar.newMenu.title"><span data-icon="chevronDown"></span></button>
           </div>
         </div>
         <ul id="thread-list"></ul>
@@ -71,10 +71,10 @@
         <div id="wf-quickbar" class="hidden"></div>
         <!-- ターミナル内検索バー (Ctrl+Shift+F) -->
         <div id="term-search" class="term-search hidden">
-          <input id="term-search-input" type="text" placeholder="検索…" autocomplete="off" />
-          <button id="term-search-prev" class="icon-btn" title="前を検索 (Shift+Enter)">↑</button>
-          <button id="term-search-next" class="icon-btn" title="次を検索 (Enter)">↓</button>
-          <button id="term-search-close" class="icon-btn" title="閉じる (Esc)">✕</button>
+          <input id="term-search-input" type="text" data-i18n-ph="termsearch.ph" autocomplete="off" />
+          <button id="term-search-prev" class="icon-btn" data-i18n-title="termsearch.prev.title">↑</button>
+          <button id="term-search-next" class="icon-btn" data-i18n-title="termsearch.next.title">↓</button>
+          <button id="term-search-close" class="icon-btn" data-i18n-title="termsearch.close.title">✕</button>
         </div>
       </main>
 
@@ -82,95 +82,101 @@
       <aside id="sidebar">
         <section id="panel-workflows" class="panel active">
           <header class="panel-header">
-            <h2><span class="ph-icon" data-icon="zap"></span>ワークフロー</h2>
-            <p class="panel-desc">よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。</p>
+            <h2><span class="ph-icon" data-icon="zap"></span><span data-i18n="panel.workflows.title">ワークフロー</span></h2>
+            <p class="panel-desc" data-i18n="panel.workflows.desc">よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。</p>
           </header>
           <div class="panel-head">
-            <input id="wf-search" type="search" placeholder="コマンドを検索…" />
-            <button id="wf-add" class="accent-btn"><span data-icon="plus"></span><span>登録</span></button>
+            <input id="wf-search" type="search" data-i18n-ph="panel.workflows.search.ph" />
+            <button id="wf-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
           </div>
           <ul id="wf-list" class="card-list"></ul>
         </section>
 
         <section id="panel-hosts" class="panel">
           <header class="panel-header">
-            <h2><span class="ph-icon" data-icon="server"></span>SSH 接続</h2>
-            <p class="panel-desc">接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。</p>
+            <h2><span class="ph-icon" data-icon="server"></span><span data-i18n="panel.hosts.title">SSH 接続</span></h2>
+            <p class="panel-desc" data-i18n="panel.hosts.desc">接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。</p>
           </header>
           <div class="panel-head">
-            <input id="host-search" type="search" placeholder="ホストを検索…" />
-            <button id="host-add" class="accent-btn"><span data-icon="plus"></span><span>登録</span></button>
+            <input id="host-search" type="search" data-i18n-ph="panel.hosts.search.ph" />
+            <button id="host-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
           </div>
           <ul id="host-list" class="card-list"></ul>
         </section>
 
         <section id="panel-profiles" class="panel">
           <header class="panel-header">
-            <h2><span class="ph-icon" data-icon="terminal"></span>ターミナルプロファイル</h2>
-            <p class="panel-desc">起動するシェルをプロファイルとして管理します。★ が「＋ 新規」で起動する既定です。</p>
+            <h2><span class="ph-icon" data-icon="terminal"></span><span data-i18n="panel.profiles.title">ターミナルプロファイル</span></h2>
+            <p class="panel-desc" data-i18n="panel.profiles.desc">起動するシェルをプロファイルとして管理します。★ が「＋ 新規」で起動する既定です。</p>
           </header>
           <div class="panel-head">
             <span class="panel-note"></span>
-            <button id="profile-add" class="accent-btn"><span data-icon="plus"></span><span>追加</span></button>
+            <button id="profile-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.add">追加</span></button>
           </div>
           <ul id="profile-list" class="card-list"></ul>
         </section>
 
         <section id="panel-launchsets" class="panel">
           <header class="panel-header">
-            <h2><span class="ph-icon" data-icon="layers"></span>起動セット</h2>
-            <p class="panel-desc">いつも開くシェル・SSH 接続・ワークフローをまとめて登録し、ワンクリックで一括起動できます。</p>
+            <h2><span class="ph-icon" data-icon="layers"></span><span data-i18n="panel.launchsets.title">起動セット</span></h2>
+            <p class="panel-desc" data-i18n="panel.launchsets.desc">いつも開くシェル・SSH 接続・ワークフローをまとめて登録し、ワンクリックで一括起動できます。</p>
           </header>
           <div class="panel-head">
             <span class="panel-note"></span>
-            <button id="launchset-add" class="accent-btn"><span data-icon="plus"></span><span>登録</span></button>
+            <button id="launchset-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
           </div>
           <ul id="launchset-list" class="card-list"></ul>
         </section>
 
         <section id="panel-settings" class="panel">
           <header class="panel-header">
-            <h2><span class="ph-icon" data-icon="settings"></span>設定</h2>
-            <p class="panel-desc">外観・ターミナル・起動の設定。変更は「保存」で反映され、開いているスレッドにも即時適用されます。</p>
+            <h2><span class="ph-icon" data-icon="settings"></span><span data-i18n="panel.settings.title">設定</span></h2>
+            <p class="panel-desc" data-i18n="panel.settings.desc">外観・ターミナル・起動の設定。変更は「保存」で反映され、開いているスレッドにも即時適用されます。</p>
           </header>
           <form id="settings-form" class="form">
             <fieldset class="settings-group">
-              <legend>外観</legend>
-              <label>テーマ
-                <select name="theme">
-                  <option value="dark">ダーク</option>
-                  <option value="light">ライト</option>
+              <legend data-i18n="settings.group.appearance">外観</legend>
+              <label><span data-i18n="settings.language">言語</span>
+                <select name="language">
+                  <option value="ja">日本語</option>
+                  <option value="en">English</option>
                 </select>
               </label>
-              <label>フォントサイズ
+              <label><span data-i18n="settings.theme">テーマ</span>
+                <select name="theme">
+                  <option value="dark" data-i18n="settings.theme.dark">ダーク</option>
+                  <option value="light" data-i18n="settings.theme.light">ライト</option>
+                </select>
+              </label>
+              <label><span data-i18n="settings.fontSize">フォントサイズ</span>
                 <input name="font_size" type="number" min="8" max="32" />
               </label>
-              <label>フォントファミリー (空欄 = 既定)
+              <label><span data-i18n="settings.fontFamily">フォントファミリー (空欄 = 既定)</span>
                 <input name="font_family" type="text" placeholder='"JetBrains Mono", monospace' />
               </label>
             </fieldset>
             <fieldset class="settings-group">
-              <legend>ターミナル</legend>
-              <label>スクロールバック行数
+              <legend data-i18n="settings.group.terminal">ターミナル</legend>
+              <label><span data-i18n="settings.scrollback">スクロールバック行数</span>
                 <input name="scrollback" type="number" min="1000" max="100000" />
               </label>
               <label class="checkbox-row">
                 <input name="shell_integration" type="checkbox" />
-                シェル統合を自動で有効化(コマンドブロック用)
+                <span data-i18n="settings.shellIntegration">シェル統合を自動で有効化(コマンドブロック用)</span>
               </label>
-              <p class="field-hint">bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。</p>
+              <p class="field-hint" data-i18n="settings.shellIntegration.hint">bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。</p>
             </fieldset>
             <fieldset class="settings-group">
-              <legend>起動</legend>
-              <label>既定のターミナルプロファイル
+              <legend data-i18n="settings.group.startup">起動</legend>
+              <label><span data-i18n="settings.defaultProfile">既定のターミナルプロファイル</span>
                 <select name="default_profile_id"></select>
               </label>
             </fieldset>
             <div class="settings-actions">
-              <button type="submit" class="accent-btn">保存</button>
+              <button type="submit" class="accent-btn" data-i18n="settings.save">保存</button>
             </div>
           </form>
-          <p class="hint">設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。</p>
+          <p class="hint" data-i18n="settings.dataHint">設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。</p>
         </section>
       </aside>
     </div>
@@ -183,19 +189,19 @@
   <div id="profile-menu" class="popup-menu hidden"></div>
 
   <!-- ターミナル右クリックメニュー (ワークフロー実行) -->
-  <div id="term-context-menu" class="popup-menu hidden" role="menu" aria-label="ワークフローを実行"></div>
+  <div id="term-context-menu" class="popup-menu hidden" role="menu" data-i18n-aria="menu.runWorkflow"></div>
 
   <!-- コマンドパレット -->
-  <div id="palette" class="overlay hidden" role="dialog" aria-modal="true" aria-label="コマンドパレット">
+  <div id="palette" class="overlay hidden" role="dialog" aria-modal="true" data-i18n-aria="palette.aria">
     <div class="palette-box">
-      <input id="palette-input" type="text" placeholder="コマンド・ワークフロー・SSH ホストを検索…"
+      <input id="palette-input" type="text" data-i18n-ph="palette.input.ph"
              autocomplete="off" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" />
-      <ul id="palette-results" role="listbox" aria-label="検索結果"></ul>
+      <ul id="palette-results" role="listbox" data-i18n-aria="palette.results.aria"></ul>
       <div class="palette-foot">
-        <span><kbd>↑</kbd><kbd>↓</kbd> 選択</span>
-        <span><kbd>Enter</kbd> 実行</span>
-        <span><kbd>⇧</kbd><kbd>Enter</kbd> 挿入</span>
-        <span><kbd>Esc</kbd> 閉じる</span>
+        <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.select">選択</span></span>
+        <span><kbd>Enter</kbd> <span data-i18n="palette.foot.run">実行</span></span>
+        <span><kbd>⇧</kbd><kbd>Enter</kbd> <span data-i18n="palette.foot.insert">挿入</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">閉じる</span></span>
       </div>
     </div>
   </div>
@@ -206,7 +212,7 @@
       <h3 id="modal-title"></h3>
       <div id="modal-body"></div>
       <div class="modal-actions">
-        <button id="modal-cancel" class="ghost-btn">キャンセル</button>
+        <button id="modal-cancel" class="ghost-btn" data-i18n="modal.cancel">キャンセル</button>
         <button id="modal-ok" class="accent-btn">OK</button>
       </div>
     </div>
@@ -215,10 +221,10 @@
   <!-- キーボードショートカット一覧 -->
   <div id="shortcuts" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sc-title">
     <div class="modal-box sc-box">
-      <h3 id="sc-title"><span class="sc-title-ico" data-icon="keyboard"></span>キーボードショートカット</h3>
+      <h3 id="sc-title"><span class="sc-title-ico" data-icon="keyboard"></span><span data-i18n="sc.title">キーボードショートカット</span></h3>
       <div id="sc-body"></div>
       <div class="modal-actions">
-        <button id="sc-close" class="accent-btn">閉じる</button>
+        <button id="sc-close" class="accent-btn" data-i18n="sc.close">閉じる</button>
       </div>
     </div>
   </div>

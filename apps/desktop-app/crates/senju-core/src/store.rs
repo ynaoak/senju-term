@@ -522,6 +522,7 @@ mod tests {
             font_family: "\"JetBrains Mono\", monospace".into(),
             scrollback: 5000,
             theme: "light".into(),
+            language: "en".into(),
             shell_integration: false,
         };
         s.save_settings(&new).unwrap();

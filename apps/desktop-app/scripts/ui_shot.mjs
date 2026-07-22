@@ -65,7 +65,7 @@ const STUB = () => {
       invoke: async (cmd, args) => {
         switch (cmd) {
           case 'get_settings':
-            return { ...store.settings, theme: window.__LIGHT__ ? 'light' : 'dark' };
+            return { ...store.settings, theme: window.__LIGHT__ ? 'light' : 'dark', language: window.__EN__ ? 'en' : 'ja' };
           case 'save_settings': store.settings = args.settings; return null;
           case 'list_workflows': return window.__EMPTY__ ? [] : store.workflows;
           case 'list_ssh_hosts': return store.hosts;
@@ -273,6 +273,20 @@ await lightPage.evaluate(() => window.setView('workflows'));
 await lightPage.waitForTimeout(250);
 await lightPage.screenshot({ path: path.join(outDir, 'light-workflows.png') });
 await lightPage.close();
+
+// English UI: settings + workflows panels on a fresh page with language=en.
+const enPage = await ctx.newPage();
+await enPage.addInitScript(STUB);
+await enPage.addInitScript(() => { window.__EN__ = true; });
+await enPage.goto(pathToFileURL(path.join(uiDir, 'index.html')).href);
+await enPage.waitForTimeout(500);
+await enPage.evaluate(() => window.setView('settings'));
+await enPage.waitForTimeout(250);
+await enPage.screenshot({ path: path.join(outDir, 'en-settings.png') });
+await enPage.evaluate(() => window.setView('workflows'));
+await enPage.waitForTimeout(250);
+await enPage.screenshot({ path: path.join(outDir, 'en-workflows.png') });
+await enPage.close();
 
 // Empty state with CTA: load a second page whose stub starts with no hosts.
 const page2 = await ctx.newPage();

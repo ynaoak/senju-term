@@ -135,6 +135,11 @@ pub struct Settings {
     /// and future themes don't need a schema change.
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// UI language: "ja" (default) or "en". A free string for the same reason
+    /// as `theme` — older settings files default to Japanese, and adding a
+    /// language later needs no schema change.
+    #[serde(default = "default_language")]
+    pub language: String,
     /// Auto-inject OSC 133 shell-integration hooks (command-block markers)
     /// into recognized local shells (bash/zsh/fish) at launch, without
     /// touching the user's own rc files. Defaults on; older settings files
@@ -155,6 +160,10 @@ fn default_theme() -> String {
     "dark".into()
 }
 
+fn default_language() -> String {
+    "ja".into()
+}
+
 fn default_shell_integration() -> bool {
     true
 }
@@ -168,6 +177,7 @@ impl Default for Settings {
             font_family: String::new(),
             scrollback: default_scrollback(),
             theme: default_theme(),
+            language: default_language(),
             shell_integration: default_shell_integration(),
         }
     }

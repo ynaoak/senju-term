@@ -22,9 +22,358 @@ const state = {
   hosts: [],
   profiles: [],
   launchSets: [],      // { id, name, items: [{ profile_id, ssh_host_id, workflow_id }] }
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', shell_integration: true },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', shell_integration: true },
   renaming: null,      // thread id currently being renamed inline in the sidebar
 };
+
+/* ---------------- i18n (日本語 / English) ----------------
+ * Every user-facing string lives here with its ja/en pair side by side so the
+ * two stay in sync. `tr(key, params)` picks the current language and fills
+ * `{name}` placeholders. Static markup carries `data-i18n` / `data-i18n-ph`
+ * (placeholder) / `data-i18n-title` / `data-i18n-aria` attributes that
+ * `applyStaticI18n()` populates; dynamic strings call `tr()` directly. Named
+ * `tr` (not `t`) because `t` is used as a thread loop variable throughout. */
+const STRINGS = {
+  // Window controls & top bar
+  'win.close': { ja: '閉じる', en: 'Close' },
+  'win.min': { ja: '最小化', en: 'Minimize' },
+  'win.max': { ja: '最大化', en: 'Maximize' },
+  'win.restore': { ja: '元に戻す', en: 'Restore' },
+  'topbar.toggleThreadbar': { ja: 'スレッド一覧を切替', en: 'Toggle thread list' },
+  'tab.shell': { ja: 'シェル', en: 'Shell' },
+  'tab.workflows': { ja: 'ワークフロー', en: 'Workflows' },
+  'tab.hosts': { ja: 'SSH', en: 'SSH' },
+  'tab.profiles': { ja: '端末', en: 'Terminals' },
+  'tab.launchsets': { ja: '起動セット', en: 'Launch Sets' },
+  'tab.settings': { ja: '設定', en: 'Settings' },
+  'topbar.split.title': { ja: 'ペインを上下分割 (Ctrl+Shift+D)', en: 'Split pane vertically (Ctrl+Shift+D)' },
+  'topbar.split': { ja: '分割', en: 'Split' },
+  'topbar.splitOff': { ja: '分割解除', en: 'Unsplit' },
+  'topbar.palette.title': { ja: 'コマンドパレット (Ctrl+Shift+P)', en: 'Command palette (Ctrl+Shift+P)' },
+  'topbar.palette': { ja: 'パレット', en: 'Palette' },
+  'topbar.help.title': { ja: 'キーボードショートカット (Ctrl+Shift+/)', en: 'Keyboard shortcuts (Ctrl+Shift+/)' },
+
+  // Thread bar
+  'threadbar.title': { ja: 'スレッド', en: 'Threads' },
+  'threadbar.new.title': { ja: '新しいスレッド (既定プロファイル / Ctrl+Shift+T)', en: 'New thread (default profile / Ctrl+Shift+T)' },
+  'threadbar.new': { ja: '新規', en: 'New' },
+  'threadbar.newMenu.title': { ja: 'プロファイルを選択', en: 'Choose profile' },
+  'thread.none': { ja: '(スレッドなし)', en: '(no thread)' },
+  'thread.emptyTitle': { ja: 'スレッドがありません', en: 'No threads' },
+  'thread.emptyHint': { ja: '「＋ 新規」で作成できます。', en: 'Create one with “+ New”.' },
+  'thread.activity.title': { ja: '新しい出力があります', en: 'New output' },
+  'thread.unpin': { ja: '固定を解除', en: 'Unpin' },
+  'thread.pin': { ja: '左ペインに固定', en: 'Pin to the left pane' },
+  'thread.close.title': { ja: 'スレッドを終了', en: 'Close thread' },
+  'thread.confirmClosePinned': { ja: '固定中の「{title}」を終了しますか?', en: 'Close the pinned “{title}”?' },
+  'thread.disconnected': { ja: '「{title}」の接続が切断されました', en: '“{title}” was disconnected' },
+  'thread.exited': { ja: '「{title}」が終了しました (code {code})', en: '“{title}” exited (code {code})' },
+  'kind.local': { ja: 'ローカル', en: 'Local' },
+
+  // Panes
+  'pane.threadBtn.title': { ja: 'このペインに表示するスレッド', en: 'Thread shown in this pane' },
+  'pane.close.title': { ja: 'このペインを閉じる (スレッドは動き続けます)', en: 'Close this pane (the thread keeps running)' },
+  'pane.emptyTitle': { ja: 'このペインは空です', en: 'This pane is empty' },
+  'pane.emptyHint': { ja: '新しいスレッドを作成するか、左の一覧から選択してください。', en: 'Create a new thread, or pick one from the list on the left.' },
+  'pane.newThread': { ja: '新しいスレッド', en: 'New thread' },
+
+  // Terminal search
+  'termsearch.ph': { ja: '検索…', en: 'Search…' },
+  'termsearch.prev.title': { ja: '前を検索 (Shift+Enter)', en: 'Find previous (Shift+Enter)' },
+  'termsearch.next.title': { ja: '次を検索 (Enter)', en: 'Find next (Enter)' },
+  'termsearch.close.title': { ja: '閉じる (Esc)', en: 'Close (Esc)' },
+
+  // Common actions
+  'common.run': { ja: '実行', en: 'Run' },
+  'common.insert': { ja: '挿入', en: 'Insert' },
+  'common.edit': { ja: '編集', en: 'Edit' },
+  'common.delete': { ja: '削除', en: 'Delete' },
+  'common.save': { ja: '保存', en: 'Save' },
+  'common.cancel': { ja: 'キャンセル', en: 'Cancel' },
+  'common.connect': { ja: '接続', en: 'Connect' },
+  'common.launch': { ja: '起動', en: 'Launch' },
+  'common.register': { ja: '登録', en: 'Add' },
+  'common.add': { ja: '追加', en: 'Add' },
+  'common.moveUp': { ja: '上へ移動', en: 'Move up' },
+  'common.moveDown': { ja: '下へ移動', en: 'Move down' },
+  'section.basic': { ja: '基本情報', en: 'Basics' },
+  'confirm.delete': { ja: '「{name}」を削除しますか?', en: 'Delete “{name}”?' },
+  'toast.deleteFailed': { ja: '削除に失敗: {e}', en: 'Failed to delete: {e}' },
+
+  // Workflows panel
+  'panel.workflows.title': { ja: 'ワークフロー', en: 'Workflows' },
+  'panel.workflows.desc': { ja: 'よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。', en: 'Turn frequently used commands into templates. Run them from search, shortcuts, or quick buttons.' },
+  'panel.workflows.search.ph': { ja: 'コマンドを検索…', en: 'Search commands…' },
+  'wf.quickButton': { ja: 'クイックボタン', en: 'Quick button' },
+  'wf.drag': { ja: 'ドラッグして並べ替え', en: 'Drag to reorder' },
+  'toast.reorderFailed': { ja: '並べ替えに失敗: {e}', en: 'Failed to reorder: {e}' },
+  'wf.loadFailed': { ja: 'ワークフローの読み込みに失敗: {e}', en: 'Failed to load workflows: {e}' },
+  'wf.emptyTitle': { ja: 'ワークフローがまだありません', en: 'No workflows yet' },
+  'wf.emptyHint': { ja: 'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。', en: 'Templatize frequently used commands to run them with one key or from search.' },
+  'wf.emptyCta': { ja: 'ワークフローを登録', en: 'Add workflow' },
+  'wf.searchNoMatchTitle': { ja: '一致するワークフローがありません', en: 'No matching workflows' },
+  'search.noMatch': { ja: '「{q}」に一致する項目は見つかりませんでした。', en: 'No items matched “{q}”.' },
+  'wf.editTitle.new': { ja: 'ワークフローを登録', en: 'Add Workflow' },
+  'wf.editTitle.edit': { ja: 'ワークフローを編集', en: 'Edit Workflow' },
+  'wf.field.name': { ja: '名前', en: 'Name' },
+  'wf.field.desc': { ja: '説明', en: 'Description' },
+  'wf.field.group': { ja: 'グループ (階層は / 区切り。例: Deploy/Staging)', en: 'Group (nest with /, e.g. Deploy/Staging)' },
+  'wf.group.ph': { ja: '未入力 = 未分類', en: 'Blank = uncategorized' },
+  'wf.field.tags': { ja: 'タグ (カンマ区切り)', en: 'Tags (comma-separated)' },
+  'wf.section.command': { ja: 'コマンド', en: 'Command' },
+  'wf.field.template': { ja: 'テンプレート ( {{名前}} / {{名前:既定値}} でプレースホルダ )', en: 'Template ( use {{name}} / {{name:default}} for placeholders )' },
+  'wf.section.launch': { ja: '起動方法', en: 'How to run' },
+  'wf.field.shortcut': { ja: 'ショートカット (任意・Ctrl / Alt / Meta 必須)', en: 'Shortcut (optional; requires Ctrl / Alt / Meta)' },
+  'wf.field.showButton': { ja: 'シェル表示にクイックボタンを表示', en: 'Show a quick button in the shell view' },
+  'wf.paramTitle': { ja: '{name} — パラメータ入力', en: '{name} — Parameters' },
+
+  // Shortcut conflicts
+  'sc.conflict.reserved': { ja: 'アプリのショートカットと重複しています', en: 'Conflicts with an app shortcut' },
+  'sc.conflict.shell': { ja: 'シェルが使うキーのため割り当てできません', en: 'Can’t be assigned — this key is used by the shell' },
+  'sc.conflict.dup': { ja: '「{name}」に割り当て済みです', en: 'Already assigned to “{name}”' },
+  'shortcut.ph': { ja: 'クリックしてキーを押す (Backspace で消去)', en: 'Click and press a key (Backspace to clear)' },
+
+  // SSH hosts panel
+  'panel.hosts.title': { ja: 'SSH 接続', en: 'SSH Connections' },
+  'panel.hosts.desc': { ja: '接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。', en: 'Register destinations. Connect from the new-thread menu or the list below. Passwords are never saved.' },
+  'panel.hosts.search.ph': { ja: 'ホストを検索…', en: 'Search hosts…' },
+  'host.loadFailed': { ja: 'SSH ホストの読み込みに失敗: {e}', en: 'Failed to load SSH hosts: {e}' },
+  'auth.password': { ja: 'パスワード', en: 'Password' },
+  'auth.key': { ja: '秘密鍵', en: 'Private key' },
+  'auth.agent': { ja: 'ssh-agent', en: 'ssh-agent' },
+  'auth.keyfile': { ja: '秘密鍵ファイル', en: 'Private key file' },
+  'auth.keypassword': { ja: '秘密鍵+パスワード', en: 'Key + password' },
+  'auth.keypassword2': { ja: '秘密鍵 + パスワード', en: 'Key + password' },
+  'host.searchNoMatchTitle': { ja: '一致するホストがありません', en: 'No matching hosts' },
+  'host.searchNoMatch': { ja: '「{q}」に一致する接続先は見つかりませんでした。', en: 'No destinations matched “{q}”.' },
+  'host.emptyTitle': { ja: 'SSH 接続先がまだありません', en: 'No SSH destinations yet' },
+  'host.emptyHint': { ja: '接続先を登録すると、新規スレッド作成時や一覧からワンクリックで接続できます。', en: 'Register a destination to connect from the new-thread menu or the list with one click.' },
+  'host.emptyCta': { ja: 'SSH ホストを登録', en: 'Add SSH host' },
+  'host.editTitle.new': { ja: 'SSH ホストを登録', en: 'Add SSH Host' },
+  'host.editTitle.edit': { ja: 'SSH ホストを編集', en: 'Edit SSH Host' },
+  'host.section.dest': { ja: '接続先', en: 'Destination' },
+  'host.field.name': { ja: '表示名', en: 'Display name' },
+  'host.field.host': { ja: 'ホスト', en: 'Host' },
+  'host.field.port': { ja: 'ポート', en: 'Port' },
+  'host.field.username': { ja: 'ユーザー名', en: 'Username' },
+  'host.section.auth': { ja: '認証', en: 'Authentication' },
+  'host.field.authMethod': { ja: '認証方式', en: 'Auth method' },
+  'host.field.keyPath': { ja: '秘密鍵パス (認証方式: 秘密鍵 / 秘密鍵+パスワード)', en: 'Private key path (for key / key+password auth)' },
+  'host.section.test': { ja: '接続テスト (保存されません)', en: 'Connection test (not saved)' },
+  'host.field.testPassword': { ja: 'パスワード', en: 'Password' },
+  'host.field.testPassphrase': { ja: '鍵パスフレーズ', en: 'Key passphrase' },
+  'host.test': { ja: '接続テスト', en: 'Test connection' },
+  'host.test.needHostUser': { ja: 'ホストとユーザー名を入力してください', en: 'Enter host and username' },
+  'host.test.running': { ja: '接続テスト中…', en: 'Testing connection…' },
+  'host.test.keyMatch': { ja: '既知のホスト鍵と一致', en: 'Matches the known host key' },
+  'host.test.keyApproved': { ja: '承認したホスト鍵で認証(未保存): {type} {fp}', en: 'Authenticated with the approved host key (unsaved): {type} {fp}' },
+  'host.test.ok': { ja: '✓ 接続成功・認証OK / {key}', en: '✓ Connected & authenticated / {key}' },
+  'host.test.trustBtn': { ja: 'この鍵を信頼して認証テスト', en: 'Trust this key & test auth' },
+  'host.test.newKey': { ja: '到達可能・新しいホスト鍵 {type} {fp} — 認証もテストするにはもう一度押してください(保存はされません)', en: 'Reachable; new host key {type} {fp} — press again to also test auth (nothing is saved)' },
+  'host.test.mitm': { ja: '承認した鍵と異なる鍵が提示されました(MITM の可能性)。中止しました', en: 'A different key than approved was presented (possible MITM). Aborted.' },
+  'host.test.failed': { ja: '✗ 接続テスト失敗: {msg}', en: '✗ Connection test failed: {msg}' },
+
+  // SSH connect flow
+  'toast.connecting': { ja: '{name} へ接続中…', en: 'Connecting to {name}…' },
+  'toast.connected': { ja: '接続しました', en: 'Connected' },
+  'toast.shellStartFailed': { ja: 'シェルの起動に失敗: {e}', en: 'Failed to start shell: {e}' },
+  'toast.sshFailed': { ja: 'SSH 接続失敗: {msg}', en: 'SSH connection failed: {msg}' },
+  'ssh.mitmAborted': { ja: '承認した鍵と異なる鍵が提示されました。中間者攻撃の可能性があるため接続を中止しました', en: 'A different key than the one you approved was presented. Aborted the connection due to a possible man-in-the-middle attack.' },
+  'ssh.unknownAborted': { ja: '未知のホスト鍵のため接続を中止しました', en: 'Aborted: unknown host key.' },
+  'ssh.trustPrompt': { ja: '初回接続です。このホスト鍵を信頼して known_hosts に保存し、接続しますか? [ホスト: {host}:{port} / 鍵種別: {keyType} / フィンガープリント: {fingerprint}]', en: 'First connection. Trust this host key, save it to known_hosts, and connect? [Host: {host}:{port} / Key type: {keyType} / Fingerprint: {fingerprint}]' },
+  'ssh.trustConnect': { ja: '信頼して接続', en: 'Trust & connect' },
+  'secret.passphraseOpt': { ja: '鍵のパスフレーズ (無い場合は空欄)', en: 'Key passphrase (blank if none)' },
+  'secret.passphraseOnly': { ja: 'パスフレーズ (無い場合は空欄)', en: 'Passphrase (blank if none)' },
+  'secret.userPassword': { ja: '{user} のパスワード', en: 'Password for {user}' },
+  'secret.title': { ja: '{name} — {kind}', en: '{name} — {kind}' },
+  'secret.kind.combined': { ja: '鍵パスフレーズ + パスワード', en: 'Key passphrase + password' },
+  'secret.kind.key': { ja: '鍵のパスフレーズ', en: 'Key passphrase' },
+  'secret.kind.password': { ja: 'パスワード', en: 'Password' },
+
+  // Profiles panel
+  'panel.profiles.title': { ja: 'ターミナルプロファイル', en: 'Terminal Profiles' },
+  'panel.profiles.desc': { ja: '起動するシェルをプロファイルとして管理します。★ が「＋ 新規」で起動する既定です。', en: 'Manage the shells you launch as profiles. ★ is the default launched by “+ New”.' },
+  'profile.loadFailed': { ja: 'プロファイルの読み込みに失敗: {e}', en: 'Failed to load profiles: {e}' },
+  'profile.emptyTitle': { ja: 'プロファイルがありません', en: 'No profiles' },
+  'profile.emptyHint': { ja: '起動するシェルをプロファイルとして登録できます。', en: 'Register the shells you launch as profiles.' },
+  'profile.emptyCta': { ja: 'プロファイルを追加', en: 'Add profile' },
+  'profile.setDefault': { ja: '既定に', en: 'Set default' },
+  'profile.systemDefault': { ja: 'システム既定シェル', en: 'System default shell' },
+  'profile.cantDeleteLast': { ja: '最後のプロファイルは削除できません', en: 'Can’t delete the last profile' },
+  'profile.confirmDelete': { ja: 'プロファイル「{name}」を削除しますか?', en: 'Delete profile “{name}”?' },
+  'profile.defaultChanged': { ja: '既定のプロファイルを変更しました', en: 'Default profile changed' },
+  'profile.editTitle.new': { ja: 'プロファイルを追加', en: 'Add Profile' },
+  'profile.editTitle.edit': { ja: 'プロファイルを編集', en: 'Edit Profile' },
+  'profile.field.command': { ja: '実行ファイル (空欄 = OS 既定シェル)', en: 'Executable (blank = OS default shell)' },
+  'profile.field.args': { ja: '引数 (スペース区切り)', en: 'Arguments (space-separated)' },
+  'profile.field.cwd': { ja: '作業ディレクトリ (空欄 = ホーム)', en: 'Working directory (blank = home)' },
+
+  // Launch sets panel
+  'panel.launchsets.title': { ja: '起動セット', en: 'Launch Sets' },
+  'panel.launchsets.desc': { ja: 'いつも開くシェル・SSH 接続・ワークフローをまとめて登録し、ワンクリックで一括起動できます。', en: 'Register the shells, SSH connections, and workflows you always open, then launch them all with one click.' },
+  'set.loadFailed': { ja: '起動セットの読み込みに失敗: {e}', en: 'Failed to load launch sets: {e}' },
+  'set.deletedRef.ssh': { ja: 'SSH (削除済み)', en: 'SSH (deleted)' },
+  'set.deletedRef.profile': { ja: 'プロファイル (削除済み)', en: 'Profile (deleted)' },
+  'set.emptyTitle': { ja: '起動セットがまだありません', en: 'No launch sets yet' },
+  'set.emptyHint': { ja: 'いつも開くシェル・SSH 接続・ワークフローをまとめて登録すると、ワンクリックで一括起動できます。', en: 'Register the shells, SSH connections, and workflows you always open to launch them all with one click.' },
+  'set.emptyCta': { ja: '起動セットを登録', en: 'Add launch set' },
+  'set.itemsSummary': { ja: '{count} 項目: {summary}', en: '{count} items: {summary}' },
+  'set.hostMissing': { ja: '登録済みの SSH ホストが見つかりません(削除済みの可能性があります)', en: 'The registered SSH host was not found (it may have been deleted)' },
+  'set.profileMissing': { ja: '登録済みのプロファイルが見つかりません(削除済みの可能性があります)', en: 'The registered profile was not found (it may have been deleted)' },
+  'set.launched': { ja: '「{name}」を起動しました', en: 'Launched “{name}”' },
+  'set.noAutorun': { ja: '(自動実行なし)', en: '(no auto-run)' },
+  'set.removeItem.title': { ja: 'この項目を削除', en: 'Remove this item' },
+  'set.addItem': { ja: '項目を追加', en: 'Add item' },
+  'set.editTitle.new': { ja: '起動セットを登録', en: 'Add Launch Set' },
+  'set.editTitle.edit': { ja: '起動セットを編集', en: 'Edit Launch Set' },
+  'set.section.itemsOrder': { ja: '起動する項目(上から順に開きます)', en: 'Items to launch (opened top to bottom)' },
+  'set.field.items': { ja: '項目', en: 'Items' },
+  'set.needOneItem': { ja: '少なくとも 1 つの項目を追加してください', en: 'Add at least one item' },
+  'menu.localProfiles': { ja: 'ローカルプロファイル', en: 'Local profiles' },
+  'menu.sshHosts': { ja: 'SSH ホスト', en: 'SSH hosts' },
+
+  // Menus
+  'menu.sshConnections': { ja: 'SSH 接続', en: 'SSH Connections' },
+  'menu.launchSets': { ja: '起動セット', en: 'Launch Sets' },
+  'menu.manageProfiles': { ja: '⚙ プロファイルを管理…', en: '⚙ Manage profiles…' },
+  'menu.runWorkflow': { ja: 'ワークフローを実行', en: 'Run workflow' },
+  'menu.workflowsEmpty': { ja: 'ワークフローが未登録です', en: 'No workflows registered' },
+  'menu.manageWorkflows': { ja: '⚙ ワークフローを管理…', en: '⚙ Manage workflows…' },
+  'menu.registerWorkflow': { ja: '＋ ワークフローを登録…', en: '+ Add workflow…' },
+  'menu.wfHint': { ja: '{desc} — Shift+クリックで実行せず挿入', en: '{desc} — Shift+click to insert without running' },
+
+  // Palette
+  'palette.aria': { ja: 'コマンドパレット', en: 'Command palette' },
+  'palette.input.ph': { ja: 'コマンド・ワークフロー・SSH ホストを検索…', en: 'Search commands, workflows, SSH hosts…' },
+  'palette.results.aria': { ja: '検索結果', en: 'Results' },
+  'palette.foot.select': { ja: '選択', en: 'Select' },
+  'palette.foot.run': { ja: '実行', en: 'Run' },
+  'palette.foot.insert': { ja: '挿入', en: 'Insert' },
+  'palette.foot.close': { ja: '閉じる', en: 'Close' },
+  'palette.newLocalThread': { ja: '新しいローカルスレッド', en: 'New local thread' },
+  'palette.splitPane': { ja: 'ペインを上下分割', en: 'Split pane vertically' },
+  'palette.unsplitPane': { ja: 'ペイン分割を解除', en: 'Unsplit pane' },
+  'palette.registerWorkflow': { ja: 'ワークフローを登録', en: 'Add workflow' },
+  'palette.registerHost': { ja: 'SSH ホストを登録', en: 'Add SSH host' },
+  'palette.registerSet': { ja: '起動セットを登録', en: 'Add launch set' },
+  'palette.shortcutsList': { ja: 'キーボードショートカット一覧', en: 'Keyboard shortcuts' },
+  'palette.newThreadOf': { ja: '新規スレッド: {name}', en: 'New thread: {name}' },
+  'palette.showThread': { ja: '表示: {title}', en: 'Show: {title}' },
+  'thread.kind.ssh': { ja: 'SSH スレッド', en: 'SSH thread' },
+  'thread.kind.local': { ja: 'ローカルスレッド', en: 'Local thread' },
+  'palette.sshOf': { ja: 'SSH: {name}', en: 'SSH: {name}' },
+  'palette.launchSet': { ja: '起動セット: {name}', en: 'Launch set: {name}' },
+
+  // Generic modal
+  'modal.cancel': { ja: 'キャンセル', en: 'Cancel' },
+  'modal.requiredFields': { ja: '必須項目を入力してください', en: 'Please fill in the required fields' },
+
+  // Settings panel
+  'panel.settings.title': { ja: '設定', en: 'Settings' },
+  'panel.settings.desc': { ja: '外観・ターミナル・起動の設定。変更は「保存」で反映され、開いているスレッドにも即時適用されます。', en: 'Appearance, terminal, and startup settings. Changes take effect on “Save” and apply immediately to open threads.' },
+  'settings.group.appearance': { ja: '外観', en: 'Appearance' },
+  'settings.theme': { ja: 'テーマ', en: 'Theme' },
+  'settings.theme.dark': { ja: 'ダーク', en: 'Dark' },
+  'settings.theme.light': { ja: 'ライト', en: 'Light' },
+  'settings.language': { ja: '言語', en: 'Language' },
+  'settings.fontSize': { ja: 'フォントサイズ', en: 'Font size' },
+  'settings.fontFamily': { ja: 'フォントファミリー (空欄 = 既定)', en: 'Font family (blank = default)' },
+  'settings.group.terminal': { ja: 'ターミナル', en: 'Terminal' },
+  'settings.scrollback': { ja: 'スクロールバック行数', en: 'Scrollback lines' },
+  'settings.shellIntegration': { ja: 'シェル統合を自動で有効化(コマンドブロック用)', en: 'Auto-enable shell integration (for command blocks)' },
+  'settings.shellIntegration.hint': { ja: 'bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。', en: 'Injects OSC 133 prompt hooks into bash / zsh / fish at launch. Your rc files are not modified.' },
+  'settings.group.startup': { ja: '起動', en: 'Startup' },
+  'settings.defaultProfile': { ja: '既定のターミナルプロファイル', en: 'Default terminal profile' },
+  'settings.save': { ja: '保存', en: 'Save' },
+  'settings.dataHint': { ja: '設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。', en: 'Settings and saved data are stored as JSON files in the app config directory.' },
+  'settings.loadFailed': { ja: '設定の読み込みに失敗、既定値を使用します: {e}', en: 'Failed to load settings; using defaults: {e}' },
+  'settings.saved': { ja: '設定を保存しました', en: 'Settings saved' },
+
+  // Clipboard / quit / paste confirmations
+  'confirm.sessionsRunning': { ja: '{count} 個のセッションが実行中です。終了しますか?', en: '{count} sessions are running. Quit?' },
+  'confirm.quit': { ja: '終了', en: 'Quit' },
+  'toast.noActiveTerm': { ja: 'アクティブなターミナルがありません', en: 'No active terminal' },
+  'toast.copied': { ja: 'コピーしました', en: 'Copied' },
+  'toast.copyFailed': { ja: 'コピーに失敗: {e}', en: 'Failed to copy: {e}' },
+  'toast.pasteFailed': { ja: '貼り付けに失敗: {e}', en: 'Failed to paste: {e}' },
+  'confirm.pasteLines': { ja: '{lines} 行のテキストを貼り付けますか?', en: 'Paste {lines} lines of text?' },
+  'confirm.paste': { ja: '貼り付け', en: 'Paste' },
+
+  // Command blocks
+  'block.foldedRows': { ja: '▸ {rows} 行を折りたたみ済み — クリックで展開', en: '▸ {rows} rows folded — click to expand' },
+  'block.copy.title': { ja: 'ブロックをコピー', en: 'Copy block' },
+  'block.fold.title': { ja: '出力を折りたたむ', en: 'Fold output' },
+  'block.expand.title': { ja: '出力を展開する', en: 'Expand output' },
+  'block.noOutput.title': { ja: '出力がありません', en: 'No output' },
+  'block.chip.ok': { ja: 'コマンド成功 (exit 0)', en: 'Command succeeded (exit 0)' },
+  'block.chip.err': { ja: 'コマンド失敗 (exit {exit})', en: 'Command failed (exit {exit})' },
+  'block.copied': { ja: 'ブロックをコピーしました', en: 'Block copied' },
+
+  // Keyboard shortcut cheat sheet
+  'sc.title': { ja: 'キーボードショートカット', en: 'Keyboard Shortcuts' },
+  'sc.close': { ja: '閉じる', en: 'Close' },
+  'sc.group.general': { ja: '全般', en: 'General' },
+  'sc.item.palette': { ja: 'コマンドパレットを開く', en: 'Open command palette' },
+  'sc.item.newThread': { ja: '新しいローカルスレッド', en: 'New local thread' },
+  'sc.item.closeThread': { ja: '表示中のスレッドを終了', en: 'Close the visible thread' },
+  'sc.item.shortcuts': { ja: 'このショートカット一覧', en: 'This shortcut list' },
+  'sc.group.pane': { ja: 'ペイン', en: 'Panes' },
+  'sc.item.split': { ja: '上下に分割 / 分割を解除', en: 'Split vertically / unsplit' },
+  'sc.item.focusUp': { ja: '上のペインにフォーカス', en: 'Focus the upper pane' },
+  'sc.item.focusDown': { ja: '下のペインにフォーカス', en: 'Focus the lower pane' },
+  'sc.group.terminal': { ja: 'ターミナル', en: 'Terminal' },
+  'sc.item.copy': { ja: '選択範囲をコピー', en: 'Copy selection' },
+  'sc.item.paste': { ja: 'クリップボードを貼り付け', en: 'Paste clipboard' },
+  'sc.item.find': { ja: 'ターミナル内を検索', en: 'Search in terminal' },
+  'sc.item.prevBlock': { ja: '前のコマンドブロックへ (要シェル統合)', en: 'Previous command block (needs shell integration)' },
+  'sc.item.nextBlock': { ja: '次のコマンドブロックへ (要シェル統合)', en: 'Next command block (needs shell integration)' },
+  'sc.group.workflows': { ja: 'ワークフロー', en: 'Workflows' },
+  'sc.key.anyKey': { ja: '任意のキー', en: 'Any key' },
+  'sc.item.wfShortcut': { ja: 'ワークフロー編集画面で登録したショートカットで実行', en: 'Run via the shortcut set in the workflow editor' },
+  'sc.key.rightClick': { ja: '右クリック', en: 'Right-click' },
+  'sc.item.rightClick': { ja: 'ターミナル上のメニューから実行 (Shift+クリックで挿入のみ)', en: 'Run from the terminal menu (Shift+click to insert only)' },
+
+  // Boot
+  'boot.error': { ja: '起動処理でエラー: {e}', en: 'Startup error: {e}' },
+};
+
+/** Translate `key` for the current language, filling `{name}` placeholders
+ * from `params`. Falls back to Japanese, then the raw key. */
+function tr(key, params) {
+  const lang = state.settings.language === 'en' ? 'en' : 'ja';
+  const entry = STRINGS[key];
+  let s = entry ? (entry[lang] ?? entry.ja) : key;
+  if (params) {
+    for (const k in params) s = s.split(`{${k}}`).join(String(params[k]));
+  }
+  return s;
+}
+
+/** Populates every static element carrying an i18n attribute. Called at boot
+ * and whenever the language changes. */
+function applyStaticI18n() {
+  document.documentElement.lang = state.settings.language === 'en' ? 'en' : 'ja';
+  document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = tr(el.dataset.i18n); });
+  document.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = tr(el.dataset.i18nPh); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = tr(el.dataset.i18nTitle); });
+  document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', tr(el.dataset.i18nAria)); });
+}
+
+/** Re-applies the language across the whole UI: static markup plus every
+ * data-driven view (rendered from state, so no reload needed). */
+function applyLanguage() {
+  applyStaticI18n();
+  updateSplitUi();
+  renderThreads();
+  renderWorkflows();
+  renderQuickbar();
+  renderHosts();
+  renderProfiles();
+  renderLaunchSets();
+  renderProfileSettingOptions();
+  if (!$('#shortcuts').classList.contains('hidden')) renderShortcuts();
+  if (palette.open) updatePalette();
+}
 
 /* ---------------- terminal threads ---------------- */
 
@@ -111,7 +460,7 @@ async function newLocalThread({ paneIdx = state.focusedPane, profileId = null } 
     const idx = pane ? state.panes.indexOf(pane) : -1;
     createThread(info, idx >= 0 ? idx : state.focusedPane);
   } catch (e) {
-    toast(`シェルの起動に失敗: ${e}`, true);
+    toast(tr('toast.shellStartFailed', { e }), true);
   }
 }
 
@@ -141,7 +490,7 @@ async function newSshThread(host) {
  * so an attacker can't get a second (or third) bite at the fingerprint
  * check. */
 async function connectSsh(host, secrets, cols, rows, expectedFingerprint) {
-  toast(`${host.name || host.host} へ接続中…`);
+  toast(tr('toast.connecting', { name: host.name || host.host }));
   try {
     const info = await invoke('create_ssh_session', {
       hostId: host.id,
@@ -151,17 +500,14 @@ async function connectSsh(host, secrets, cols, rows, expectedFingerprint) {
       expectedFingerprint,
     });
     createThread(info, state.focusedPane);
-    toast('接続しました');
+    toast(tr('toast.connected'));
   } catch (e) {
     const msg = String(e);
     if (msg.match(/^FINGERPRINT_MISMATCH:/)) {
       // Fail closed: do NOT retry. Retrying here would give an active MITM
       // repeated chances to slip its key in once the user has already
       // approved one fingerprint.
-      toast(
-        '承認した鍵と異なる鍵が提示されました。中間者攻撃の可能性があるため接続を中止しました',
-        true,
-      );
+      toast(tr('ssh.mitmAborted'), true);
       return;
     }
     const unknown = !expectedFingerprint && msg.match(/^UNKNOWN_HOST_KEY:([^:]+):(.+)$/);
@@ -170,11 +516,11 @@ async function connectSsh(host, secrets, cols, rows, expectedFingerprint) {
       if (await confirmTrustHost(host, keyType, fingerprint)) {
         await connectSsh(host, secrets, cols, rows, fingerprint);
       } else {
-        toast('未知のホスト鍵のため接続を中止しました', true);
+        toast(tr('ssh.unknownAborted'), true);
       }
       return;
     }
-    toast(`SSH 接続失敗: ${msg}`, true);
+    toast(tr('toast.sshFailed', { msg }), true);
   }
 }
 
@@ -185,10 +531,10 @@ async function connectSsh(host, secrets, cols, rows, expectedFingerprint) {
 function confirmTrustHost(host, keyType, fingerprint) {
   return new Promise((resolve) => {
     openModal({
-      title:
-        `初回接続です。このホスト鍵を信頼して known_hosts に保存し、接続しますか? ` +
-        `[ホスト: ${host.name || host.host}:${host.port} / 鍵種別: ${keyType} / フィンガープリント: ${fingerprint}]`,
-      okLabel: '信頼して接続',
+      title: tr('ssh.trustPrompt', {
+        host: host.name || host.host, port: host.port, keyType, fingerprint,
+      }),
+      okLabel: tr('ssh.trustConnect'),
       body: [],
       onOk: () => resolve(true),
       onCancel: () => resolve(false),
@@ -327,7 +673,7 @@ async function closeThread(id, { kill = true } = {}) {
   // Guard pinned threads against accidental user-initiated closes. A natural
   // shell exit (kill:false) always removes the thread without prompting.
   if (kill && state.threads[idx].pinned) {
-    if (!(await confirmModal(`固定中の「${state.threads[idx].title}」を終了しますか?`))) return;
+    if (!(await confirmModal(tr('thread.confirmClosePinned', { title: state.threads[idx].title })))) return;
   }
   const [thread] = state.threads.splice(idx, 1);
   if (kill) invoke('session_kill', { id }).catch(() => {});
@@ -356,7 +702,7 @@ function createPane() {
   root.innerHTML = `
     <div class="pane-head">
       <div class="pane-thread-dd">
-        <button type="button" class="pane-thread-btn" title="このペインに表示するスレッド">
+        <button type="button" class="pane-thread-btn" title="${tr('pane.threadBtn.title')}">
           <span class="ptd-icon"></span>
           <span class="ptd-label"></span>
           <span class="ptd-caret">${icon('chevronDown')}</span>
@@ -365,7 +711,7 @@ function createPane() {
       </div>
       <span class="pane-kind"></span>
       <div class="spacer"></div>
-      <button class="pane-close icon-btn" title="このペインを閉じる (スレッドは動き続けます)">${icon('x')}</button>
+      <button class="pane-close icon-btn" title="${tr('pane.close.title')}">${icon('x')}</button>
     </div>
     <div class="pane-body"></div>`;
   const pane = {
@@ -439,7 +785,7 @@ function buildPaneMenu(pane) {
   if (!state.threads.length) {
     const li = document.createElement('li');
     li.className = 'ptd-item empty';
-    li.textContent = '(スレッドなし)';
+    li.textContent = tr('thread.none');
     pane.ddMenu.appendChild(li);
     return;
   }
@@ -502,11 +848,11 @@ function setPaneThread(paneIdx, threadId) {
     empty.className = 'pane-empty';
     empty.innerHTML = `
       <div class="es-icon">${icon('terminal')}</div>
-      <p class="es-title">このペインは空です</p>
-      <p class="es-hint">新しいスレッドを作成するか、左の一覧から選択してください。</p>`;
+      <p class="es-title">${tr('pane.emptyTitle')}</p>
+      <p class="es-hint">${tr('pane.emptyHint')}</p>`;
     const btn = document.createElement('button');
     btn.className = 'accent-btn';
-    btn.innerHTML = `${icon('plus')}<span>新しいスレッド</span>`;
+    btn.innerHTML = `${icon('plus')}<span>${tr('pane.newThread')}</span>`;
     btn.addEventListener('click', () => newLocalThread({ paneIdx }));
     empty.appendChild(btn);
     pane.body.appendChild(empty);
@@ -579,7 +925,7 @@ function toggleSplit() {
 function updateSplitUi() {
   const split = state.panes.length >= 2;
   // Update only the label span so the leading split icon stays put.
-  $('#split-toggle .split-label').textContent = split ? '分割解除' : '分割';
+  $('#split-toggle .split-label').textContent = split ? tr('topbar.splitOff') : tr('topbar.split');
   document.querySelectorAll('.pane-close').forEach((b) => (b.style.display = split ? '' : 'none'));
 }
 
@@ -791,8 +1137,8 @@ function renderThreads() {
     const li = document.createElement('li');
     li.className = 'thread-empty';
     li.innerHTML = `<div class="es-icon">${icon('terminal')}</div>
-      <p class="es-title">スレッドがありません</p>
-      <p class="es-hint">「＋ 新規」で作成できます。</p>`;
+      <p class="es-title">${tr('thread.emptyTitle')}</p>
+      <p class="es-hint">${tr('thread.emptyHint')}</p>`;
     list.appendChild(li);
   }
   for (const t of orderedThreads()) {
@@ -803,11 +1149,11 @@ function renderThreads() {
     li.dataset.id = t.id;
     li.innerHTML = `
       <span class="kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>
-      <span class="activity-dot" title="新しい出力があります"></span>
+      <span class="activity-dot" title="${tr('thread.activity.title')}"></span>
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
-      <button class="pin" title="${t.pinned ? '固定を解除' : '左ペインに固定'}">${pinIcon(t.pinned)}</button>
-      <button class="close" title="スレッドを終了">${icon('x')}</button>`;
+      <button class="pin" title="${t.pinned ? tr('thread.unpin') : tr('thread.pin')}">${pinIcon(t.pinned)}</button>
+      <button class="close" title="${tr('thread.close.title')}">${icon('x')}</button>`;
     li.querySelector('.title').textContent = t.title;
     li.querySelector('.pin').addEventListener('click', (ev) => {
       ev.stopPropagation();
@@ -825,8 +1171,8 @@ function renderThreads() {
   state.panes.forEach((pane) => {
     const t = threadById(pane.threadId);
     pane.ddIcon.innerHTML = t && t.pinned ? pinIcon(true) : '';
-    pane.ddLabel.textContent = t ? t.title : (state.threads.length ? '' : '(スレッドなし)');
-    pane.kindEl.textContent = t ? (t.kind === 'ssh' ? 'SSH' : 'ローカル') : '';
+    pane.ddLabel.textContent = t ? t.title : (state.threads.length ? '' : tr('thread.none'));
+    pane.kindEl.textContent = t ? (t.kind === 'ssh' ? 'SSH' : tr('kind.local')) : '';
     if (!pane.ddMenu.classList.contains('hidden')) buildPaneMenu(pane);
   });
 }
@@ -842,7 +1188,7 @@ function renderThreads() {
 function sendToActive(text, run) {
   const thread = focusedThread();
   if (!thread) {
-    toast('アクティブなターミナルがありません', true);
+    toast(tr('toast.noActiveTerm'), true);
     return;
   }
   const data = run ? text.replace(/\r\n|\r|\n/g, '\r') + '\r' : text;
@@ -856,7 +1202,7 @@ async function refreshWorkflows() {
   try {
     state.workflows = await invoke('list_workflows');
   } catch (e) {
-    toast(`ワークフローの読み込みに失敗: ${e}`, true);
+    toast(tr('wf.loadFailed', { e }), true);
   }
   renderWorkflows();
   renderQuickbar();
@@ -904,13 +1250,13 @@ const RESERVED_SHORTCUTS = new Set([
 
 /** Returns a reason string if `sc` is a bad workflow shortcut, else null. */
 function shortcutConflict(sc, excludeId) {
-  if (RESERVED_SHORTCUTS.has(sc)) return 'アプリのショートカットと重複しています';
+  if (RESERVED_SHORTCUTS.has(sc)) return tr('sc.conflict.reserved');
   // A plain Ctrl+<letter> (no shift/alt/meta) is a core shell key (Ctrl+C
   // interrupt, Ctrl+D EOF, Ctrl+Z suspend, …); stealing it would break the
   // terminal.
-  if (/^ctrl\+[a-z0-9]$/.test(sc)) return 'シェルが使うキーのため割り当てできません';
+  if (/^ctrl\+[a-z0-9]$/.test(sc)) return tr('sc.conflict.shell');
   const dup = state.workflows.find((w) => w.id !== excludeId && w.shortcut === sc);
-  if (dup) return `「${dup.name}」に割り当て済みです`;
+  if (dup) return tr('sc.conflict.dup', { name: dup.name });
   return null;
 }
 
@@ -1007,7 +1353,7 @@ async function moveWorkflow(w, dir) {
     await invoke('reorder_workflows', { ids });
     await refreshWorkflows();
   } catch (e) {
-    toast(`並べ替えに失敗: ${e}`, true);
+    toast(tr('toast.reorderFailed', { e }), true);
   }
 }
 
@@ -1029,7 +1375,7 @@ async function reorderWorkflowTo(draggedId, targetId, placeAfter) {
     await invoke('reorder_workflows', { ids });
     await refreshWorkflows();
   } catch (e) {
-    toast(`並べ替えに失敗: ${e}`, true);
+    toast(tr('toast.reorderFailed', { e }), true);
   }
 }
 
@@ -1044,10 +1390,10 @@ function workflowCard(w, opts = {}) {
     <h4></h4><div class="desc"></div><code></code>
     <div class="wf-badges"></div>
     <div class="row">
-      <button class="accent-btn run">${icon('play')}実行</button>
-      <button class="ghost-btn insert">${icon('insert')}挿入</button>
-      <button class="ghost-btn edit">${icon('edit')}編集</button>
-      <button class="danger-btn del">${icon('trash')}削除</button>
+      <button class="accent-btn run">${icon('play')}${tr('common.run')}</button>
+      <button class="ghost-btn insert">${icon('insert')}${tr('common.insert')}</button>
+      <button class="ghost-btn edit">${icon('edit')}${tr('common.edit')}</button>
+      <button class="danger-btn del">${icon('trash')}${tr('common.delete')}</button>
     </div>`;
   li.querySelector('h4').textContent = w.name;
   li.querySelector('.desc').textContent = w.description || '';
@@ -1074,7 +1420,7 @@ function workflowCard(w, opts = {}) {
   if (w.show_button) {
     const b = document.createElement('span');
     b.className = 'wf-badge';
-    b.innerHTML = `${icon('star')}クイックボタン`;
+    b.innerHTML = `${icon('star')}${tr('wf.quickButton')}`;
     badges.appendChild(b);
   }
   if (opts.moveUp !== undefined || opts.moveDown !== undefined) {
@@ -1087,7 +1433,7 @@ function workflowCard(w, opts = {}) {
       const grip = document.createElement('button');
       grip.type = 'button';
       grip.className = 'icon-btn wf-drag-handle';
-      grip.title = 'ドラッグして並べ替え';
+      grip.title = tr('wf.drag');
       grip.innerHTML = icon('grip');
       grip.addEventListener('mousedown', () => { li.draggable = true; });
       grip.addEventListener('mouseup', () => { li.draggable = false; });
@@ -1095,13 +1441,13 @@ function workflowCard(w, opts = {}) {
     }
     const up = document.createElement('button');
     up.className = 'icon-btn';
-    up.title = '上へ移動';
+    up.title = tr('common.moveUp');
     up.innerHTML = icon('chevronUp');
     up.disabled = !opts.moveUp;
     up.addEventListener('click', () => moveWorkflow(w, -1));
     const down = document.createElement('button');
     down.className = 'icon-btn';
-    down.title = '下へ移動';
+    down.title = tr('common.moveDown');
     down.innerHTML = icon('chevronDown');
     down.disabled = !opts.moveDown;
     down.addEventListener('click', () => moveWorkflow(w, 1));
@@ -1114,7 +1460,7 @@ function workflowCard(w, opts = {}) {
   li.querySelector('.insert').addEventListener('click', () => runWorkflow(w, false));
   li.querySelector('.edit').addEventListener('click', () => editWorkflow(w));
   li.querySelector('.del').addEventListener('click', async () => {
-    if (!(await confirmModal(`「${w.name}」を削除しますか?`))) return;
+    if (!(await confirmModal(tr('confirm.delete', { name: w.name })))) return;
     await invoke('delete_workflow', { id: w.id });
     refreshWorkflows();
   });
@@ -1196,9 +1542,9 @@ function renderWorkflows() {
   const list = $('#wf-list');
   list.innerHTML = '';
   if (!state.workflows.length) {
-    list.appendChild(emptyState('zap', 'ワークフローがまだありません',
-      'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。',
-      { label: 'ワークフローを登録', onClick: () => editWorkflow(null) }));
+    list.appendChild(emptyState('zap', tr('wf.emptyTitle'),
+      tr('wf.emptyHint'),
+      { label: tr('wf.emptyCta'), onClick: () => editWorkflow(null) }));
     return;
   }
   // Searching flattens across groups (reordering makes no sense in a filtered
@@ -1208,8 +1554,8 @@ function renderWorkflows() {
       [w.name, w.description, w.command, w.group, (w.tags || []).join(' ')]
         .join(' ').toLowerCase().includes(q));
     if (!items.length) {
-      list.appendChild(emptyState('search', '一致するワークフローがありません',
-        `「${q}」に一致する項目は見つかりませんでした。`));
+      list.appendChild(emptyState('search', tr('wf.searchNoMatchTitle'),
+        tr('search.noMatch', { q })));
       return;
     }
     for (const w of items) list.appendChild(workflowCard(w, { showGroup: true }));
@@ -1235,20 +1581,20 @@ async function runWorkflow(w, run) {
 function editWorkflow(w) {
   const isNew = !w;
   openModal({
-    title: isNew ? 'ワークフローを登録' : 'ワークフローを編集',
-    okLabel: '保存',
+    title: isNew ? tr('wf.editTitle.new') : tr('wf.editTitle.edit'),
+    okLabel: tr('common.save'),
     body: [
-      fieldSection('基本情報'),
-      field('名前', 'name', w?.name || '', { required: true }),
-      field('説明', 'description', w?.description || ''),
-      field('グループ (階層は / 区切り。例: Deploy/Staging)', 'group', w?.group || '',
-        { list: existingGroups(), placeholder: '未入力 = 未分類' }),
-      field('タグ (カンマ区切り)', 'tags', (w?.tags || []).join(', ')),
-      fieldSection('コマンド'),
-      fieldTextarea('テンプレート ( {{名前}} / {{名前:既定値}} でプレースホルダ )', 'command', w?.command || '', { required: true }),
-      fieldSection('起動方法'),
-      fieldShortcut('ショートカット (任意・Ctrl / Alt / Meta 必須)', 'shortcut', w?.shortcut || '', { excludeId: w?.id || '' }),
-      fieldCheckbox('シェル表示にクイックボタンを表示', 'show_button', !!w?.show_button),
+      fieldSection(tr('section.basic')),
+      field(tr('wf.field.name'), 'name', w?.name || '', { required: true }),
+      field(tr('wf.field.desc'), 'description', w?.description || ''),
+      field(tr('wf.field.group'), 'group', w?.group || '',
+        { list: existingGroups(), placeholder: tr('wf.group.ph') }),
+      field(tr('wf.field.tags'), 'tags', (w?.tags || []).join(', ')),
+      fieldSection(tr('wf.section.command')),
+      fieldTextarea(tr('wf.field.template'), 'command', w?.command || '', { required: true }),
+      fieldSection(tr('wf.section.launch')),
+      fieldShortcut(tr('wf.field.shortcut'), 'shortcut', w?.shortcut || '', { excludeId: w?.id || '' }),
+      fieldCheckbox(tr('wf.field.showButton'), 'show_button', !!w?.show_button),
     ],
     onOk: async (values) => {
       await invoke('save_workflow', {
@@ -1271,8 +1617,8 @@ function editWorkflow(w) {
 function promptPlaceholders(w, placeholders) {
   return new Promise((resolve) => {
     openModal({
-      title: `${w.name} — パラメータ入力`,
-      okLabel: '実行',
+      title: tr('wf.paramTitle', { name: w.name }),
+      okLabel: tr('common.run'),
       body: placeholders.map((p) => field(p.name, `ph_${p.name}`, p.default ?? '')),
       onOk: (values) => {
         const out = {};
@@ -1290,12 +1636,13 @@ async function refreshHosts() {
   try {
     state.hosts = await invoke('list_ssh_hosts');
   } catch (e) {
-    toast(`SSH ホストの読み込みに失敗: ${e}`, true);
+    toast(tr('host.loadFailed', { e }), true);
   }
   renderHosts();
 }
 
-const AUTH_LABEL = { password: 'パスワード', key: '秘密鍵', agent: 'ssh-agent', keypassword: '秘密鍵+パスワード' };
+const AUTH_LABEL_KEY = { password: 'auth.password', key: 'auth.key', agent: 'auth.agent', keypassword: 'auth.keypassword' };
+const authLabel = (m) => (AUTH_LABEL_KEY[m] ? tr(AUTH_LABEL_KEY[m]) : m);
 
 function renderHosts() {
   const q = $('#host-search').value.trim().toLowerCase();
@@ -1305,10 +1652,10 @@ function renderHosts() {
     !q || [h.name, h.host, h.username].join(' ').toLowerCase().includes(q));
   if (!items.length) {
     list.appendChild(q
-      ? emptyState('search', '一致するホストがありません', `「${q}」に一致する接続先は見つかりませんでした。`)
-      : emptyState('server', 'SSH 接続先がまだありません',
-          '接続先を登録すると、新規スレッド作成時や一覧からワンクリックで接続できます。',
-          { label: 'SSH ホストを登録', onClick: () => editHost(null) }));
+      ? emptyState('search', tr('host.searchNoMatchTitle'), tr('host.searchNoMatch', { q }))
+      : emptyState('server', tr('host.emptyTitle'),
+          tr('host.emptyHint'),
+          { label: tr('host.emptyCta'), onClick: () => editHost(null) }));
     return;
   }
   for (const h of items) {
@@ -1319,17 +1666,17 @@ function renderHosts() {
       <div class="host-conn"></div>
       <div class="host-badges"><span class="auth-badge">${icon('lock')}<span class="auth-label"></span></span></div>
       <div class="row">
-        <button class="accent-btn connect">${icon('login')}接続</button>
-        <button class="ghost-btn edit">${icon('edit')}編集</button>
-        <button class="danger-btn del">${icon('trash')}削除</button>
+        <button class="accent-btn connect">${icon('login')}${tr('common.connect')}</button>
+        <button class="ghost-btn edit">${icon('edit')}${tr('common.edit')}</button>
+        <button class="danger-btn del">${icon('trash')}${tr('common.delete')}</button>
       </div>`;
     li.querySelector('h4').textContent = h.name || `${h.username}@${h.host}`;
     li.querySelector('.host-conn').textContent = `${h.username}@${h.host}:${h.port}`;
-    li.querySelector('.auth-label').textContent = AUTH_LABEL[h.auth_method] || h.auth_method;
+    li.querySelector('.auth-label').textContent = authLabel(h.auth_method);
     li.querySelector('.connect').addEventListener('click', () => newSshThread(h));
     li.querySelector('.edit').addEventListener('click', () => editHost(h));
     li.querySelector('.del').addEventListener('click', async () => {
-      if (!(await confirmModal(`「${h.name || h.host}」を削除しますか?`))) return;
+      if (!(await confirmModal(tr('confirm.delete', { name: h.name || h.host })))) return;
       await invoke('delete_ssh_host', { id: h.id });
       refreshHosts();
     });
@@ -1354,34 +1701,34 @@ function editHost(h) {
     key_path: values.key_path.trim(),
   });
   openModal({
-    title: isNew ? 'SSH ホストを登録' : 'SSH ホストを編集',
-    okLabel: '保存',
+    title: isNew ? tr('host.editTitle.new') : tr('host.editTitle.edit'),
+    okLabel: tr('common.save'),
     body: [
-      fieldSection('接続先'),
-      field('表示名', 'name', h?.name || ''),
-      field('ホスト', 'host', h?.host || '', { required: true, placeholder: 'example.com' }),
-      field('ポート', 'port', String(h?.port ?? 22), { type: 'number' }),
-      field('ユーザー名', 'username', h?.username || '', { required: true }),
-      fieldSection('認証'),
-      fieldSelect('認証方式', 'auth_method', h?.auth_method || 'password', [
-        ['password', 'パスワード'], ['key', '秘密鍵ファイル'], ['agent', 'ssh-agent'],
-        ['keypassword', '秘密鍵 + パスワード'],
+      fieldSection(tr('host.section.dest')),
+      field(tr('host.field.name'), 'name', h?.name || ''),
+      field(tr('host.field.host'), 'host', h?.host || '', { required: true, placeholder: 'example.com' }),
+      field(tr('host.field.port'), 'port', String(h?.port ?? 22), { type: 'number' }),
+      field(tr('host.field.username'), 'username', h?.username || '', { required: true }),
+      fieldSection(tr('host.section.auth')),
+      fieldSelect(tr('host.field.authMethod'), 'auth_method', h?.auth_method || 'password', [
+        ['password', tr('auth.password')], ['key', tr('auth.keyfile')], ['agent', tr('auth.agent')],
+        ['keypassword', tr('auth.keypassword2')],
       ]),
-      field('秘密鍵パス (認証方式: 秘密鍵 / 秘密鍵+パスワード)', 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
-      fieldSection('接続テスト (保存されません)'),
-      field('パスワード', 'test_password', '', { type: 'password' }),
-      field('鍵パスフレーズ', 'test_passphrase', '', { type: 'password' }),
+      field(tr('host.field.keyPath'), 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
+      fieldSection(tr('host.section.test')),
+      field(tr('host.field.testPassword'), 'test_password', '', { type: 'password' }),
+      field(tr('host.field.testPassphrase'), 'test_passphrase', '', { type: 'password' }),
     ],
     // The connection test uses the SAME fail-closed TOFU handshake as a real
     // connect: on first contact with an unknown host it does NOT send the
     // password — it reports the fingerprint and, on a second press, re-tests
     // trusting exactly that fingerprint (which is required to exercise auth).
     extraActions: [{
-      label: '接続テスト',
+      label: tr('host.test'),
       className: 'ghost-btn',
       onClick: async ({ values, setStatus, btn }) => {
         if (!values.host.trim() || !values.username.trim()) {
-          setStatus('ホストとユーザー名を入力してください', 'err');
+          setStatus(tr('host.test.needHostUser'), 'err');
           return;
         }
         const host = hostFrom(values);
@@ -1394,15 +1741,15 @@ function editHost(h) {
         else if (host.auth_method === 'keypassword') { args.password = pw; args.passphrase = pass; }
         // 'agent' needs no secret.
         btn.disabled = true;
-        setStatus('接続テスト中…', '');
+        setStatus(tr('host.test.running'), '');
         try {
           const rep = await invoke('test_ssh_connection', args);
           const key = rep.host_key_known
-            ? '既知のホスト鍵と一致'
-            : `承認したホスト鍵で認証(未保存): ${rep.key_type} ${rep.fingerprint}`;
-          setStatus(`✓ 接続成功・認証OK / ${key}`, 'ok');
+            ? tr('host.test.keyMatch')
+            : tr('host.test.keyApproved', { type: rep.key_type, fp: rep.fingerprint });
+          setStatus(tr('host.test.ok', { key }), 'ok');
           testTrustFingerprint = null;
-          btn.textContent = '接続テスト';
+          btn.textContent = tr('host.test');
         } catch (e) {
           const msg = String(e);
           const unknown = !testTrustFingerprint && msg.match(/^UNKNOWN_HOST_KEY:([^:]+):(.+)$/);
@@ -1410,19 +1757,16 @@ function editHost(h) {
             // First contact — no credential was sent. Show the fingerprint;
             // pressing the button again trusts it for the auth test only.
             testTrustFingerprint = unknown[2];
-            btn.textContent = 'この鍵を信頼して認証テスト';
-            setStatus(
-              `到達可能・新しいホスト鍵 ${unknown[1]} ${unknown[2]} — 認証もテストするにはもう一度押してください(保存はされません)`,
-              'ok',
-            );
+            btn.textContent = tr('host.test.trustBtn');
+            setStatus(tr('host.test.newKey', { type: unknown[1], fp: unknown[2] }), 'ok');
           } else if (msg.match(/^FINGERPRINT_MISMATCH:/)) {
             testTrustFingerprint = null;
-            btn.textContent = '接続テスト';
-            setStatus('承認した鍵と異なる鍵が提示されました(MITM の可能性)。中止しました', 'err');
+            btn.textContent = tr('host.test');
+            setStatus(tr('host.test.mitm'), 'err');
           } else {
             testTrustFingerprint = null;
-            btn.textContent = '接続テスト';
-            setStatus(`✗ 接続テスト失敗: ${msg}`, 'err');
+            btn.textContent = tr('host.test');
+            setStatus(tr('host.test.failed', { msg }), 'err');
           }
         } finally {
           btn.disabled = false;
@@ -1447,15 +1791,16 @@ function promptSshSecrets(host) {
   return new Promise((resolve) => {
     const body = [];
     if (isCombined) {
-      body.push(field('鍵のパスフレーズ (無い場合は空欄)', 'passphrase', '', { type: 'password' }));
-      body.push(field(`${host.username} のパスワード`, 'password', '', { type: 'password' }));
+      body.push(field(tr('secret.passphraseOpt'), 'passphrase', '', { type: 'password' }));
+      body.push(field(tr('secret.userPassword', { user: host.username }), 'password', '', { type: 'password' }));
     } else {
-      body.push(field(isKey ? 'パスフレーズ (無い場合は空欄)' : `${host.username} のパスワード`,
+      body.push(field(isKey ? tr('secret.passphraseOnly') : tr('secret.userPassword', { user: host.username }),
         'secret', '', { type: 'password', autofocus: true }));
     }
+    const kind = isCombined ? tr('secret.kind.combined') : (isKey ? tr('secret.kind.key') : tr('secret.kind.password'));
     openModal({
-      title: `${host.name || host.host} — ${isCombined ? '鍵パスフレーズ + パスワード' : (isKey ? '鍵のパスフレーズ' : 'パスワード')}`,
-      okLabel: '接続',
+      title: tr('secret.title', { name: host.name || host.host, kind }),
+      okLabel: tr('common.connect'),
       body,
       onOk: (values) => {
         if (isCombined) {
@@ -1477,7 +1822,7 @@ async function refreshProfiles() {
   try {
     state.profiles = await invoke('list_profiles');
   } catch (e) {
-    toast(`プロファイルの読み込みに失敗: ${e}`, true);
+    toast(tr('profile.loadFailed', { e }), true);
   }
   renderProfiles();
   renderProfileSettingOptions();
@@ -1495,9 +1840,9 @@ function renderProfiles() {
   const list = $('#profile-list');
   list.innerHTML = '';
   if (!state.profiles.length) {
-    list.appendChild(emptyState('terminal', 'プロファイルがありません',
-      '起動するシェルをプロファイルとして登録できます。',
-      { label: 'プロファイルを追加', onClick: () => editProfile(null) }));
+    list.appendChild(emptyState('terminal', tr('profile.emptyTitle'),
+      tr('profile.emptyHint'),
+      { label: tr('profile.emptyCta'), onClick: () => editProfile(null) }));
     return;
   }
   for (const p of state.profiles) {
@@ -1508,14 +1853,14 @@ function renderProfiles() {
       <h4><span class="star"></span><span class="pname"></span></h4>
       <div class="meta"></div>
       <div class="row">
-        <button class="accent-btn launch">${icon('play')}起動</button>
-        <button class="ghost-btn setdefault">${icon('star')}既定に</button>
-        <button class="ghost-btn edit">${icon('edit')}編集</button>
-        <button class="danger-btn del">${icon('trash')}削除</button>
+        <button class="accent-btn launch">${icon('play')}${tr('common.launch')}</button>
+        <button class="ghost-btn setdefault">${icon('star')}${tr('profile.setDefault')}</button>
+        <button class="ghost-btn edit">${icon('edit')}${tr('common.edit')}</button>
+        <button class="danger-btn del">${icon('trash')}${tr('common.delete')}</button>
       </div>`;
     li.querySelector('.star').innerHTML = def ? icon('star') : '';
     li.querySelector('.pname').textContent = p.name;
-    const cmd = p.command || 'システム既定シェル';
+    const cmd = p.command || tr('profile.systemDefault');
     const argsText = (p.args || []).length ? ' ' + p.args.join(' ') : '';
     li.querySelector('.meta').textContent = cmd + argsText + (p.cwd ? `  ·  ${p.cwd}` : '');
     li.querySelector('.launch').addEventListener('click', () => newLocalThread({ profileId: p.id }));
@@ -1524,8 +1869,8 @@ function renderProfiles() {
     setDefaultBtn.addEventListener('click', () => setDefaultProfile(p.id));
     li.querySelector('.edit').addEventListener('click', () => editProfile(p));
     li.querySelector('.del').addEventListener('click', async () => {
-      if (state.profiles.length <= 1) return toast('最後のプロファイルは削除できません', true);
-      if (!(await confirmModal(`プロファイル「${p.name}」を削除しますか?`))) return;
+      if (state.profiles.length <= 1) return toast(tr('profile.cantDeleteLast'), true);
+      if (!(await confirmModal(tr('profile.confirmDelete', { name: p.name })))) return;
       try {
         await invoke('delete_profile', { id: p.id });
         // Clear the configured default if it pointed at the deleted profile,
@@ -1536,7 +1881,7 @@ function renderProfiles() {
         }
         refreshProfiles();
       } catch (e) {
-        toast(`削除に失敗: ${e}`, true);
+        toast(tr('toast.deleteFailed', { e }), true);
       }
     });
     list.appendChild(li);
@@ -1548,19 +1893,19 @@ async function setDefaultProfile(id) {
   await invoke('save_settings', { settings: state.settings });
   renderProfiles();
   renderProfileSettingOptions();
-  toast('既定のプロファイルを変更しました');
+  toast(tr('profile.defaultChanged'));
 }
 
 function editProfile(p) {
   const isNew = !p;
   openModal({
-    title: isNew ? 'プロファイルを追加' : 'プロファイルを編集',
-    okLabel: '保存',
+    title: isNew ? tr('profile.editTitle.new') : tr('profile.editTitle.edit'),
+    okLabel: tr('common.save'),
     body: [
-      field('表示名', 'name', p?.name || '', { required: true }),
-      field('実行ファイル (空欄 = OS 既定シェル)', 'command', p?.command || '', { placeholder: '/bin/zsh, powershell.exe …' }),
-      field('引数 (スペース区切り)', 'args', (p?.args || []).join(' ')),
-      field('作業ディレクトリ (空欄 = ホーム)', 'cwd', p?.cwd || '', { placeholder: '~/work' }),
+      field(tr('host.field.name'), 'name', p?.name || '', { required: true }),
+      field(tr('profile.field.command'), 'command', p?.command || '', { placeholder: '/bin/zsh, powershell.exe …' }),
+      field(tr('profile.field.args'), 'args', (p?.args || []).join(' ')),
+      field(tr('profile.field.cwd'), 'cwd', p?.cwd || '', { placeholder: '~/work' }),
     ],
     onOk: async (values) => {
       await invoke('save_profile', {
@@ -1583,7 +1928,7 @@ async function refreshLaunchSets() {
   try {
     state.launchSets = await invoke('list_launch_sets');
   } catch (e) {
-    toast(`起動セットの読み込みに失敗: ${e}`, true);
+    toast(tr('set.loadFailed', { e }), true);
   }
   renderLaunchSets();
 }
@@ -1595,10 +1940,10 @@ function launchSetSummary(set) {
     .map((it) => {
       if (it.ssh_host_id) {
         const h = state.hosts.find((x) => x.id === it.ssh_host_id);
-        return h ? `⇄ ${h.name || h.host}` : 'SSH (削除済み)';
+        return h ? `⇄ ${h.name || h.host}` : tr('set.deletedRef.ssh');
       }
       const p = state.profiles.find((x) => x.id === it.profile_id);
-      return p ? p.name : 'プロファイル (削除済み)';
+      return p ? p.name : tr('set.deletedRef.profile');
     })
     .join(' → ');
 }
@@ -1607,9 +1952,9 @@ function renderLaunchSets() {
   const list = $('#launchset-list');
   list.innerHTML = '';
   if (!state.launchSets.length) {
-    list.appendChild(emptyState('layers', '起動セットがまだありません',
-      'いつも開くシェル・SSH 接続・ワークフローをまとめて登録すると、ワンクリックで一括起動できます。',
-      { label: '起動セットを登録', onClick: () => editLaunchSet(null) }));
+    list.appendChild(emptyState('layers', tr('set.emptyTitle'),
+      tr('set.emptyHint'),
+      { label: tr('set.emptyCta'), onClick: () => editLaunchSet(null) }));
     return;
   }
   for (const set of state.launchSets) {
@@ -1619,17 +1964,17 @@ function renderLaunchSets() {
       <h4></h4>
       <div class="desc"></div>
       <div class="row">
-        <button class="accent-btn launch">${icon('play')}起動</button>
-        <button class="ghost-btn edit">${icon('edit')}編集</button>
-        <button class="danger-btn del">${icon('trash')}削除</button>
+        <button class="accent-btn launch">${icon('play')}${tr('common.launch')}</button>
+        <button class="ghost-btn edit">${icon('edit')}${tr('common.edit')}</button>
+        <button class="danger-btn del">${icon('trash')}${tr('common.delete')}</button>
       </div>`;
     li.querySelector('h4').textContent = set.name;
     li.querySelector('.desc').textContent =
-      `${set.items.length} 項目: ${launchSetSummary(set)}`;
+      tr('set.itemsSummary', { count: set.items.length, summary: launchSetSummary(set) });
     li.querySelector('.launch').addEventListener('click', () => runLaunchSet(set));
     li.querySelector('.edit').addEventListener('click', () => editLaunchSet(set));
     li.querySelector('.del').addEventListener('click', async () => {
-      if (!(await confirmModal(`「${set.name}」を削除しますか?`))) return;
+      if (!(await confirmModal(tr('confirm.delete', { name: set.name })))) return;
       await invoke('delete_launch_set', { id: set.id });
       refreshLaunchSets();
     });
@@ -1651,13 +1996,13 @@ async function runLaunchSet(set) {
     if (item.ssh_host_id) {
       const host = state.hosts.find((h) => h.id === item.ssh_host_id);
       if (!host) {
-        toast('登録済みの SSH ホストが見つかりません(削除済みの可能性があります)', true);
+        toast(tr('set.hostMissing'), true);
         continue;
       }
       await newSshThread(host);
     } else {
       if (item.profile_id && !state.profiles.some((p) => p.id === item.profile_id)) {
-        toast('登録済みのプロファイルが見つかりません(削除済みの可能性があります)', true);
+        toast(tr('set.profileMissing'), true);
         continue;
       }
       await newLocalThread({ profileId: item.profile_id || null });
@@ -1668,7 +2013,7 @@ async function runLaunchSet(set) {
       if (wf) await runWorkflow(wf, true);
     }
   }
-  toast(`「${set.name}」を起動しました`);
+  toast(tr('set.launched', { name: set.name }));
 }
 
 /** One repeatable row in the launch-set editor: which shell/host to open,
@@ -1680,7 +2025,7 @@ function buildItemRow(item) {
   const targetSel = document.createElement('select');
   targetSel.className = 'li-target';
   const profileGroup = document.createElement('optgroup');
-  profileGroup.label = 'ローカルプロファイル';
+  profileGroup.label = tr('menu.localProfiles');
   for (const p of state.profiles) {
     const o = document.createElement('option');
     o.value = `profile:${p.id}`;
@@ -1690,7 +2035,7 @@ function buildItemRow(item) {
   targetSel.appendChild(profileGroup);
   if (state.hosts.length) {
     const hostGroup = document.createElement('optgroup');
-    hostGroup.label = 'SSH ホスト';
+    hostGroup.label = tr('menu.sshHosts');
     for (const h of state.hosts) {
       const o = document.createElement('option');
       o.value = `ssh:${h.id}`;
@@ -1707,7 +2052,7 @@ function buildItemRow(item) {
   wfSel.className = 'li-workflow';
   const none = document.createElement('option');
   none.value = '';
-  none.textContent = '(自動実行なし)';
+  none.textContent = tr('set.noAutorun');
   wfSel.appendChild(none);
   for (const w of state.workflows) {
     const o = document.createElement('option');
@@ -1720,7 +2065,7 @@ function buildItemRow(item) {
   const removeBtn = document.createElement('button');
   removeBtn.type = 'button';
   removeBtn.className = 'icon-btn li-remove';
-  removeBtn.title = 'この項目を削除';
+  removeBtn.title = tr('set.removeItem.title');
   removeBtn.innerHTML = icon('x');
   removeBtn.addEventListener('click', () => li.remove());
 
@@ -1748,7 +2093,7 @@ function buildItemListEditor(initialItems) {
   const addBtn = document.createElement('button');
   addBtn.type = 'button';
   addBtn.className = 'ghost-btn li-add';
-  addBtn.innerHTML = `${icon('plus')}<span>項目を追加</span>`;
+  addBtn.innerHTML = `${icon('plus')}<span>${tr('set.addItem')}</span>`;
   addBtn.addEventListener('click', () => rows.appendChild(buildItemRow(null)));
   wrap.appendChild(addBtn);
 
@@ -1776,16 +2121,16 @@ function readItemListRows(container) {
 function editLaunchSet(set) {
   const isNew = !set;
   openModal({
-    title: isNew ? '起動セットを登録' : '起動セットを編集',
-    okLabel: '保存',
+    title: isNew ? tr('set.editTitle.new') : tr('set.editTitle.edit'),
+    okLabel: tr('common.save'),
     body: [
-      fieldSection('基本情報'),
-      field('名前', 'name', set?.name || '', { required: true }),
-      fieldSection('起動する項目(上から順に開きます)'),
-      fieldItemList('項目', 'items', set?.items || []),
+      fieldSection(tr('section.basic')),
+      field(tr('wf.field.name'), 'name', set?.name || '', { required: true }),
+      fieldSection(tr('set.section.itemsOrder')),
+      fieldItemList(tr('set.field.items'), 'items', set?.items || []),
     ],
     onOk: async (values) => {
-      if (!values.items.length) throw new Error('少なくとも 1 つの項目を追加してください');
+      if (!values.items.length) throw new Error(tr('set.needOneItem'));
       await invoke('save_launch_set', {
         set: { id: set?.id || '', name: values.name.trim(), items: values.items },
       });
@@ -1814,15 +2159,17 @@ async function loadSettings() {
   } catch (e) {
     // Keep the built-in defaults from `state.settings` rather than aborting
     // boot() and leaving a blank app.
-    toast(`設定の読み込みに失敗、既定値を使用します: ${e}`, true);
+    toast(tr('settings.loadFailed', { e }), true);
   }
   const f = $('#settings-form').elements;
   f.font_size.value = state.settings.font_size;
   f.font_family.value = state.settings.font_family;
   f.scrollback.value = state.settings.scrollback;
   f.theme.value = state.settings.theme === 'light' ? 'light' : 'dark';
+  f.language.value = state.settings.language === 'en' ? 'en' : 'ja';
   f.shell_integration.checked = state.settings.shell_integration !== false;
   applyTheme();
+  applyLanguage();
 }
 
 $('#settings-form').addEventListener('submit', async (ev) => {
@@ -1835,18 +2182,19 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     font_family: f.elements.font_family.value.trim(),
     scrollback: parseInt(f.elements.scrollback.value, 10) || 10000,
     theme: f.elements.theme.value === 'light' ? 'light' : 'dark',
+    language: f.elements.language.value === 'en' ? 'en' : 'ja',
     shell_integration: f.elements.shell_integration.checked,
   };
   await invoke('save_settings', { settings: state.settings });
   applyTheme();
+  applyLanguage();
   for (const t of state.threads) {
     t.term.options.fontSize = state.settings.font_size;
     t.term.options.fontFamily = fontFamilyStack();
     t.term.options.scrollback = state.settings.scrollback;
     t.fit.fit();
   }
-  renderProfiles();
-  toast('設定を保存しました');
+  toast(tr('settings.saved'));
 });
 
 /* ---------------- command palette ---------------- */
@@ -1859,31 +2207,31 @@ const palette = {
 
 function paletteEntries() {
   const entries = [
-    { kind: 'action', label: '新しいローカルスレッド', detail: 'Ctrl+Shift+T', run: () => newLocalThread() },
+    { kind: 'action', label: tr('palette.newLocalThread'), detail: 'Ctrl+Shift+T', run: () => newLocalThread() },
     {
       kind: 'action',
-      label: state.panes.length < 2 ? 'ペインを上下分割' : 'ペイン分割を解除',
+      label: state.panes.length < 2 ? tr('palette.splitPane') : tr('palette.unsplitPane'),
       detail: 'Ctrl+Shift+D',
       run: toggleSplit,
     },
-    { kind: 'action', label: 'ワークフローを登録', detail: '', run: () => editWorkflow(null) },
-    { kind: 'action', label: 'SSH ホストを登録', detail: '', run: () => editHost(null) },
-    { kind: 'action', label: '起動セットを登録', detail: '', run: () => editLaunchSet(null) },
-    { kind: 'action', label: 'キーボードショートカット一覧', detail: 'Ctrl+Shift+/', run: openShortcuts },
+    { kind: 'action', label: tr('palette.registerWorkflow'), detail: '', run: () => editWorkflow(null) },
+    { kind: 'action', label: tr('palette.registerHost'), detail: '', run: () => editHost(null) },
+    { kind: 'action', label: tr('palette.registerSet'), detail: '', run: () => editLaunchSet(null) },
+    { kind: 'action', label: tr('palette.shortcutsList'), detail: 'Ctrl+Shift+/', run: openShortcuts },
   ];
   for (const p of state.profiles) {
     entries.push({
       kind: 'action',
-      label: `新規スレッド: ${p.name}`,
-      detail: p.command || 'システム既定シェル',
+      label: tr('palette.newThreadOf', { name: p.name }),
+      detail: p.command || tr('profile.systemDefault'),
       run: () => newLocalThread({ profileId: p.id }),
     });
   }
   for (const t of state.threads) {
     entries.push({
       kind: 'thread',
-      label: `表示: ${t.title}`,
-      detail: t.kind === 'ssh' ? 'SSH スレッド' : 'ローカルスレッド',
+      label: tr('palette.showThread', { title: t.title }),
+      detail: t.kind === 'ssh' ? tr('thread.kind.ssh') : tr('thread.kind.local'),
       run: () => { setView('shell'); assignThread(state.focusedPane, t.id); },
     });
   }
@@ -1907,8 +2255,8 @@ function paletteEntries() {
   for (const set of state.launchSets) {
     entries.push({
       kind: 'set',
-      label: `起動セット: ${set.name}`,
-      detail: `${set.items.length} 項目`,
+      label: tr('palette.launchSet', { name: set.name }),
+      detail: tr('set.itemsSummary', { count: set.items.length, summary: launchSetSummary(set) }),
       run: () => runLaunchSet(set),
     });
   }
@@ -2094,7 +2442,7 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
       el.readOnly = true;
       el.dataset.shortcut = f.value || '';
       el.value = prettyShortcut(f.value || '');
-      el.placeholder = 'クリックしてキーを押す (Backspace で消去)';
+      el.placeholder = tr('shortcut.ph');
       el.addEventListener('keydown', (ev) => {
         ev.preventDefault();
         if (['Backspace', 'Delete', 'Escape'].includes(ev.key)) {
@@ -2191,7 +2539,7 @@ async function submitModal() {
     if (el.required && !el.value.trim()) valid = false;
   }
   if (!valid) {
-    modalCtx.err.textContent = '必須項目を入力してください';
+    modalCtx.err.textContent = tr('modal.requiredFields');
     return;
   }
   const ctx = modalCtx;
@@ -2205,11 +2553,11 @@ async function submitModal() {
   }
 }
 
-function confirmModal(message, okLabel = '削除') {
+function confirmModal(message, okLabel) {
   return new Promise((resolve) => {
     openModal({
       title: message,
-      okLabel,
+      okLabel: okLabel || tr('common.delete'),
       body: [],
       onOk: () => resolve(true),
       onCancel: () => resolve(false),
@@ -2343,7 +2691,7 @@ function toggleProfileMenu(anchor) {
     item.innerHTML = `<span class="pi-name"></span><span class="pi-cmd"></span>`;
     item.querySelector('.pi-name').textContent =
       (isDefaultProfile(p) ? '★ ' : '') + p.name;
-    item.querySelector('.pi-cmd').textContent = p.command || 'システム既定シェル';
+    item.querySelector('.pi-cmd').textContent = p.command || tr('profile.systemDefault');
     item.addEventListener('click', () => {
       closeProfileMenu();
       newLocalThread({ profileId: p.id });
@@ -2357,7 +2705,7 @@ function toggleProfileMenu(anchor) {
     menu.appendChild(sshSep);
     const sshLabel = document.createElement('div');
     sshLabel.className = 'popup-label';
-    sshLabel.textContent = 'SSH 接続';
+    sshLabel.textContent = tr('menu.sshConnections');
     menu.appendChild(sshLabel);
     for (const h of state.hosts) {
       const item = document.createElement('button');
@@ -2379,14 +2727,14 @@ function toggleProfileMenu(anchor) {
     menu.appendChild(setSep);
     const setLabel = document.createElement('div');
     setLabel.className = 'popup-label';
-    setLabel.textContent = '起動セット';
+    setLabel.textContent = tr('menu.launchSets');
     menu.appendChild(setLabel);
     for (const set of state.launchSets) {
       const item = document.createElement('button');
       item.className = 'popup-item';
       item.innerHTML = `<span class="pi-name"></span><span class="pi-cmd"></span>`;
       item.querySelector('.pi-name').textContent = `▤ ${set.name}`;
-      item.querySelector('.pi-cmd').textContent = `${set.items.length} 項目`;
+      item.querySelector('.pi-cmd').textContent = tr('set.itemsSummary', { count: set.items.length, summary: launchSetSummary(set) });
       item.addEventListener('click', () => {
         closeProfileMenu();
         runLaunchSet(set);
@@ -2399,7 +2747,7 @@ function toggleProfileMenu(anchor) {
   menu.appendChild(sep);
   const manage = document.createElement('button');
   manage.className = 'popup-item muted';
-  manage.textContent = '⚙ プロファイルを管理…';
+  manage.textContent = tr('menu.manageProfiles');
   manage.addEventListener('click', () => {
     closeProfileMenu();
     openSidebarPanel('profiles');
@@ -2460,12 +2808,12 @@ function fillWorkflowMenu(menuEl, node, level, isRoot) {
   if (isRoot) {
     const label = document.createElement('div');
     label.className = 'popup-label';
-    label.textContent = 'ワークフローを実行';
+    label.textContent = tr('menu.runWorkflow');
     menuEl.appendChild(label);
     if (!state.workflows.length) {
       const empty = document.createElement('div');
       empty.className = 'popup-empty';
-      empty.textContent = 'ワークフローが未登録です';
+      empty.textContent = tr('menu.workflowsEmpty');
       menuEl.appendChild(empty);
     }
   }
@@ -2478,7 +2826,7 @@ function fillWorkflowMenu(menuEl, node, level, isRoot) {
     const manage = document.createElement('button');
     manage.className = 'popup-item muted';
     manage.setAttribute('role', 'menuitem');
-    manage.textContent = state.workflows.length ? '⚙ ワークフローを管理…' : '＋ ワークフローを登録…';
+    manage.textContent = state.workflows.length ? tr('menu.manageWorkflows') : tr('menu.registerWorkflow');
     manage.addEventListener('mouseenter', () => closeSubmenusFrom(1));
     manage.addEventListener('click', () => {
       closeTermContextMenu();
@@ -2504,7 +2852,7 @@ function workflowMenuItem(w, level) {
     item.querySelector('.pi-line').appendChild(kbd);
   }
   item.querySelector('.pi-cmd').textContent = w.command;
-  item.title = (w.description || w.command) + ' — Shift+クリックで実行せず挿入';
+  item.title = tr('menu.wfHint', { desc: w.description || w.command });
   item.addEventListener('mouseenter', () => closeSubmenusFrom(level + 1));
   item.addEventListener('click', (ev) => {
     closeTermContextMenu();
@@ -2654,7 +3002,7 @@ async function refreshMaxIcon() {
   const isMax = await appWindow.isMaximized();
   // Restore (overlapping squares) vs maximize (single square).
   maxBtn.textContent = isMax ? '❐' : '□';
-  maxBtn.title = isMax ? '元に戻す' : '最大化';
+  maxBtn.title = isMax ? tr('win.restore') : tr('win.max');
 }
 
 for (const btn of document.querySelectorAll('.win-btn')) {
@@ -2665,7 +3013,7 @@ for (const btn of document.querySelectorAll('.win-btn')) {
     else if (action === 'close') {
       // Closing kills every live shell/SSH session — confirm when any are open.
       if (state.threads.length &&
-          !(await confirmModal(`${state.threads.length} 個のセッションが実行中です。終了しますか?`, '終了'))) {
+          !(await confirmModal(tr('confirm.sessionsRunning', { count: state.threads.length }), tr('confirm.quit')))) {
         return;
       }
       await appWindow.close();
@@ -2751,9 +3099,9 @@ async function copyFocusedSelection() {
   if (!sel) return;
   try {
     await navigator.clipboard.writeText(sel);
-    toast('コピーしました');
+    toast(tr('toast.copied'));
   } catch (e) {
-    toast(`コピーに失敗: ${e}`, true);
+    toast(tr('toast.copyFailed', { e }), true);
   }
 }
 
@@ -2764,7 +3112,7 @@ async function pasteIntoFocused() {
   try {
     text = await navigator.clipboard.readText();
   } catch (e) {
-    toast(`貼り付けに失敗: ${e}`, true);
+    toast(tr('toast.pasteFailed', { e }), true);
     return;
   }
   if (!text) return;
@@ -2773,7 +3121,7 @@ async function pasteIntoFocused() {
   // shell/editor requested it — writing straight to the PTY bypassed that.
   if (text.trimEnd().includes('\n')) {
     const lines = text.trimEnd().split('\n').length;
-    if (!(await confirmModal(`${lines} 行のテキストを貼り付けますか?`, '貼り付け'))) return;
+    if (!(await confirmModal(tr('confirm.pasteLines', { lines }), tr('confirm.paste')))) return;
   }
   thread.term.paste(text);
   thread.term.focus();
@@ -2882,7 +3230,7 @@ function toggleFold(term, blocks, block) {
     el.classList.add('term-block-fold');
     if (el.dataset.bound) return;
     el.dataset.bound = '1';
-    el.textContent = `▸ ${rows} 行を折りたたみ済み — クリックで展開`;
+    el.textContent = tr('block.foldedRows', { rows });
     el.addEventListener('click', () => toggleFold(term, blocks, block));
   });
   block.foldDeco = deco;
@@ -2907,28 +3255,28 @@ function renderBlockToolbar(term, blocks, block, exit) {
     el.classList.add('term-block-toolbar');
     const ok = exit === 0;
     el.innerHTML = `
-      <button type="button" class="term-block-btn copy" title="ブロックをコピー">${icon('copy')}</button>
-      <button type="button" class="term-block-btn fold" title="出力を折りたたむ">${icon('chevronDown')}</button>
-      <span class="term-block-chip ${ok ? 'ok' : 'err'}" title="${ok ? 'コマンド成功 (exit 0)' : `コマンド失敗 (exit ${exit})`}">${ok ? '✓' : `✗ ${Number.isNaN(exit) ? '?' : exit}`}</span>`;
+      <button type="button" class="term-block-btn copy" title="${tr('block.copy.title')}">${icon('copy')}</button>
+      <button type="button" class="term-block-btn fold" title="${tr('block.fold.title')}">${icon('chevronDown')}</button>
+      <span class="term-block-chip ${ok ? 'ok' : 'err'}" title="${ok ? tr('block.chip.ok') : tr('block.chip.err', { exit })}">${ok ? '✓' : `✗ ${Number.isNaN(exit) ? '?' : exit}`}</span>`;
     el.querySelector('.copy').addEventListener('click', async (ev) => {
       ev.stopPropagation();
       try {
         await navigator.clipboard.writeText(blockText(term, blocks, block));
-        toast('ブロックをコピーしました');
+        toast(tr('block.copied'));
       } catch (e) {
-        toast(`コピーに失敗: ${e}`, true);
+        toast(tr('toast.copyFailed', { e }), true);
       }
     });
     const foldBtn = el.querySelector('.fold');
     if (!block.bodyMarker) {
       foldBtn.disabled = true;
-      foldBtn.title = '出力がありません';
+      foldBtn.title = tr('block.noOutput.title');
     } else {
       foldBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         toggleFold(term, blocks, block);
         foldBtn.classList.toggle('active', block.collapsed);
-        foldBtn.title = block.collapsed ? '出力を展開する' : '出力を折りたたむ';
+        foldBtn.title = block.collapsed ? tr('block.expand.title') : tr('block.fold.title');
       });
     }
   });
@@ -2961,33 +3309,35 @@ function blockJump(dir) {
 
 const IS_MAC = /Mac/i.test(navigator.userAgent);
 
-// The app's built-in shortcuts, grouped for the help overlay. Workflow
-// shortcuts are user-defined (set in the workflow editor) so they're
-// described rather than enumerated.
-const SHORTCUTS = [
-  { group: '全般', items: [
-    ['Ctrl+Shift+P', 'コマンドパレットを開く'],
-    ['Ctrl+Shift+T', '新しいローカルスレッド'],
-    ['Ctrl+Shift+W', '表示中のスレッドを終了'],
-    ['Ctrl+Shift+/', 'このショートカット一覧'],
-  ] },
-  { group: 'ペイン', items: [
-    ['Ctrl+Shift+D', '上下に分割 / 分割を解除'],
-    ['Ctrl+Shift+↑', '上のペインにフォーカス'],
-    ['Ctrl+Shift+↓', '下のペインにフォーカス'],
-  ] },
-  { group: 'ターミナル', items: [
-    ['Ctrl+Shift+C', '選択範囲をコピー'],
-    ['Ctrl+Shift+V', 'クリップボードを貼り付け'],
-    ['Ctrl+Shift+F', 'ターミナル内を検索'],
-    ['Ctrl+Alt+↑', '前のコマンドブロックへ (要シェル統合)'],
-    ['Ctrl+Alt+↓', '次のコマンドブロックへ (要シェル統合)'],
-  ] },
-  { group: 'ワークフロー', items: [
-    ['任意のキー', 'ワークフロー編集画面で登録したショートカットで実行'],
-    ['右クリック', 'ターミナル上のメニューから実行 (Shift+クリックで挿入のみ)'],
-  ] },
-];
+// The app's built-in shortcuts, grouped for the help overlay. Built fresh each
+// render so it reflects the current language. Workflow shortcuts are
+// user-defined (set in the workflow editor) so they're described, not listed.
+function shortcutGroups() {
+  return [
+    { group: tr('sc.group.general'), items: [
+      ['Ctrl+Shift+P', tr('sc.item.palette')],
+      ['Ctrl+Shift+T', tr('sc.item.newThread')],
+      ['Ctrl+Shift+W', tr('sc.item.closeThread')],
+      ['Ctrl+Shift+/', tr('sc.item.shortcuts')],
+    ] },
+    { group: tr('sc.group.pane'), items: [
+      ['Ctrl+Shift+D', tr('sc.item.split')],
+      ['Ctrl+Shift+↑', tr('sc.item.focusUp')],
+      ['Ctrl+Shift+↓', tr('sc.item.focusDown')],
+    ] },
+    { group: tr('sc.group.terminal'), items: [
+      ['Ctrl+Shift+C', tr('sc.item.copy')],
+      ['Ctrl+Shift+V', tr('sc.item.paste')],
+      ['Ctrl+Shift+F', tr('sc.item.find')],
+      ['Ctrl+Alt+↑', tr('sc.item.prevBlock')],
+      ['Ctrl+Alt+↓', tr('sc.item.nextBlock')],
+    ] },
+    { group: tr('sc.group.workflows'), items: [
+      [tr('sc.key.anyKey'), tr('sc.item.wfShortcut')],
+      [tr('sc.key.rightClick'), tr('sc.item.rightClick')],
+    ] },
+  ];
+}
 
 /** Renders a "Ctrl+Shift+P" style combo as separate <kbd> chips, using mac
  * glyphs on macOS. Non-combo strings (e.g. 任意のキー) become a single chip. */
@@ -3003,7 +3353,7 @@ function kbdCombo(combo) {
 function renderShortcuts() {
   const body = $('#sc-body');
   body.innerHTML = '';
-  for (const g of SHORTCUTS) {
+  for (const g of shortcutGroups()) {
     const sec = document.createElement('div');
     sec.className = 'sc-group';
     const h = document.createElement('div');
@@ -3067,8 +3417,8 @@ listen('session:exit', (ev) => {
   // A vanishing SSH thread can look like data loss, so surface it — a dropped
   // connection (code -1 from the backend) is flagged as an error.
   if (thread.kind === 'ssh') {
-    if (code === -1) toast(`「${thread.title}」の接続が切断されました`, true);
-    else toast(`「${thread.title}」が終了しました (code ${code})`);
+    if (code === -1) toast(tr('thread.disconnected', { title: thread.title }), true);
+    else toast(tr('thread.exited', { title: thread.title, code }));
   }
   closeThread(id, { kill: false });
 });
@@ -3089,4 +3439,4 @@ listen('session:exit', (ev) => {
   setView('shell');
   refreshMaxIcon();
   await newLocalThread();
-})().catch((e) => toast(`起動処理でエラー: ${e}`, true));
+})().catch((e) => toast(tr('boot.error', { e }), true));
