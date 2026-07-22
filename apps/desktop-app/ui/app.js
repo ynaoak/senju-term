@@ -641,6 +641,7 @@ const ICONS = {
   chevronUp: '<polyline points="18 15 12 9 6 15"/>',
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  grip: '<circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/>',
   search: '<circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>',
   split: '<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="12" x2="21" y2="12"/>',
   terminal: '<polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/>',
@@ -655,7 +656,7 @@ const ICONS = {
   copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
 };
-const FILLED_ICONS = new Set(['play', 'star']);
+const FILLED_ICONS = new Set(['play', 'star', 'grip']);
 
 /** Returns inline SVG markup for a named icon. Stroke icons inherit
  * currentColor; the few filled marks (play/star) fill with it instead. */
@@ -1010,9 +1011,32 @@ async function moveWorkflow(w, dir) {
   }
 }
 
+// The workflow currently being dragged (drag-and-drop reorder), or null.
+// `group` gates drops so a card can only be dropped among its own group's
+// siblings — the same constraint as the ▲▼ buttons.
+let wfDrag = null;
+
+/** Drops the dragged workflow immediately before/after `targetId` in the stored
+ * order and persists it. Both are in the same group (enforced by the drag
+ * handlers), so this only reorders within that group. */
+async function reorderWorkflowTo(draggedId, targetId, placeAfter) {
+  if (draggedId === targetId) return;
+  const ids = state.workflows.map((x) => x.id).filter((id) => id !== draggedId);
+  const ti = ids.indexOf(targetId);
+  if (ti < 0) return;
+  ids.splice(placeAfter ? ti + 1 : ti, 0, draggedId);
+  try {
+    await invoke('reorder_workflows', { ids });
+    await refreshWorkflows();
+  } catch (e) {
+    toast(`並べ替えに失敗: ${e}`, true);
+  }
+}
+
 /** One workflow card. `opts.showGroup` adds a group badge (used in the flat
  * search view); `opts.moveUp`/`opts.moveDown` add ▲▼ reorder buttons, each
- * disabled at the group's edge. */
+ * disabled at the group's edge; `opts.draggable` makes the card reorderable by
+ * dragging its grip handle onto another card in the same group. */
 function workflowCard(w, opts = {}) {
   const li = document.createElement('li');
   li.className = 'card';
@@ -1056,6 +1080,19 @@ function workflowCard(w, opts = {}) {
   if (opts.moveUp !== undefined || opts.moveDown !== undefined) {
     const reorder = document.createElement('div');
     reorder.className = 'wf-reorder';
+    if (opts.draggable) {
+      // Drag handle. The card is only made draggable while the grip is held, so
+      // dragging never fires from a button click or from selecting the command
+      // text (which stays selectable).
+      const grip = document.createElement('button');
+      grip.type = 'button';
+      grip.className = 'icon-btn wf-drag-handle';
+      grip.title = 'ドラッグして並べ替え';
+      grip.innerHTML = icon('grip');
+      grip.addEventListener('mousedown', () => { li.draggable = true; });
+      grip.addEventListener('mouseup', () => { li.draggable = false; });
+      reorder.appendChild(grip);
+    }
     const up = document.createElement('button');
     up.className = 'icon-btn';
     up.title = '上へ移動';
@@ -1072,6 +1109,7 @@ function workflowCard(w, opts = {}) {
     reorder.appendChild(down);
     li.querySelector('.row').appendChild(reorder);
   }
+  if (opts.draggable) wireWorkflowDrag(li, w);
   li.querySelector('.run').addEventListener('click', () => runWorkflow(w, true));
   li.querySelector('.insert').addEventListener('click', () => runWorkflow(w, false));
   li.querySelector('.edit').addEventListener('click', () => editWorkflow(w));
@@ -1083,6 +1121,54 @@ function workflowCard(w, opts = {}) {
   return li;
 }
 
+/** Wires HTML5 drag-and-drop reordering onto a workflow card. A card accepts a
+ * drop only from a card in the same group; the drop lands the dragged workflow
+ * before or after this card depending on which half the cursor is over, shown
+ * live with a `drop-before`/`drop-after` insertion line. */
+function wireWorkflowDrag(li, w) {
+  const group = groupParts(w).join('/');
+  li.dataset.wfId = w.id;
+  li.dataset.wfGroup = group;
+  const clearMarks = () => li.classList.remove('drop-before', 'drop-after');
+  const isAfter = (ev) => {
+    const r = li.getBoundingClientRect();
+    return ev.clientY > r.top + r.height / 2;
+  };
+  const accepts = () => wfDrag && wfDrag.group === group && wfDrag.id !== w.id;
+
+  li.addEventListener('dragstart', (ev) => {
+    wfDrag = { id: w.id, group };
+    li.classList.add('dragging');
+    ev.dataTransfer.effectAllowed = 'move';
+    // Some browsers require data to be set for the drag to actually start.
+    ev.dataTransfer.setData('text/plain', w.id);
+  });
+  li.addEventListener('dragend', () => {
+    li.classList.remove('dragging');
+    li.draggable = false;
+    wfDrag = null;
+    document.querySelectorAll('#wf-list .drop-before, #wf-list .drop-after')
+      .forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+  });
+  li.addEventListener('dragover', (ev) => {
+    if (!accepts()) return;
+    ev.preventDefault(); // allow the drop
+    ev.dataTransfer.dropEffect = 'move';
+    const after = isAfter(ev);
+    li.classList.toggle('drop-after', after);
+    li.classList.toggle('drop-before', !after);
+  });
+  li.addEventListener('dragleave', clearMarks);
+  li.addEventListener('drop', (ev) => {
+    if (!accepts()) return;
+    ev.preventDefault();
+    const after = isAfter(ev);
+    const draggedId = wfDrag.id;
+    clearMarks();
+    reorderWorkflowTo(draggedId, w.id, after);
+  });
+}
+
 /** Renders a group node into the panel: its direct workflows (reorderable
  * among themselves), then a header + recursion for each subgroup. */
 function renderWorkflowNode(list, node, depth) {
@@ -1090,6 +1176,7 @@ function renderWorkflowNode(list, node, depth) {
     list.appendChild(workflowCard(w, {
       moveUp: i > 0,
       moveDown: i < node.workflows.length - 1,
+      draggable: node.workflows.length > 1,
     }));
   });
   for (const [, child] of node.groups) {

@@ -135,6 +135,24 @@ for (const v of VIEWS) {
   await page.screenshot({ path: path.join(outDir, `${v}.png`) });
 }
 
+// Workflow drag-and-drop reorder in progress: one DB-group card lifted
+// (.dragging), the other showing the accent drop-after insertion line. The
+// state is applied directly since native HTML5 drags can't be scripted.
+await page.evaluate(() => {
+  window.setView('workflows');
+  const cards = [...document.querySelectorAll('#wf-list .card[data-wf-group="DB"]')];
+  if (cards.length >= 2) {
+    cards[0].classList.add('dragging');
+    cards[1].classList.add('drop-after');
+    cards[0].scrollIntoView({ block: 'center' });
+  }
+});
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(outDir, 'workflow-drag.png') });
+await page.evaluate(() =>
+  document.querySelectorAll('#wf-list .dragging, #wf-list .drop-after')
+    .forEach((el) => el.classList.remove('dragging', 'drop-after')));
+
 // Command-block toolbar: hover to reveal copy/fold buttons, then fold one.
 // Uses raw mouse coordinates (not locator.hover()/.click()) because xterm's
 // decoration re-renders on every frame (cursor blink), which never satisfies
