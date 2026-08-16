@@ -7,15 +7,18 @@
 
 このリポジトリは**配布用**です。ビルド済みインストーラは [Releases](https://github.com/ynaoak/senju-term/releases/latest) からダウンロードできます。
 
-## ダウンロード(Windows)
+## ダウンロード
 
 | ファイル | 用途 |
 | --- | --- |
-| `*-setup.exe` | インストーラ(推奨・自動アップデート対応) |
-| `*.msi` | MSI インストーラ |
-| `*portable.zip` | インストール不要のポータブル版(自動アップデートなし) |
+| `*-setup.exe` | Windows インストーラ(推奨・自動アップデート対応) |
+| `*.msi` | Windows MSI インストーラ |
+| `*portable.zip` | Windows ポータブル版(インストール・自動アップデートなし) |
+| `*.AppImage` | Linux(自動アップデート対応) |
+| `*.deb` | Debian / Ubuntu パッケージ |
+| `*.rpm` | Fedora / RHEL パッケージ |
 
-macOS / Linux 向けバイナリは現在準備中です。それまでは下記のソースビルドをご利用ください(Tauri 2 のクロスプラットフォーム対応により macOS / Linux でもビルドできます)。
+macOS 向けバイナリは現在準備中です。それまでは下記のソースビルドをご利用ください(Tauri 2 のクロスプラットフォーム対応により macOS でもビルドできます)。
 
 ## ソースからビルド
 
