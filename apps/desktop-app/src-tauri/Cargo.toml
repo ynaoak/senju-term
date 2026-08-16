@@ -1,0 +1,35 @@
+[package]
+name = "senju-term"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A Warp-inspired terminal with built-in custom command (workflow) management and SSH connection management."
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+senju-core = { path = "../crates/senju-core" }
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+base64 = "0.22"
+# Opens external URLs via the OS default browser (ShellExecute on Windows,
+# open(1) on macOS, xdg-open on Linux) — avoids shelling out through cmd.exe.
+open = "5"
+# Locates ~/.ssh/config for the ssh_config import (same crate senju-core uses).
+dirs = "6"
+tauri-plugin-dialog = "2.7.2"
+# HTTP client for AI command assistance (Anthropic Messages API). rustls keeps
+# the build free of OpenSSL system dependencies across the three OS targets.
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Auto-update: checks the GitHub Releases latest.json and applies signed
+# updates. The signing keypair stays with the repo owner — see
+# docs/release-and-distribution.md. `process` provides relaunch() after an
+# update installs.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+[lib]
+name = "senju_term_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]

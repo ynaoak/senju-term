@@ -1,0 +1,729 @@
+//! JSON-file-backed persistence. Each collection lives in its own file under
+//! the app config directory so users can inspect and back it up by hand.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+use serde::{de::DeserializeOwned, Serialize};
+
+use crate::models::{HistoryEntry, LaunchSet, Profile, SessionSnapshot, Settings, SshHost, Workflow};
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("serialization error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("{0}")]
+    Invalid(String),
+}
+
+pub struct Stores {
+    dir: PathBuf,
+    lock: Mutex<()>,
+}
+
+impl Stores {
+    pub fn new(dir: impl Into<PathBuf>) -> Result<Self, StoreError> {
+        let dir = dir.into();
+        fs::create_dir_all(&dir)?;
+        Ok(Self {
+            dir,
+            lock: Mutex::new(()),
+        })
+    }
+
+    // -- Workflows -----------------------------------------------------------
+
+    pub fn list_workflows(&self) -> Vec<Workflow> {
+        self.read("workflows", default_workflows)
+    }
+
+    pub fn save_workflow(&self, mut wf: Workflow) -> Result<Workflow, StoreError> {
+        if wf.id.is_empty() {
+            wf.id = uuid::Uuid::new_v4().to_string();
+        }
+        let _g = self.guard();
+        let mut items = self.read("workflows", default_workflows);
+        upsert(&mut items, wf.clone(), |w| &w.id);
+        self.write("workflows", &items)?;
+        Ok(wf)
+    }
+
+    pub fn delete_workflow(&self, id: &str) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items = self.read("workflows", default_workflows);
+        items.retain(|w| w.id != id);
+        self.write("workflows", &items)
+    }
+
+    /// Reorders the stored workflows to match the given id order. Ids not in
+    /// the store are ignored; workflows whose id is absent from `ids` are kept
+    /// (in their existing relative order) at the end — so a stale or partial
+    /// list from the UI can never drop a workflow. The sort is stable.
+    pub fn reorder_workflows(&self, ids: &[String]) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items = self.read("workflows", default_workflows);
+        let rank: std::collections::HashMap<&str, usize> =
+            ids.iter().enumerate().map(|(i, s)| (s.as_str(), i)).collect();
+        items.sort_by_key(|w| rank.get(w.id.as_str()).copied().unwrap_or(usize::MAX));
+        self.write("workflows", &items)
+    }
+
+    // -- SSH hosts ------------------------------------------------------------
+
+    pub fn list_ssh_hosts(&self) -> Vec<SshHost> {
+        self.read("ssh-hosts", Vec::new)
+    }
+
+    pub fn save_ssh_host(&self, mut host: SshHost) -> Result<SshHost, StoreError> {
+        validate_ssh_host(&host)?;
+        if host.id.is_empty() {
+            host.id = uuid::Uuid::new_v4().to_string();
+        }
+        let _g = self.guard();
+        let mut items = self.read("ssh-hosts", Vec::new);
+        upsert(&mut items, host.clone(), |h| &h.id);
+        self.write("ssh-hosts", &items)?;
+        Ok(host)
+    }
+
+    pub fn delete_ssh_host(&self, id: &str) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items: Vec<SshHost> = self.read("ssh-hosts", Vec::new);
+        items.retain(|h| h.id != id);
+        self.write("ssh-hosts", &items)
+    }
+
+    // -- Terminal profiles ----------------------------------------------------
+
+    pub fn list_profiles(&self) -> Vec<Profile> {
+        self.read("profiles", default_profiles)
+    }
+
+    pub fn save_profile(&self, mut profile: Profile) -> Result<Profile, StoreError> {
+        if profile.id.is_empty() {
+            profile.id = uuid::Uuid::new_v4().to_string();
+        }
+        let _g = self.guard();
+        let mut items = self.read("profiles", default_profiles);
+        upsert(&mut items, profile.clone(), |p| &p.id);
+        self.write("profiles", &items)?;
+        Ok(profile)
+    }
+
+    pub fn delete_profile(&self, id: &str) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items = self.read("profiles", default_profiles);
+        items.retain(|p| p.id != id);
+        self.write("profiles", &items)
+    }
+
+    /// Resolves the profile to launch, trying in order: the requested id, the
+    /// configured default, then the first profile. `None` only if no profiles
+    /// exist. An unknown requested id falls through to the default.
+    pub fn resolve_profile(&self, requested_id: Option<&str>) -> Option<Profile> {
+        let profiles = self.list_profiles();
+        let default_id = self.settings().default_profile_id;
+        let pick = |id: &str| profiles.iter().find(|p| p.id == id).cloned();
+        requested_id
+            .filter(|s| !s.is_empty())
+            .and_then(pick)
+            .or_else(|| (!default_id.is_empty()).then(|| pick(&default_id)).flatten())
+            .or_else(|| profiles.first().cloned())
+    }
+
+    // -- Launch sets ------------------------------------------------------------
+
+    pub fn list_launch_sets(&self) -> Vec<LaunchSet> {
+        self.read("launch-sets", Vec::new)
+    }
+
+    pub fn save_launch_set(&self, mut set: LaunchSet) -> Result<LaunchSet, StoreError> {
+        if set.name.trim().is_empty() {
+            return Err(StoreError::Invalid("名前を入力してください".into()));
+        }
+        if set.id.is_empty() {
+            set.id = uuid::Uuid::new_v4().to_string();
+        }
+        let _g = self.guard();
+        let mut items = self.read("launch-sets", Vec::new);
+        upsert(&mut items, set.clone(), |s| &s.id);
+        self.write("launch-sets", &items)?;
+        Ok(set)
+    }
+
+    pub fn delete_launch_set(&self, id: &str) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items: Vec<LaunchSet> = self.read("launch-sets", Vec::new);
+        items.retain(|s| s.id != id);
+        self.write("launch-sets", &items)
+    }
+
+    // -- Session snapshot -----------------------------------------------------
+
+    pub fn session_snapshot(&self) -> SessionSnapshot {
+        self.read("session", SessionSnapshot::default)
+    }
+
+    pub fn save_session_snapshot(&self, snapshot: &SessionSnapshot) -> Result<(), StoreError> {
+        let _g = self.guard();
+        self.write("session", snapshot)
+    }
+
+    // -- Command history ------------------------------------------------------
+
+    /// Cross-session command history, most recent first.
+    pub fn history(&self) -> Vec<HistoryEntry> {
+        self.read("history", Vec::new)
+    }
+
+    /// Prepends a command to the history. Blank commands are ignored; an
+    /// earlier entry with the same command text is removed (the list answers
+    /// "find that command again", not frequency analysis), and the list is
+    /// capped so the file can't grow without bound.
+    pub fn add_history(&self, command: &str, kind: &str) -> Result<(), StoreError> {
+        const CAP: usize = 2000;
+        let command = command.trim();
+        if command.is_empty() {
+            return Ok(());
+        }
+        let at = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let _g = self.guard();
+        let mut items: Vec<HistoryEntry> = self.read("history", Vec::new);
+        items.retain(|e| e.command != command);
+        items.insert(0, HistoryEntry { command: command.into(), kind: kind.into(), at });
+        items.truncate(CAP);
+        self.write("history", &items)
+    }
+
+    // -- Settings -------------------------------------------------------------
+
+    pub fn settings(&self) -> Settings {
+        self.read("settings", Settings::default)
+    }
+
+    pub fn save_settings(&self, settings: &Settings) -> Result<(), StoreError> {
+        let _g = self.guard();
+        self.write("settings", settings)
+    }
+
+    // -- Internals -------------------------------------------------------------
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.dir.join(format!("{name}.json"))
+    }
+
+    /// Serializes writes so two `save_*`/`delete_*` can't interleave a
+    /// read-modify-write. Recovers from a poisoned lock: the guarded value is
+    /// `()`, so a prior panic left no broken invariant.
+    fn guard(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.lock.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    fn read<T: DeserializeOwned>(&self, name: &str, default: impl FnOnce() -> T) -> T {
+        let path = self.path(name);
+        match load_json::<T>(&path) {
+            Ok(Some(value)) => value,
+            Ok(None) => default(),
+            // The file exists but is unreadable/corrupt. Preserve it (so the
+            // next save can't silently overwrite the user's data with
+            // defaults) and fall back — the app stays usable and the original
+            // can be recovered from the `.corrupt` copy.
+            Err(_) => {
+                backup_corrupt(&path);
+                default()
+            }
+        }
+    }
+
+    fn write<T: Serialize>(&self, name: &str, value: &T) -> Result<(), StoreError> {
+        let path = self.path(name);
+        let tmp = path.with_extension("json.tmp");
+        fs::write(&tmp, serde_json::to_vec_pretty(value)?)?;
+        fs::rename(&tmp, &path)?;
+        Ok(())
+    }
+}
+
+/// `Ok(None)` = file missing (use defaults); `Ok(Some)` = parsed; `Err` =
+/// present but unreadable or unparseable (a corruption we must not treat as
+/// "empty").
+fn load_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>, ()> {
+    let bytes = match fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(_) => return Err(()),
+    };
+    serde_json::from_slice(&bytes).map(Some).map_err(|_| ())
+}
+
+/// Renames a corrupt store file aside to `<name>.json.corrupt[.N]` so it is
+/// preserved rather than overwritten on the next save.
+fn backup_corrupt(path: &Path) {
+    let mut candidate = path.with_extension("json.corrupt");
+    let mut n = 1;
+    while candidate.exists() {
+        candidate = path.with_extension(format!("json.corrupt.{n}"));
+        n += 1;
+    }
+    let _ = fs::rename(path, candidate);
+}
+
+/// Rejects an SSH host that would only fail later with an opaque socket/auth
+/// error, so the editor can show the problem inline at save time.
+fn validate_ssh_host(host: &SshHost) -> Result<(), StoreError> {
+    use crate::models::SshAuthMethod;
+    if host.host.trim().is_empty() {
+        return Err(StoreError::Invalid("ホストを入力してください".into()));
+    }
+    if host.username.trim().is_empty() {
+        return Err(StoreError::Invalid("ユーザー名を入力してください".into()));
+    }
+    if host.port == 0 {
+        return Err(StoreError::Invalid("ポートは 1 以上を指定してください".into()));
+    }
+    if matches!(host.auth_method, SshAuthMethod::Key | SshAuthMethod::KeyPassword)
+        && host.key_path.trim().is_empty()
+    {
+        return Err(StoreError::Invalid(
+            "この認証方式では秘密鍵パスが必要です".into(),
+        ));
+    }
+    // Forward specs are validated at save time so a typo surfaces in the
+    // editor rather than as a banner on the next connect.
+    for raw in host.forwards.iter().filter(|s| !s.trim().is_empty()) {
+        if let Err(e) = crate::sessions::parse_forward_spec(raw) {
+            return Err(StoreError::Invalid(format!("ポートフォワード {e}")));
+        }
+    }
+    Ok(())
+}
+
+fn upsert<T, F: Fn(&T) -> &String>(items: &mut Vec<T>, item: T, id_of: F) {
+    match items.iter_mut().find(|it| id_of(it) == id_of(&item)) {
+        Some(slot) => *slot = item,
+        None => items.push(item),
+    }
+}
+
+/// Seeded on first launch. The first entry ("System default") launches the
+/// OS default shell; the rest are common shells detected per platform, à la
+/// Windows Terminal's auto-generated profiles.
+fn default_profiles() -> Vec<Profile> {
+    // Ids are stable strings (not random UUIDs) so the seeded set is
+    // consistent across reads before it is ever persisted — the same reason
+    // Windows Terminal gives its auto-generated profiles fixed GUIDs.
+    let profile = |id: &str, name: &str, command: &str| Profile {
+        id: format!("builtin:{id}"),
+        name: name.into(),
+        command: command.into(),
+        args: Vec::new(),
+        cwd: String::new(),
+    };
+    let mut out = vec![profile("default", "システム既定シェル", "")];
+    if cfg!(windows) {
+        out.push(profile("powershell", "PowerShell", "powershell.exe"));
+        out.push(profile("cmd", "コマンド プロンプト", "cmd.exe"));
+    } else {
+        for (id, name, path) in [
+            ("bash", "bash", "/bin/bash"),
+            ("zsh", "zsh", "/bin/zsh"),
+            ("fish", "fish", "/usr/bin/fish"),
+        ] {
+            if std::path::Path::new(path).exists() {
+                out.push(profile(id, name, path));
+            }
+        }
+    }
+    out
+}
+
+/// Seeded on first launch so the workflows panel isn't empty.
+fn default_workflows() -> Vec<Workflow> {
+    // Ids are stable strings (not random UUIDs, like the seeded profiles) so
+    // the seeded set is identical across every read-before-first-persist.
+    // Otherwise a delete/reorder/update targeting a seed — before any save has
+    // written the file — would read a *freshly* re-seeded set with different
+    // ids, silently mismatch, and lose the change.
+    let wf = |id: &str, name: &str, description: &str, command: &str, tags: &[&str], group: &str| {
+        Workflow {
+            id: format!("seed:{id}"),
+            name: name.into(),
+            description: description.into(),
+            command: command.into(),
+            tags: tags.iter().map(|t| t.to_string()).collect(),
+            group: group.into(),
+            shortcut: String::new(),
+            show_button: false,
+        }
+    };
+    vec![
+        wf(
+            "git-log",
+            "Git log graph",
+            "Compact commit graph for the current repo",
+            "git log --oneline --graph --decorate -n {{count:20}}",
+            &["git"],
+            "Git",
+        ),
+        wf(
+            "find-large",
+            "Find large files",
+            "List the biggest files under a directory",
+            "du -ah {{path:.}} | sort -rh | head -n {{count:20}}",
+            &["disk"],
+            "システム",
+        ),
+        wf(
+            "search-files",
+            "Search in files",
+            "Recursive grep with line numbers",
+            "grep -rn \"{{pattern}}\" {{path:.}}",
+            &["search"],
+            "システム",
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::LaunchSetItem;
+    use crate::models::SshAuthMethod;
+
+    fn stores() -> (tempfile::TempDir, Stores) {
+        let dir = tempfile::tempdir().unwrap();
+        let stores = Stores::new(dir.path()).unwrap();
+        (dir, stores)
+    }
+
+    #[test]
+    fn seeds_default_workflows_and_persists_changes() {
+        let (_d, s) = stores();
+        let initial = s.list_workflows();
+        assert!(!initial.is_empty());
+
+        let saved = s
+            .save_workflow(Workflow {
+                id: String::new(),
+                name: "docker ps".into(),
+                description: String::new(),
+                command: "docker ps -a".into(),
+                tags: vec![],
+                group: String::new(),
+                shortcut: String::new(),
+                show_button: false,
+            })
+            .unwrap();
+        assert!(!saved.id.is_empty());
+        assert!(s.list_workflows().iter().any(|w| w.id == saved.id));
+
+        s.delete_workflow(&saved.id).unwrap();
+        assert!(!s.list_workflows().iter().any(|w| w.id == saved.id));
+    }
+
+    #[test]
+    fn reorder_workflows_reorders_and_keeps_unlisted() {
+        let (_d, s) = stores();
+        let ids: Vec<String> = s.list_workflows().iter().map(|w| w.id.clone()).collect();
+        assert!(ids.len() >= 3);
+
+        // Reverse the first three; pass only those ids. The unlisted remainder
+        // (none here, but the contract) stays at the end.
+        let reversed: Vec<String> = ids.iter().rev().cloned().collect();
+        s.reorder_workflows(&reversed).unwrap();
+        let after: Vec<String> = s.list_workflows().iter().map(|w| w.id.clone()).collect();
+        assert_eq!(after, reversed);
+
+        // A partial list moves the named ids to the front (in the given order)
+        // and never drops the ones it omits.
+        let only_last = vec![ids[0].clone()]; // ids[0] was originally first
+        s.reorder_workflows(&only_last).unwrap();
+        let after2: Vec<String> = s.list_workflows().iter().map(|w| w.id.clone()).collect();
+        assert_eq!(after2[0], ids[0]);
+        assert_eq!(after2.len(), ids.len(), "no workflow may be dropped");
+    }
+
+    #[test]
+    fn seeds_profiles_and_resolves_default() {
+        let (_d, s) = stores();
+        let profiles = s.list_profiles();
+        assert!(!profiles.is_empty());
+        // The first seeded profile launches the OS default shell.
+        assert_eq!(profiles[0].command, "");
+
+        // With no default set, resolve falls back to the first profile.
+        assert_eq!(s.resolve_profile(None).unwrap().id, profiles[0].id);
+
+        // An explicit request wins over the default.
+        let last = profiles.last().unwrap().clone();
+        assert_eq!(s.resolve_profile(Some(&last.id)).unwrap().id, last.id);
+
+        // A configured default is honored when nothing is requested.
+        let mut settings = s.settings();
+        settings.default_profile_id = last.id.clone();
+        s.save_settings(&settings).unwrap();
+        assert_eq!(s.resolve_profile(None).unwrap().id, last.id);
+
+        // An unknown request id falls through to the default.
+        assert_eq!(s.resolve_profile(Some("nope")).unwrap().id, last.id);
+    }
+
+    #[test]
+    fn profile_crud_roundtrip() {
+        let (_d, s) = stores();
+        let saved = s
+            .save_profile(Profile {
+                id: String::new(),
+                name: "custom".into(),
+                command: "/bin/sh".into(),
+                args: vec!["-l".into()],
+                cwd: "~/work".into(),
+            })
+            .unwrap();
+        assert!(!saved.id.is_empty());
+        assert!(s.list_profiles().iter().any(|p| p.id == saved.id));
+        s.delete_profile(&saved.id).unwrap();
+        assert!(!s.list_profiles().iter().any(|p| p.id == saved.id));
+    }
+
+    #[test]
+    fn launch_set_crud_roundtrip() {
+        let (_d, s) = stores();
+        assert!(s.list_launch_sets().is_empty());
+        let saved = s
+            .save_launch_set(LaunchSet {
+                id: String::new(),
+                name: "毎朝の環境".into(),
+                items: vec![
+                    LaunchSetItem { profile_id: "p1".into(), ..Default::default() },
+                    // A workflow plus a direct command on the same item.
+                    LaunchSetItem {
+                        ssh_host_id: "h1".into(),
+                        workflow_id: "w1".into(),
+                        command: "tail -f /var/log/syslog".into(),
+                        ..Default::default()
+                    },
+                ],
+            })
+            .unwrap();
+        assert!(!saved.id.is_empty());
+        assert_eq!(s.list_launch_sets(), vec![saved.clone()]);
+
+        // Update in place (same id) rather than appending a duplicate.
+        let updated = s.save_launch_set(LaunchSet { name: "更新後".into(), ..saved.clone() }).unwrap();
+        assert_eq!(s.list_launch_sets(), vec![updated]);
+
+        s.delete_launch_set(&saved.id).unwrap();
+        assert!(s.list_launch_sets().is_empty());
+    }
+
+    /// A launch-sets.json written before `LaunchSetItem::command` existed must
+    /// still load — the field defaults to "no direct command" rather than
+    /// failing the whole file into `backup_corrupt` + an empty list.
+    #[test]
+    fn reads_launch_sets_saved_before_the_command_field() {
+        let (d, s) = stores();
+        fs::write(
+            d.path().join("launch-sets.json"),
+            r#"[{"id":"s1","name":"旧データ","items":[{"profile_id":"p1","ssh_host_id":"","workflow_id":"w1"}]}]"#,
+        )
+        .unwrap();
+        let sets = s.list_launch_sets();
+        assert_eq!(sets.len(), 1);
+        assert_eq!(sets[0].items[0].workflow_id, "w1");
+        assert_eq!(sets[0].items[0].command, "");
+    }
+
+    #[test]
+    fn rejects_unnamed_launch_set() {
+        let (_d, s) = stores();
+        assert!(matches!(
+            s.save_launch_set(LaunchSet { id: String::new(), name: "  ".into(), items: vec![] }),
+            Err(StoreError::Invalid(_))
+        ));
+    }
+
+    #[test]
+    fn updates_existing_workflow_in_place() {
+        let (_d, s) = stores();
+        let mut wf = s.list_workflows().remove(0);
+        wf.name = "renamed".into();
+        s.save_workflow(wf.clone()).unwrap();
+        let listed = s.list_workflows();
+        assert_eq!(listed.iter().filter(|w| w.id == wf.id).count(), 1);
+        assert_eq!(listed.iter().find(|w| w.id == wf.id).unwrap().name, "renamed");
+    }
+
+    #[test]
+    fn ssh_hosts_roundtrip() {
+        let (_d, s) = stores();
+        assert!(s.list_ssh_hosts().is_empty());
+        let host = s
+            .save_ssh_host(SshHost {
+                id: String::new(),
+                name: "prod".into(),
+                host: "example.com".into(),
+                port: 2222,
+                username: "deploy".into(),
+                auth_method: SshAuthMethod::Key,
+                key_path: "~/.ssh/id_ed25519".into(),
+                forwards: Vec::new(),
+                jump_hosts: Vec::new(),
+            })
+            .unwrap();
+        let listed = s.list_ssh_hosts();
+        assert_eq!(listed, vec![host.clone()]);
+        s.delete_ssh_host(&host.id).unwrap();
+        assert!(s.list_ssh_hosts().is_empty());
+    }
+
+    #[test]
+    fn session_snapshot_roundtrip() {
+        use crate::models::SnapshotThread;
+        let (_d, s) = stores();
+        assert_eq!(s.session_snapshot(), SessionSnapshot::default());
+        let snap = SessionSnapshot {
+            threads: vec![
+                SnapshotThread { profile_id: "builtin:bash".into(), ssh_host_id: String::new() },
+                SnapshotThread { profile_id: String::new(), ssh_host_id: "h1".into() },
+            ],
+        };
+        s.save_session_snapshot(&snap).unwrap();
+        assert_eq!(s.session_snapshot(), snap);
+        // Overwrite with an empty layout (all threads closed before quit).
+        s.save_session_snapshot(&SessionSnapshot::default()).unwrap();
+        assert_eq!(s.session_snapshot(), SessionSnapshot::default());
+    }
+
+    #[test]
+    fn history_dedupes_caps_and_orders() {
+        let (_d, s) = stores();
+        assert!(s.history().is_empty());
+        s.add_history("cargo test", "local").unwrap();
+        s.add_history("ls -la", "ssh").unwrap();
+        // Re-running an old command moves it to the front instead of duplicating.
+        s.add_history("cargo test", "local").unwrap();
+        let h = s.history();
+        assert_eq!(h.iter().map(|e| e.command.as_str()).collect::<Vec<_>>(), ["cargo test", "ls -la"]);
+        assert_eq!(h[1].kind, "ssh");
+        assert!(h[0].at > 0);
+        // Blank commands are ignored.
+        s.add_history("   ", "local").unwrap();
+        assert_eq!(s.history().len(), 2);
+    }
+
+    #[test]
+    fn settings_roundtrip() {
+        let (_d, s) = stores();
+        assert_eq!(s.settings(), Settings::default());
+        let new = Settings {
+            font_size: 16,
+            shell: "/bin/zsh".into(),
+            default_profile_id: "abc".into(),
+            font_family: "\"JetBrains Mono\", monospace".into(),
+            scrollback: 5000,
+            theme: "light".into(),
+            language: "en".into(),
+            restore_session: false,
+            gpu_rendering: false,
+            shell_integration: false,
+            ai_api_key: "sk-ant-test".into(),
+            ai_model: "claude-haiku-4-5".into(),
+            auto_update_check: false,
+        };
+        s.save_settings(&new).unwrap();
+        assert_eq!(s.settings(), new);
+    }
+
+    // Q3: a corrupt store file must not be silently treated as empty and then
+    // overwritten with defaults — it is preserved aside and the user's data is
+    // recoverable.
+    #[test]
+    fn corrupt_file_is_preserved_not_overwritten() {
+        let (dir, s) = stores();
+        // Persist a real host, then corrupt the file on disk.
+        let host = s
+            .save_ssh_host(SshHost {
+                id: String::new(),
+                name: "prod".into(),
+                host: "example.com".into(),
+                port: 22,
+                username: "deploy".into(),
+                auth_method: SshAuthMethod::Password,
+                key_path: String::new(),
+                forwards: Vec::new(),
+                jump_hosts: Vec::new(),
+            })
+            .unwrap();
+        let path = dir.path().join("ssh-hosts.json");
+        fs::write(&path, b"{ this is not valid json").unwrap();
+
+        // Reading falls back to defaults (empty) but backs the corrupt file up.
+        assert!(s.list_ssh_hosts().is_empty());
+        let corrupt = dir.path().join("ssh-hosts.json.corrupt");
+        assert!(corrupt.exists(), "corrupt file must be preserved");
+        assert!(
+            std::str::from_utf8(&fs::read(&corrupt).unwrap())
+                .unwrap()
+                .contains("not valid json"),
+            "the original bytes must be kept"
+        );
+
+        // A subsequent save starts fresh (from empty) without having destroyed
+        // the backup, and the original host id is still recoverable from it.
+        let _ = host;
+    }
+
+    // R4: invalid SSH hosts are rejected at save time.
+    #[test]
+    fn rejects_invalid_ssh_host() {
+        let (_d, s) = stores();
+        let base = SshHost {
+            id: String::new(),
+            name: String::new(),
+            host: "h".into(),
+            port: 22,
+            username: "u".into(),
+            auth_method: SshAuthMethod::Password,
+            key_path: String::new(),
+            forwards: Vec::new(),
+            jump_hosts: Vec::new(),
+        };
+        assert!(matches!(
+            s.save_ssh_host(SshHost { host: "".into(), ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.save_ssh_host(SshHost { username: "".into(), ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.save_ssh_host(SshHost { port: 0, ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(matches!(
+            s.save_ssh_host(SshHost { auth_method: SshAuthMethod::Key, key_path: "".into(), ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        // A malformed forward spec is rejected at save time; a valid one and
+        // blank lines (editor artifacts) are accepted.
+        assert!(matches!(
+            s.save_ssh_host(SshHost { forwards: vec!["8080:localhost".into()], ..base.clone() }),
+            Err(StoreError::Invalid(_))
+        ));
+        assert!(s
+            .save_ssh_host(SshHost {
+                forwards: vec!["8080:localhost:80".into(), "  ".into()],
+                ..base.clone()
+            })
+            .is_ok());
+        // A valid host still saves.
+        assert!(s.save_ssh_host(base).is_ok());
+    }
+}

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements, used only when the build is signed with a
+  Developer ID (see docs/release-and-distribution.md §3). An unsigned local or
+  CI build ignores this file.
+
+  Each entry is required, not defensive:
+  - allow-jit / allow-unsigned-executable-memory: WKWebView's JavaScriptCore
+    JIT refuses to start under the hardened runtime without them, which would
+    leave the whole UI blank.
+  - disable-library-validation: the app loads the system WebKit framework and
+    dynamically resolves libraries the shell brings in; strict validation
+    rejects anything not signed by the same team.
+  - network.client: the SSH sessions, the updater and the AI assist request all
+    make outbound connections.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

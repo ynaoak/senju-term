@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Senju Term</title>
+  <link rel="stylesheet" href="vendor/xterm.css" />
+  <link rel="stylesheet" href="vendor/fonts/noto-sans.css" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="vendor/xterm.js"></script>
+  <script src="vendor/addon-fit.js"></script>
+  <script src="vendor/addon-web-links.js"></script>
+  <script src="vendor/addon-search.js"></script>
+  <script src="vendor/addon-webgl.js"></script>
+</head>
+<body>
+  <div id="app">
+    <!-- Custom native-like titlebar: the whole bar drags the window; buttons
+         inside stay clickable. Windows/Linux disable the native chrome
+         (decorations:false) and draw the controls below; macOS keeps its real
+         traffic lights over a transparent title bar, so it hides them. -->
+    <header id="topbar" data-tauri-drag-region>
+      <button id="toggle-threadbar" class="icon-btn" data-i18n-title="topbar.toggleThreadbar"><span data-icon="menu"></span></button>
+      <div id="brand" data-tauri-drag-region>
+        <img id="brand-mark" src="./assets/icon.png" alt="" width="20" height="20" decoding="async" />
+        <span>Senju</span>
+      </div>
+      <div class="spacer" data-tauri-drag-region></div>
+      <!-- Tool-panel tabs, centered in the header. Each toggles its panel in
+           the right sidebar; clicking the active one again hides the sidebar
+           so the terminal can use the full window width. -->
+      <nav id="header-tabs">
+        <button class="hdr-tab" data-panel="shell" data-i18n="tab.shell">シェル</button>
+        <button class="hdr-tab" data-panel="workflows" data-i18n="tab.workflows">ワークフロー</button>
+        <button class="hdr-tab" data-panel="hosts" data-i18n="tab.hosts">SSH</button>
+        <button class="hdr-tab" data-panel="profiles" data-i18n="tab.profiles">端末</button>
+        <button class="hdr-tab" data-panel="launchsets" data-i18n="tab.launchsets">起動セット</button>
+        <button class="hdr-tab" data-panel="settings" data-i18n="tab.settings">設定</button>
+      </nav>
+      <div class="spacer" data-tauri-drag-region></div>
+      <button id="split-toggle" class="ghost-btn" data-i18n-title="topbar.split.title"><span class="split-ico" data-icon="split"></span><span class="split-label" data-i18n="topbar.split">上下分割</span></button>
+      <button id="split-h-toggle" class="ghost-btn" data-i18n-title="topbar.splitH.title"><span class="split-ico" data-icon="splitH"></span><span class="split-label" data-i18n="topbar.splitH">左右分割</span></button>
+      <button id="broadcast-toggle" class="ghost-btn" data-i18n-title="topbar.broadcast.title" style="display:none"><span class="split-ico" data-icon="broadcast"></span><span data-i18n="topbar.broadcast">一斉入力</span></button>
+      <button id="palette-btn" class="ghost-btn" data-i18n-title="topbar.palette.title"><span data-icon="search"></span><span data-i18n="topbar.palette">パレット</span><kbd>Ctrl⇧P</kbd></button>
+      <button id="help-btn" class="icon-btn" data-i18n-title="topbar.help.title"><span data-icon="help"></span></button>
+      <!-- Windows / Linux: window controls on the right. Plain Unicode glyphs
+           so they render without the Segoe icon font (absent on Linux). -->
+      <div id="win-controls" class="win-controls">
+        <button class="win-btn" data-win="minimize" data-i18n-title="win.min">&#x2212;</button>
+        <button class="win-btn" data-win="maximize" data-i18n-title="win.max">&#x25A1;</button>
+        <button class="win-btn close" data-win="close" data-i18n-title="win.close">&#x2715;</button>
+      </div>
+    </header>
+
+    <div id="body">
+      <!-- 左: スレッド一覧 -->
+      <aside id="threadbar">
+        <div class="threadbar-head">
+          <span class="threadbar-title" data-i18n="threadbar.title">スレッド</span>
+          <!-- Split button: click launches the default profile; ▾ opens a
+               Windows-Terminal-style menu of all profiles. -->
+          <div class="new-thread-group">
+            <button id="new-thread" class="accent-btn" data-i18n-title="threadbar.new.title"><span data-icon="plus"></span><span data-i18n="threadbar.new">新規</span></button>
+            <button id="new-thread-menu" class="accent-btn caret" data-i18n-title="threadbar.newMenu.title"><span data-icon="chevronDown"></span></button>
+          </div>
+        </div>
+        <!-- Rows are keyboard-reachable via a roving tabindex (see renderThreads):
+             ↑/↓ move, Enter shows the thread, Delete closes it. -->
+        <ul id="thread-list" role="listbox" data-i18n-aria="threadbar.title"></ul>
+      </aside>
+
+      <!-- 中央: ペイン (上下分割可能) -->
+      <main id="terminals">
+        <!-- ワークフローのクイック起動バー (シェル表示時のみ) -->
+        <div id="wf-quickbar" class="hidden"></div>
+        <!-- ターミナル内検索バー (Ctrl+Shift+F) -->
+        <div id="term-search" class="term-search hidden">
+          <input id="term-search-input" type="text" data-i18n-ph="termsearch.ph" autocomplete="off" />
+          <button id="term-search-prev" class="icon-btn" data-i18n-title="termsearch.prev.title">↑</button>
+          <button id="term-search-next" class="icon-btn" data-i18n-title="termsearch.next.title">↓</button>
+          <button id="term-search-close" class="icon-btn" data-i18n-title="termsearch.close.title">✕</button>
+        </div>
+        <!-- ペインとスプリッターはこの中に入る。クイックバーや検索バーを
+             巻き込まずに、分割方向 (上下/左右) だけをここで切り替える。 -->
+        <div id="pane-area"></div>
+      </main>
+
+      <!-- 右: ワークフロー / SSH / プロファイル / 設定。タブはヘッダー中央 (#header-tabs) -->
+      <aside id="sidebar">
+        <section id="panel-workflows" class="panel cards active">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="zap"></span><span data-i18n="panel.workflows.title">ワークフロー</span></h2>
+            <p class="panel-desc" data-i18n="panel.workflows.desc">よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。</p>
+          </header>
+          <div class="panel-head">
+            <input id="wf-search" type="search" data-i18n-ph="panel.workflows.search.ph" />
+            <button id="wf-export" class="ghost-btn" data-i18n-title="wf.export"><span data-icon="upload"></span><span data-i18n="wf.export">書き出し</span></button>
+            <button id="wf-import" class="ghost-btn" data-i18n-title="wf.import"><span data-icon="download"></span><span data-i18n="wf.import">取り込み</span></button>
+            <button id="wf-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
+          </div>
+          <ul id="wf-list" class="card-list"></ul>
+        </section>
+
+        <section id="panel-hosts" class="panel cards">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="server"></span><span data-i18n="panel.hosts.title">SSH 接続</span></h2>
+            <p class="panel-desc" data-i18n="panel.hosts.desc">接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。</p>
+          </header>
+          <div class="panel-head">
+            <input id="host-search" type="search" data-i18n-ph="panel.hosts.search.ph" />
+            <button id="host-import" class="ghost-btn"><span data-icon="download"></span><span data-i18n="host.import">~/.ssh/config を取り込み</span></button>
+            <button id="host-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
+          </div>
+          <ul id="host-list" class="card-list"></ul>
+        </section>
+
+        <section id="panel-profiles" class="panel cards">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="terminal"></span><span data-i18n="panel.profiles.title">ターミナルプロファイル</span></h2>
+            <p class="panel-desc" data-i18n="panel.profiles.desc">起動するシェルをプロファイルとして管理します。★ が「＋ 新規」で起動する既定です。</p>
+          </header>
+          <div class="panel-head">
+            <span class="panel-note"></span>
+            <button id="profile-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.add">追加</span></button>
+          </div>
+          <ul id="profile-list" class="card-list"></ul>
+        </section>
+
+        <section id="panel-launchsets" class="panel cards">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="layers"></span><span data-i18n="panel.launchsets.title">起動セット</span></h2>
+            <p class="panel-desc" data-i18n="panel.launchsets.desc">いつも開くシェル・SSH 接続と、そこで実行するワークフローやコマンドをまとめて登録し、ワンクリックで一括起動できます。</p>
+          </header>
+          <div class="panel-head">
+            <span class="panel-note"></span>
+            <button id="launchset-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
+          </div>
+          <ul id="launchset-list" class="card-list"></ul>
+        </section>
+
+        <section id="panel-settings" class="panel">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="settings"></span><span data-i18n="panel.settings.title">設定</span></h2>
+            <p class="panel-desc" data-i18n="panel.settings.desc">外観・ターミナル・起動の設定。変更は「保存」で反映され、開いているスレッドにも即時適用されます。</p>
+          </header>
+          <form id="settings-form" class="form">
+            <fieldset class="settings-group">
+              <legend data-i18n="settings.group.appearance">外観</legend>
+              <label><span data-i18n="settings.language">言語</span>
+                <select name="language">
+                  <option value="ja">日本語</option>
+                  <option value="en">English</option>
+                </select>
+              </label>
+              <label><span data-i18n="settings.theme">テーマ</span>
+                <select name="theme">
+                  <option value="dark" data-i18n="settings.theme.dark">ダーク</option>
+                  <option value="light" data-i18n="settings.theme.light">ライト</option>
+                </select>
+              </label>
+              <label><span data-i18n="settings.fontSize">フォントサイズ</span>
+                <input name="font_size" type="number" min="8" max="32" />
+              </label>
+              <label><span data-i18n="settings.fontFamily">フォントファミリー (空欄 = 既定)</span>
+                <input name="font_family" type="text" placeholder='"JetBrains Mono", monospace' />
+              </label>
+            </fieldset>
+            <fieldset class="settings-group">
+              <legend data-i18n="settings.group.terminal">ターミナル</legend>
+              <label><span data-i18n="settings.scrollback">スクロールバック行数</span>
+                <input name="scrollback" type="number" min="1000" max="100000" />
+              </label>
+              <label class="checkbox-row">
+                <input name="gpu_rendering" type="checkbox" />
+                <span data-i18n="settings.gpuRendering">GPU レンダリング(WebGL)</span>
+              </label>
+              <p class="field-hint" data-i18n="settings.gpuRendering.hint">描画を GPU で高速化します。表示が乱れる環境ではオフにしてください(変更は開いているスレッドにも即時適用)。</p>
+              <label class="checkbox-row">
+                <input name="shell_integration" type="checkbox" />
+                <span data-i18n="settings.shellIntegration">シェル統合を自動で有効化(コマンドブロック用)</span>
+              </label>
+              <p class="field-hint" data-i18n="settings.shellIntegration.hint">bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。</p>
+            </fieldset>
+            <fieldset class="settings-group">
+              <legend data-i18n="settings.group.startup">起動</legend>
+              <label><span data-i18n="settings.defaultProfile">既定のターミナルプロファイル</span>
+                <select name="default_profile_id"></select>
+              </label>
+              <label class="checkbox-row">
+                <input name="restore_session" type="checkbox" />
+                <span data-i18n="settings.restoreSession">前回のスレッド構成を復元</span>
+              </label>
+              <p class="field-hint" data-i18n="settings.restoreSession.hint">起動時に、前回開いていたローカルスレッド(プロファイル構成と順序)を再作成します。SSH 接続は認証が必要なため自動再接続せず、SSH パネルや新規メニューから接続します。</p>
+              <label class="checkbox-row">
+                <input name="auto_update_check" type="checkbox" />
+                <span data-i18n="settings.autoUpdate">起動時にアップデートを確認</span>
+              </label>
+              <p id="auto-update-hint" class="field-hint" data-i18n="settings.autoUpdate.hint">GitHub Releases の署名付きアップデートを起動時に確認します。新しいバージョンがある時だけ通知します(適用するかは毎回確認)。</p>
+            </fieldset>
+            <fieldset class="settings-group">
+              <legend data-i18n="settings.group.ai">AI コマンド支援</legend>
+              <label><span data-i18n="settings.aiApiKey">Anthropic API キー(空欄 = 無効)</span>
+                <input name="ai_api_key" type="password" autocomplete="off" placeholder="sk-ant-..." />
+              </label>
+              <p class="field-hint" data-i18n="settings.aiApiKey.hint">あなた自身の API キーで Anthropic API を直接呼び出します。送信されるのは入力した質問と OS/シェル名のみで、ターミナルの内容や履歴は送信されません。キーはローカルの設定ファイルに保存されます。</p>
+              <label><span data-i18n="settings.aiModel">モデル(空欄 = claude-opus-5)</span>
+                <input name="ai_model" type="text" placeholder="claude-opus-5" />
+              </label>
+            </fieldset>
+            <div class="settings-actions">
+              <button type="submit" class="accent-btn" data-i18n="settings.save">保存</button>
+            </div>
+          </form>
+          <p class="hint" data-i18n="settings.dataHint">設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。</p>
+        </section>
+      </aside>
+    </div>
+  </div>
+
+  <!-- 非表示スレッドの DOM 退避先 -->
+  <div id="thread-parking"></div>
+
+  <!-- プロファイル選択メニュー (新規スレッドの ▾) -->
+  <div id="profile-menu" class="popup-menu hidden"></div>
+
+  <!-- ターミナル右クリックメニュー (ワークフロー実行) -->
+  <div id="term-context-menu" class="popup-menu hidden" role="menu" data-i18n-aria="menu.runWorkflow"></div>
+
+  <!-- コマンドパレット -->
+  <div id="palette" class="overlay hidden" role="dialog" aria-modal="true" data-i18n-aria="palette.aria">
+    <div class="palette-box">
+      <input id="palette-input" type="text" data-i18n-ph="palette.input.ph"
+             autocomplete="off" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" />
+      <ul id="palette-results" role="listbox" data-i18n-aria="palette.results.aria"></ul>
+      <div class="palette-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.select">選択</span></span>
+        <span><kbd>Enter</kbd> <span data-i18n="palette.foot.run">実行</span></span>
+        <span><kbd>⇧</kbd><kbd>Enter</kbd> <span data-i18n="palette.foot.insert">挿入</span></span>
+        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">閉じる</span></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- 汎用モーダル -->
+  <div id="modal" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-box">
+      <h3 id="modal-title"></h3>
+      <div id="modal-body"></div>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="ghost-btn" data-i18n="modal.cancel">キャンセル</button>
+        <button id="modal-ok" class="accent-btn">OK</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- キーボードショートカット一覧 -->
+  <div id="shortcuts" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="sc-title">
+    <div class="modal-box sc-box">
+      <h3 id="sc-title"><span class="sc-title-ico" data-icon="keyboard"></span><span data-i18n="sc.title">キーボードショートカット</span></h3>
+      <div id="sc-body"></div>
+      <div class="modal-actions">
+        <button id="sc-close" class="accent-btn" data-i18n="sc.close">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toasts are the only feedback for several actions (copy, save, SSH
+       disconnect), so announce them to assistive tech rather than leaving them
+       purely visual. -->
+  <div id="toast" class="hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

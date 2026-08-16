@@ -1,0 +1,1300 @@
+:root {
+  --bg: #0d1117;
+  --bg-raised: #131922;
+  --bg-panel: #161b22;
+  --border: #262d38;
+  --text: #d7dde5;
+  --text-dim: #8b95a3;
+  --accent: #00e5be;
+  --accent-dim: #0d8f79;
+  --accent-ink: #04110e; /* readable text on an --accent fill */
+  --violet: #8957e5;
+  --violet-bright: #b393f0; /* violet text/badges on dark */
+  --blue: #79c0ff;
+  --danger: #e5534b;
+  --accent-glow: rgba(0, 229, 190, 0.18); /* focus/hover halo */
+  --radius: 8px;
+  --radius-lg: 12px;
+  /* Elevation — layered shadows read as real depth on the dark canvas. */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 18px 50px rgba(0, 0, 0, 0.5);
+  /* One easing + duration vocabulary so motion feels like one system. */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-1: 0.12s; /* micro: hover/press */
+  --dur-2: 0.18s; /* small: toggles */
+  --dur-3: 0.24s; /* overlays */
+  font-size: 14px;
+}
+
+/* Light theme: token overrides only — components below all read tokens, so
+   flipping `body.theme-light` restyles the whole app. The pane thread
+   dropdown keeps its explicit black-base/white-text look (user request). */
+body.theme-light {
+  --bg: #f5f7fa;
+  --bg-raised: #ffffff;
+  --bg-panel: #eceff3;
+  --border: #d4dae2;
+  --text: #23282f;
+  --text-dim: #5c6672;
+  --accent: #00806b;      /* darker teal: readable as text/icon on white */
+  --accent-dim: #0d8f79;  /* button fill */
+  --accent-ink: #ffffff;  /* text on an accent fill */
+  --violet: #6f42c1;
+  --violet-bright: #6f42c1;
+  --blue: #0969da;
+  --danger: #cf222e;
+  --accent-glow: rgba(0, 128, 107, 0.16);
+  --shadow-sm: 0 1px 2px rgba(140, 149, 159, 0.18);
+  --shadow-md: 0 6px 20px rgba(140, 149, 159, 0.25);
+  --shadow-lg: 0 18px 50px rgba(100, 110, 120, 0.35);
+}
+/* The few spots that hardcode dark-canvas colors. */
+body.theme-light #win-controls .win-btn:hover { background: rgba(0, 0, 0, 0.07); }
+body.theme-light .card:hover { border-color: #b8c2cd; }
+body.theme-light .sc-row { border-bottom-color: rgba(212, 218, 226, 0.7); }
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* Respect the OS "reduce motion" setting: drop all animation/transition. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+html, body, #app { height: 100%; overflow: hidden; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Noto Sans", "Noto Sans JP", "Segoe UI", "Hiragino Sans", sans-serif;
+  user-select: none;
+}
+
+#app { display: flex; flex-direction: column; }
+
+/* ---------- top bar (custom native-like titlebar) ---------- */
+#topbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+  /* The bar is the window drag handle (decorations are off). */
+  user-select: none;
+}
+
+#brand {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--accent);
+  margin: 0 6px;
+  white-space: nowrap;
+}
+/* The real product icon rather than a text chevron, so the titlebar matches
+   what sits in the dock/taskbar. Generated into ui/assets by
+   scripts/icons_from_source.py — do not drop a hand-resized copy here. */
+#brand-mark {
+  width: 20px;
+  height: 20px;
+  display: block;
+  flex: none;
+  /* The mark is drawn on transparency; a faint lift keeps its dark body from
+     merging into the equally dark titlebar. */
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
+}
+
+.spacer { flex: 1; align-self: stretch; }
+
+/* Center tool-panel tabs: a segmented pill of rounded buttons. */
+#header-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+.hdr-tab {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 999px;
+  padding: 3px 14px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.85rem;
+  white-space: nowrap;
+  line-height: 1.4;
+  transition: color var(--dur-1) var(--ease), background var(--dur-1) var(--ease);
+}
+.hdr-tab:hover { color: var(--text); background: var(--bg-raised); }
+.hdr-tab.active {
+  background: var(--accent-dim);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* Window controls ----------------------------------------------------------- */
+.win-controls { display: none; align-items: center; }
+
+/* Windows / Linux: square min/max/close on the right, Segoe MDL2 glyphs. */
+body.platform-windows #win-controls,
+body.platform-linux #win-controls {
+  display: flex;
+  margin-left: 4px;
+  margin-right: -8px; /* hug the window edge */
+}
+
+#win-controls .win-btn {
+  width: 44px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#win-controls .win-btn:hover { background: rgba(255, 255, 255, 0.09); }
+#win-controls .win-btn.close:hover { background: var(--danger); color: #fff; }
+
+/* macOS keeps its native decorations with a transparent title bar
+   (`titleBarStyle: "Overlay"`, see tauri.macos.conf.json), so the traffic
+   lights are the real ones, drawn by the OS on top of our header. `.win-controls`
+   is already `display:none` by default and only Windows/Linux turn it on, so
+   nothing of ours competes with them — the header just needs an inset wide
+   enough that no control lands underneath. The bar keeps its
+   `data-tauri-drag-region`, which is what makes the inset draggable too. */
+body.platform-macos #topbar { padding-left: 78px; }
+
+/* Settings toggle that this build cannot honour (updates owned by a store or a
+   package manager) — greyed out, with the reason spelled out in the hint. */
+.checkbox-row.disabled { opacity: 0.55; cursor: not-allowed; }
+
+kbd {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+}
+
+/* ---------- buttons & inputs ---------- */
+.icon-btn, .ghost-btn, .accent-btn, .danger-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: var(--radius);
+  padding: 5px 10px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  /* inline-flex so a leading icon and its label sit on one baseline with an
+     even gap, regardless of the button's text. */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease), transform var(--dur-1) var(--ease),
+    box-shadow var(--dur-1) var(--ease);
+}
+
+/* Inline icon set: sized to the surrounding text, non-shrinking so labels
+   never squeeze them. */
+.ico { width: 16px; height: 16px; flex: 0 0 auto; display: inline-block; vertical-align: -0.18em; }
+.icon-btn .ico { width: 17px; height: 17px; }
+/* Fit the icon to each smaller control it appears in. */
+.card .row button .ico { width: 15px; height: 15px; }
+.card h4 .star { display: inline-flex; vertical-align: middle; }
+.card h4 .star:not(:empty) { margin-right: 5px; }
+.card h4 .star .ico { width: 15px; height: 15px; }
+.thread-item .close { display: inline-flex; align-items: center; }
+.thread-item .close .ico { width: 14px; height: 14px; }
+.pane-close .ico { width: 15px; height: 15px; }
+.pane-thread-btn .ptd-caret .ico { width: 13px; height: 13px; }
+.new-thread-group .ico { width: 15px; height: 15px; }
+/* A subtle press: the button dips, giving tactile feedback. */
+.icon-btn:active, .ghost-btn:active, .accent-btn:active, .danger-btn:active { transform: translateY(1px); }
+
+.icon-btn { padding: 5px 9px; }
+.icon-btn:hover, .ghost-btn:hover { background: var(--bg-panel); border-color: var(--accent-dim); }
+
+.accent-btn {
+  background: var(--accent-dim);
+  border-color: transparent;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.accent-btn:hover { background: var(--accent); box-shadow: 0 2px 12px var(--accent-glow); }
+
+.danger-btn { color: var(--danger); }
+.danger-btn:hover { background: rgba(229, 83, 75, 0.12); border-color: rgba(229, 83, 75, 0.4); }
+
+input, select, textarea {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 6px 9px;
+  font: inherit;
+  width: 100%;
+  transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+}
+
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--accent-dim);
+  box-shadow: 0 0 0 3px var(--accent-glow);
+}
+input::placeholder, textarea::placeholder { color: var(--text-dim); opacity: 0.7; }
+
+/* Visible keyboard focus across the chrome — the UA default ring is nearly
+   invisible on this dark theme. Only for keyboard focus (:focus-visible), so
+   mouse clicks don't ring. */
+.icon-btn:focus-visible, .ghost-btn:focus-visible, .accent-btn:focus-visible,
+.danger-btn:focus-visible, .hdr-tab:focus-visible, .win-btn:focus-visible,
+.thread-item:focus-visible, .thread-item .pin:focus-visible,
+.thread-item .close:focus-visible, .pane-thread-btn:focus-visible,
+.card .row button:focus-visible, .wf-quick-btn:focus-visible,
+.popup-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Hide the native number spinners — their default chrome clashes with the
+   dark theme. Values are still adjustable by typing or arrow keys. */
+input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  appearance: none;
+  margin: 0;
+}
+
+/* ---------- layout ---------- */
+#body { display: flex; flex: 1; min-height: 0; }
+
+#terminals {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  position: relative;
+}
+
+#thread-parking { display: none; }
+
+.term-host { position: absolute; inset: 0; padding: 6px 4px 6px 10px; }
+.term-host .xterm { height: 100%; }
+
+/* ---------- left thread bar ---------- */
+#threadbar {
+  width: 230px;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+#threadbar.hidden { display: none; }
+
+.threadbar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.threadbar-title { color: var(--text-dim); font-size: 0.82rem; letter-spacing: 0.06em; }
+
+/* Split button: primary "+ 新規" plus a ▾ caret opening the profile menu. */
+.new-thread-group { display: flex; }
+.new-thread-group .accent-btn { font-size: 0.8rem; padding: 3px 8px; }
+.new-thread-group #new-thread { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.new-thread-group .caret {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 3px 5px;
+  border-left: 1px solid rgba(0, 0, 0, 0.25);
+}
+
+#thread-list { list-style: none; overflow-y: auto; flex: 1; padding: 6px; display: flex; flex-direction: column; gap: 3px; }
+
+.thread-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  border-radius: var(--radius);
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 0.9rem;
+  transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease), box-shadow var(--dur-1) var(--ease);
+}
+
+.thread-item:hover { background: var(--bg-raised); }
+.thread-item.shown { color: var(--text); background: var(--bg-raised); border-color: var(--border); }
+/* Focused pane's thread: accent border + a left accent bar, so it reads
+   differently from a merely-pinned thread (which uses the pin icon + a dimmer
+   border). */
+.thread-item.focused { border-color: var(--accent); box-shadow: inset 2px 0 0 var(--accent); }
+
+.thread-item.pinned { border-color: var(--accent-dim); }
+.thread-item.pinned.shown { border-color: var(--accent); }
+
+.thread-item .kind { font-size: 0.72rem; color: var(--violet); min-width: 2em; }
+.thread-item.local .kind { color: var(--accent-dim); }
+.thread-item .activity-dot {
+  display: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  flex: 0 0 auto;
+}
+.thread-item.activity .activity-dot { display: inline-block; }
+.thread-item .title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.thread-item .title-input {
+  flex: 1;
+  width: auto;
+  padding: 1px 4px;
+  font-size: inherit;
+  color: inherit;
+}
+.thread-item .pane-mark { color: var(--accent); font-size: 0.72rem; min-width: 1em; }
+.thread-item .pin,
+.thread-item .close {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0.35;
+  padding: 0 2px;
+  font-size: 0.85rem;
+  line-height: 1;
+}
+.thread-item:hover .pin,
+.thread-item:hover .close { opacity: 0.7; }
+.thread-item.pinned .pin { opacity: 1; }
+.thread-item .pin:hover { opacity: 1; }
+.thread-item .close:hover { opacity: 1; color: var(--danger); }
+
+/* Inline Google Material Symbol (push_pin). Inherits currentColor so it
+   picks up the button's dim/accent state. */
+.thread-item .pin { display: inline-flex; align-items: center; }
+.thread-item .pin .mi { width: 15px; height: 15px; fill: currentColor; }
+.thread-item.pinned .pin { color: var(--accent); }
+
+/* ---------- panes ---------- */
+.pane {
+  flex: 1;
+  min-height: 60px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+
+.pane.focused .pane-head { box-shadow: inset 2px 0 0 var(--accent); }
+.pane.focused { outline: 1px solid var(--accent-dim); outline-offset: -1px; }
+
+/* Custom thread dropdown (replaces a native <select> so rows can hold the
+   inline Material push_pin SVG). Black-based with white text so the thread
+   name reads clearly against the raised header. */
+/* flex (not the default block) so the inline-flex button's baseline strut
+   doesn't add a stray ~1px that shifts when the pin icon toggles. */
+.pane-head .pane-thread-dd { position: relative; display: flex; align-items: center; }
+.pane-head .pane-thread-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 320px;
+  /* Fixed height so the pin icon appearing/disappearing never changes the
+     button (and therefore the pane header) height. box-sizing:border-box
+     (global reset) keeps the 13px icon within the 24px box. */
+  height: 24px;
+  font: inherit;
+  font-size: 0.82rem;
+  padding: 0 8px;
+  background: #000;
+  color: #fff;
+  border: 1px solid #000;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.pane-head .pane-thread-btn:hover,
+.pane-thread-dd.open .pane-thread-btn { border-color: var(--accent-dim); }
+.pane-thread-btn .ptd-icon { display: inline-flex; align-items: center; }
+.pane-thread-btn .ptd-icon .mi { width: 13px; height: 13px; fill: var(--accent); }
+.pane-thread-btn .ptd-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-thread-btn .ptd-caret { color: var(--text-dim); font-size: 0.7rem; margin-left: 2px; }
+
+.pane-thread-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 210px;
+  max-width: 340px;
+  max-height: 320px;
+  overflow-y: auto;
+  list-style: none;
+  background: #000;
+  color: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.55);
+  padding: 4px;
+  z-index: 40;
+}
+.pane-thread-menu.hidden { display: none; }
+.pane-thread-menu .ptd-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.pane-thread-menu .ptd-item:hover,
+.pane-thread-menu .ptd-item:focus { background: var(--bg-raised); outline: none; }
+.pane-thread-menu .ptd-item.selected { background: var(--bg-raised); }
+.pane-thread-menu .ptd-item.empty { color: var(--text-dim); cursor: default; }
+.pane-thread-menu .ptd-pin { width: 14px; display: inline-flex; align-items: center; }
+.pane-thread-menu .ptd-pin .mi { width: 14px; height: 14px; fill: var(--accent); }
+.pane-thread-menu .ptd-kind { color: var(--violet); font-size: 0.72rem; min-width: 1.4em; }
+.pane-thread-menu .ptd-name { overflow: hidden; text-overflow: ellipsis; }
+
+.pane-head .pane-kind { color: var(--text-dim); font-size: 0.72rem; }
+.pane-head .pane-close { border: none; padding: 1px 7px; font-size: 0.8rem; color: var(--text-dim); }
+.pane-head .pane-close:hover { color: var(--danger); }
+
+.pane-body { flex: 1; position: relative; min-height: 0; }
+
+.pane-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: var(--text-dim);
+}
+
+/* Command-block toolbar (OSC 133 shell integration): copy / fold buttons +
+   a ✓ / ✗ exit chip, overlaid at the right edge of each finished command's
+   prompt line. The buttons fade in on hover; the chip always shows. */
+.term-block-toolbar {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 100%;
+  padding: 0 2px;
+}
+.term-block-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 19px;
+  height: 19px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-1) var(--ease), background var(--dur-1) var(--ease),
+    color var(--dur-1) var(--ease);
+}
+.term-block-toolbar:hover .term-block-btn { opacity: 1; }
+.term-block-btn:focus-visible { opacity: 1; }
+.term-block-btn:hover { background: var(--bg-panel); color: var(--text); }
+.term-block-btn .ico { width: 12px; height: 12px; }
+.term-block-btn.fold.active .ico { transform: rotate(180deg); }
+.term-block-btn:disabled { opacity: 0 !important; pointer-events: none; }
+
+.term-block-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.term-block-chip.ok { color: var(--accent); background: rgba(0, 229, 190, 0.12); }
+.term-block-chip.err { color: var(--danger); background: rgba(229, 83, 75, 0.16); }
+body.theme-light .term-block-chip.ok { background: rgba(0, 128, 107, 0.12); }
+body.theme-light .term-block-chip.err { background: rgba(207, 34, 46, 0.12); }
+
+/* Fold overlay: paints over a collapsed block's output rows on xterm's 'top'
+   decoration layer (see toggleFold() — the underlying rows are untouched). */
+.term-block-fold {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-left: 12px;
+  background: var(--bg-panel);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.term-block-fold:hover { border-color: var(--accent-dim); color: var(--text); }
+
+/* ---------- in-terminal search bar (Ctrl+Shift+F) ---------- */
+/* Workflow quick-launch bar (shell view). */
+#wf-quickbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  background: var(--bg-raised);
+  border-bottom: 1px solid var(--border);
+}
+#wf-quickbar.hidden { display: none; }
+.wf-quick-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--bg-panel);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 3px 12px;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.wf-quick-btn:hover { border-color: var(--accent-dim); background: var(--bg); transform: translateY(-1px); }
+.wf-quick-btn:active { transform: translateY(0); }
+.wf-quick-btn { transition: background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease), transform var(--dur-1) var(--ease); }
+.wf-quick-btn .ico { width: 13px; height: 13px; color: var(--accent); }
+.wf-quick-btn kbd { font-size: 0.68rem; }
+
+.term-search {
+  position: absolute;
+  top: 8px;
+  right: 12px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 4px 6px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.4);
+}
+.term-search.hidden { display: none; }
+.term-search input {
+  width: 200px;
+  padding: 3px 8px;
+  font-size: 0.85rem;
+}
+.term-search .icon-btn { padding: 3px 8px; font-size: 0.8rem; }
+/* Query matched nothing: tint the field so a failed search is distinguishable
+   from a hit that scrolled somewhere off-screen. */
+.term-search.no-match input {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.term-search.no-match input:focus {
+  border-color: var(--danger);
+  box-shadow: 0 0 0 3px rgba(229, 83, 75, 0.18);
+}
+
+.splitter {
+  height: 8px;
+  flex: 0 0 8px;
+  cursor: row-resize;
+  background: var(--border);
+  transition: background 0.15s;
+  position: relative;
+  z-index: 5;
+}
+.splitter:hover { background: var(--accent-dim); }
+
+/* Widen the grab zone beyond the visible 8px bar. */
+.splitter::after {
+  content: '';
+  position: absolute;
+  top: -6px;
+  bottom: -6px;
+  left: 0;
+  right: 0;
+}
+
+/* While dragging the splitter, keep the terminals from stealing the mouse. */
+body.row-resizing { cursor: row-resize; }
+body.row-resizing .pane-body { pointer-events: none; user-select: none; }
+body.col-resizing { cursor: col-resize; }
+body.col-resizing .pane-body { pointer-events: none; user-select: none; }
+
+/* ---------- horizontal (left/right) split ---------- */
+/* Panes and the splitter live in #pane-area so flipping the split axis
+ * doesn't drag the quick-launch bar or search bar into the row. */
+#pane-area {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+#terminals.split-h #pane-area { flex-direction: row; }
+#terminals.split-h .pane { min-height: 0; min-width: 120px; }
+#terminals.split-h .splitter {
+  height: auto;
+  width: 8px;
+  flex: 0 0 8px;
+  cursor: col-resize;
+}
+#terminals.split-h .splitter::after {
+  top: 0;
+  bottom: 0;
+  left: -6px;
+  right: -6px;
+}
+
+/* ---------- input broadcast ---------- */
+/* Accent stripe across every pane head: an always-visible reminder that
+ * keystrokes are being mirrored into all panes. */
+#terminals.broadcast .pane-head { box-shadow: inset 0 2px 0 var(--accent); }
+#terminals.broadcast .pane.focused .pane-head {
+  box-shadow: inset 0 2px 0 var(--accent), inset 2px 0 0 var(--accent);
+}
+#broadcast-toggle.active {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--bg-panel);
+}
+
+/* ---------- sidebar ---------- */
+/* Tool views (Workflows / SSH / 端末 / 設定) render as the main window content
+   rather than a narrow sidebar: the terminal workspace is hidden and #sidebar
+   fills the whole body. */
+#body.tool-view #threadbar,
+#body.tool-view #terminals { display: none; }
+
+#sidebar {
+  flex: 1;
+  min-width: 0;
+  background: var(--bg);
+  display: flex;
+  flex-direction: column;
+}
+
+#sidebar.hidden { display: none; }
+
+.panel { display: none; flex: 1; overflow-y: auto; padding: 28px 24px 40px; }
+.panel.active { display: block; }
+/* As full-width main content, cap line length and center each section. */
+.panel > * { max-width: 960px; margin-left: auto; margin-right: auto; }
+/* Settings is a single centered 560px column so the title, grouped cards and
+   footnote all share one left edge. */
+#panel-settings > * { max-width: 560px; }
+/* The card-grid views are the exception: they span the whole window so the
+   grid's column count tracks the window width. Under the shared 960px reading
+   cap the count topped out no matter how wide the window got — widening it
+   just stretched a fixed block of columns. Prose caps don't apply here anyway;
+   each card caps its own text. */
+.panel.cards > * { max-width: none; }
+
+/* Page header for each tool view: a title + one-line description, so the user
+   always knows which surface they're on (these views take the whole window). */
+.panel-header { margin-bottom: 20px; }
+.panel-header h2 {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.panel-header h2 .ph-icon { color: var(--accent); display: inline-flex; }
+.panel-header h2 .ph-icon svg { width: 20px; height: 20px; }
+.panel-header .panel-desc { color: var(--text-dim); font-size: 0.88rem; margin-top: 5px; }
+
+.panel-head { display: flex; gap: 8px; margin-bottom: 16px; }
+.panel-head input { flex: 1; }
+.panel-head .accent-btn { white-space: nowrap; }
+
+/* Cards flow into a responsive grid instead of one full-width column, so the
+   lists read as a dense dashboard rather than sparse stretched rows. The
+   column count is purely a function of the available width — `min(300px, 100%)`
+   so a window narrower than one card degrades to a single column instead of
+   overflowing horizontally. */
+.card-list {
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr));
+  gap: 14px;
+  align-items: stretch;
+}
+
+.card {
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  box-shadow: var(--shadow-sm);
+  transition: border-color var(--dur-1) var(--ease), box-shadow var(--dur-2) var(--ease),
+    transform var(--dur-2) var(--ease);
+  /* Column layout so the action row can pin to the bottom, keeping the
+     buttons aligned across cards of differing content height in a row. */
+  display: flex;
+  flex-direction: column;
+  /* Anchors the drag drop-indicator pseudo-elements. */
+  position: relative;
+}
+.card:hover { border-color: #33404f; box-shadow: var(--shadow-md); transform: translateY(-1px); }
+
+.card h4 { font-size: 0.95rem; margin-bottom: 2px; }
+.card .desc { color: var(--text-dim); font-size: 0.82rem; margin-bottom: 6px; }
+.card .desc:empty { display: none; }
+
+.card code {
+  display: block;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--accent);
+  background: var(--bg);
+  border-radius: 5px;
+  padding: 5px 7px;
+  margin-bottom: 8px;
+  overflow-x: auto;
+  white-space: nowrap;
+  user-select: text;
+}
+
+.card .meta { color: var(--text-dim); font-size: 0.8rem; margin-bottom: 8px; }
+
+/* SSH host card: monospace connection line + an auth-method badge. */
+.host-conn {
+  color: var(--text-dim);
+  font-size: 0.82rem;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  margin-bottom: 9px;
+  word-break: break-all;
+  user-select: text;
+}
+.host-badges { margin-bottom: 10px; }
+.auth-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--blue);
+  background: rgba(88, 166, 255, 0.13);
+  border-radius: 10px;
+  padding: 2px 9px;
+}
+.auth-badge .ico { width: 12px; height: 12px; }
+
+.wf-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
+.wf-badges:empty { display: none; }
+.wf-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  color: var(--accent);
+  background: rgba(0, 229, 190, 0.12);
+  border-radius: 10px;
+  padding: 2px 9px;
+}
+.wf-badge .ico { width: 12px; height: 12px; }
+
+.card .row { display: flex; gap: 6px; flex-wrap: wrap; margin-top: auto; padding-top: 4px; }
+.card .row button { font-size: 0.82rem; padding: 4px 9px; }
+
+/* Reorder ▲▼ pair, pushed to the right edge of a card's action row. */
+.wf-reorder { margin-left: auto; display: inline-flex; gap: 2px; }
+.wf-reorder .icon-btn { padding: 4px 6px; }
+.wf-reorder .icon-btn .ico { width: 14px; height: 14px; }
+.wf-reorder .icon-btn:disabled { opacity: 0.35; cursor: default; }
+.wf-reorder .icon-btn:disabled:hover { background: var(--bg-raised); border-color: var(--border); }
+
+/* Drag handle: grab cursor, and its dots use the accent on hover. */
+.wf-drag-handle { cursor: grab; }
+.wf-drag-handle:active { cursor: grabbing; }
+.wf-drag-handle:hover .ico { color: var(--accent); }
+
+/* The card being dragged fades; drop targets show an accent insertion line on
+   the edge the drop would land against. */
+.card.dragging { opacity: 0.45; }
+.card.drop-before::before, .card.drop-after::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 3px;
+  border-radius: 3px;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px var(--bg), 0 0 8px var(--accent-glow);
+}
+.card.drop-before::before { top: -8px; }
+.card.drop-after::after { bottom: -8px; }
+
+/* Group header row in the workflows panel, indented by nesting depth. It spans
+   the whole grid row so the cards that follow start fresh underneath it. */
+.wf-group-head {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 6px 0 2px;
+  padding-left: calc(var(--depth, 0) * 16px);
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+}
+.wf-group-head .ico { width: 14px; height: 14px; color: var(--accent); flex: 0 0 auto; }
+.wf-group-head .wf-group-name { color: var(--text); font-weight: 600; }
+.wf-group-head .wf-group-count {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.wf-group-badge { color: var(--text-dim) !important; background: var(--bg-raised) !important; }
+
+.tag {
+  display: inline-block;
+  background: rgba(137, 87, 229, 0.18);
+  color: var(--violet-bright);
+  border-radius: 10px;
+  font-size: 0.72rem;
+  padding: 2px 9px;
+}
+
+.empty { color: var(--text-dim); text-align: center; padding: 24px 0; font-size: 0.9rem; }
+
+/* Illustrated empty state spanning the whole card grid. */
+.empty-state {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 8px;
+  padding: 60px 20px;
+  color: var(--text-dim);
+}
+.es-icon {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+.es-icon .ico { width: 28px; height: 28px; }
+.es-title { color: var(--text); font-size: 1.02rem; font-weight: 600; }
+.es-hint { max-width: 380px; font-size: 0.86rem; line-height: 1.6; }
+.empty-state .accent-btn { margin-top: 10px; }
+
+/* Compact empty state for the narrow thread sidebar. */
+.thread-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 5px;
+  padding: 40px 16px;
+  color: var(--text-dim);
+}
+.thread-empty .es-icon { width: 46px; height: 46px; margin-bottom: 2px; }
+.thread-empty .es-icon .ico { width: 21px; height: 21px; }
+.thread-empty .es-title { font-size: 0.9rem; }
+.thread-empty .es-hint { font-size: 0.78rem; }
+
+.form { display: flex; flex-direction: column; gap: 10px; }
+.form label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
+/* Checkbox field: sits inline with its label rather than stacked. Shared by
+   the settings form and the generic modal builder (#modal-body); `label`
+   repeated in the selector matches those forms' own `label { flex-direction:
+   column }` base rule specificity so this actually overrides it. */
+label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
+.form input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+.field-hint { color: var(--text-dim); font-size: 0.78rem; margin-top: -4px; line-height: 1.5; }
+.hint { color: var(--text-dim); font-size: 0.8rem; margin-top: 14px; }
+
+/* Settings grouped into labelled cards (外観 / ターミナル / 起動). */
+.settings-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  padding: 14px 16px 16px;
+  margin: 4px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow-sm);
+}
+.settings-group legend {
+  padding: 0 8px;
+  margin-left: -4px;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.settings-actions { display: flex; justify-content: flex-end; }
+.settings-actions .accent-btn { padding: 8px 28px; }
+
+/* ---------- overlays ---------- */
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(4, 8, 14, 0.6);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 12vh;
+  z-index: 50;
+}
+
+.overlay.hidden { display: none; }
+/* Overlays fade in; their boxes rise and settle — a calm entrance. */
+.overlay:not(.hidden) { animation: overlay-in var(--dur-2) var(--ease); }
+.overlay:not(.hidden) .palette-box,
+.overlay:not(.hidden) .modal-box { animation: pop-in var(--dur-3) var(--ease); }
+@keyframes overlay-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pop-in {
+  from { opacity: 0; transform: translateY(-8px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+.palette-box, .modal-box {
+  width: min(640px, 92vw);
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.palette-box input {
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  padding: 14px 16px;
+  font-size: 1.05rem;
+  background: transparent;
+}
+
+#palette-results { list-style: none; max-height: 46vh; overflow-y: auto; }
+
+/* Key-hint footer, so the palette teaches its own controls. */
+.palette-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  align-items: center;
+  padding: 8px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-raised);
+  color: var(--text-dim);
+  font-size: 0.74rem;
+}
+.palette-foot span { display: inline-flex; align-items: center; gap: 4px; }
+.palette-foot kbd { font-size: 0.68rem; padding: 1px 5px; }
+
+#palette-results li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+
+#palette-results li.selected {
+  background: var(--bg-raised);
+  border-left-color: var(--accent);
+}
+
+#palette-results .kind-badge {
+  font-size: 0.7rem;
+  border-radius: 9px;
+  padding: 1px 8px;
+  white-space: nowrap;
+}
+.kind-badge.wf { background: rgba(0, 229, 190, 0.14); color: var(--accent); }
+.kind-badge.ssh { background: rgba(137, 87, 229, 0.18); color: var(--violet-bright); }
+.kind-badge.action { background: rgba(139, 149, 163, 0.18); color: var(--text-dim); }
+.kind-badge.thread { background: rgba(88, 166, 255, 0.16); color: var(--blue); }
+.kind-badge.set { background: rgba(227, 179, 65, 0.16); color: #e3b341; }
+.kind-badge.hist { background: rgba(139, 149, 163, 0.18); color: var(--text-dim); }
+
+#palette-results .label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#palette-results .detail {
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  font-family: Consolas, monospace;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Cap the modal height and let the field area scroll, so a tall form (e.g. the
+   SSH host editor) never pushes the OK/Cancel row off-screen. */
+.modal-box {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  max-height: 84vh;
+}
+.modal-box h3 { margin-bottom: 14px; font-size: 1.05rem; }
+#modal-body { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
+#modal-body label { display: flex; flex-direction: column; gap: 4px; color: var(--text-dim); font-size: 0.85rem; }
+/* #modal-body label's ID-scoped rule above outranks the plain `label.checkbox-row`
+   override further down, so restate it here at matching specificity. */
+#modal-body label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
+#modal-body input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+/* Command templates are the reason this box exists, and they are routinely
+   longer than they look: at 64px only about two lines showed, so anything that
+   scrolled was read through a slot. `scrollbar-gutter` reserves the track so an
+   overlay scrollbar cannot sit on top of the last column, and so the text does
+   not reflow the moment one appears. Auto-growing (see `autoGrowTextarea`)
+   takes it up to the cap before scrolling starts at all. */
+#modal-body textarea {
+  font-family: Consolas, monospace;
+  line-height: 1.55;
+  min-height: 132px;
+  max-height: 44vh;
+  resize: vertical;
+  scrollbar-gutter: stable;
+}
+/* Section header grouping fields inside a modal form (e.g. the SSH editor). */
+.modal-section {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-top: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+#modal-body .modal-section:first-child { margin-top: 0; }
+
+/* Launch-set editor: a repeatable list of (shell/host + workflow + command)
+   rows. Each row stacks a select pair over a full-width command input — the
+   command is free text and often long, so it gets its own line rather than a
+   cramped third column. */
+.li-editor { display: flex; flex-direction: column; gap: 8px; }
+.li-rows { list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.li-row {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.li-head { display: flex; align-items: center; gap: 8px; }
+.li-row .li-target, .li-row .li-workflow { flex: 1 1 0; min-width: 0; }
+.li-row .li-remove { flex: 0 0 auto; }
+.li-row .li-command {
+  width: 100%;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.85rem;
+}
+.li-add { align-self: flex-start; }
+
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+/* An extra action button (e.g. 接続テスト) sits left of Cancel/OK. */
+.modal-actions .modal-extra:first-child { margin-right: auto; }
+.modal-error { color: var(--danger); font-size: 0.85rem; min-height: 1em; }
+.modal-status { font-size: 0.85rem; min-height: 1em; margin-top: 6px; color: var(--text-dim); word-break: break-all; }
+.modal-status.ok { color: var(--accent); }
+.modal-status.err { color: var(--danger); }
+
+/* ---------- keyboard shortcut cheat sheet ---------- */
+.sc-box { max-height: 84vh; }
+#sc-title { display: flex; align-items: center; gap: 9px; }
+#sc-title .sc-title-ico { color: var(--accent); display: inline-flex; }
+#sc-title .sc-title-ico .ico { width: 20px; height: 20px; }
+#sc-body { overflow-y: auto; }
+.sc-group { margin-bottom: 16px; }
+.sc-group:last-child { margin-bottom: 4px; }
+.sc-group-title {
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.sc-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 7px 2px;
+  border-bottom: 1px solid rgba(38, 45, 56, 0.5);
+}
+.sc-group .sc-row:last-child { border-bottom: none; }
+.sc-desc { color: var(--text); font-size: 0.9rem; }
+.sc-keys { display: inline-flex; align-items: center; gap: 3px; flex: 0 0 auto; white-space: nowrap; }
+.sc-keys kbd { font-size: 0.78rem; padding: 2px 7px; }
+.sc-plus { color: var(--text-dim); font-size: 0.72rem; margin: 0 1px; }
+
+/* ---------- toast ---------- */
+#toast {
+  position: fixed;
+  bottom: 18px;
+  right: 18px;
+  left: auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: 380px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* Extra left padding makes a gutter for the accent line (::before). */
+  padding: 11px 16px 11px 22px;
+  z-index: 90;
+  box-shadow: var(--shadow-md);
+  animation: toast-in var(--dur-3) var(--ease);
+}
+/* Colored status line down the left edge — accent for info/success, red for
+ * errors. A rounded bar inset in the gutter rather than a full-height border,
+ * so it reads as a distinct status indicator. */
+#toast::before {
+  content: '';
+  position: absolute;
+  left: 7px;
+  top: 9px;
+  bottom: 9px;
+  width: 4px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+#toast .toast-ico { display: inline-flex; color: var(--accent); flex: 0 0 auto; }
+#toast .toast-ico .ico { width: 18px; height: 18px; }
+#toast .toast-msg { font-size: 0.88rem; line-height: 1.45; }
+#toast.error { border-color: var(--danger); color: var(--danger); }
+#toast.error::before { background: var(--danger); }
+#toast.error .toast-ico { color: var(--danger); }
+#toast.hidden { display: none; }
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+/* ---------- profile picker popup menu ---------- */
+.popup-menu {
+  position: fixed;
+  width: 240px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
+  padding: 5px;
+  z-index: 80;
+}
+.popup-menu.hidden { display: none; }
+
+.popup-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.popup-item:hover { background: var(--bg-raised); }
+.popup-item.muted { color: var(--text-dim); font-size: 0.85rem; }
+.popup-item .pi-name { font-size: 0.9rem; }
+.popup-item .pi-cmd { font-size: 0.75rem; color: var(--text-dim); font-family: Consolas, monospace; }
+.popup-sep { height: 1px; background: var(--border); margin: 5px 6px; }
+.popup-label { color: var(--text-dim); font-size: 0.7rem; letter-spacing: 0.06em; padding: 2px 10px 4px; }
+.popup-empty { color: var(--text-dim); font-size: 0.85rem; padding: 6px 10px 8px; }
+
+/* ---------- terminal right-click menu (workflow launcher) ---------- */
+#term-context-menu, .term-context-submenu {
+  width: 264px;
+  max-height: min(440px, 70vh);
+  overflow-y: auto;
+}
+#term-context-menu .pi-line, .term-context-submenu .pi-line { display: flex; align-items: center; gap: 7px; min-width: 0; }
+#term-context-menu .pi-line .ico, .term-context-submenu .pi-line .ico { width: 12px; height: 12px; color: var(--accent); flex: 0 0 auto; }
+#term-context-menu .pi-name, .term-context-submenu .pi-name { flex: 1; font-size: 0.9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#term-context-menu .pi-line kbd, .term-context-submenu .pi-line kbd { font-size: 0.68rem; flex: 0 0 auto; }
+#term-context-menu .pi-cmd, .term-context-submenu .pi-cmd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* A group row: the folder + name sit left, the count and ▸ chevron trail right.
+   The chevron's default accent color would fight the folder — dim it. */
+.popup-group .pi-line .pi-count {
+  flex: 0 0 auto;
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  background: var(--bg-raised);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+.popup-group .pi-line > .ico:last-child { color: var(--text-dim); margin-left: 2px; }
+.popup-group.open { background: var(--bg-raised); }
+.popup-group.open .pi-line > .ico:last-child { color: var(--accent); }
+
+/* ---------- profiles panel ---------- */
+.panel-note { color: var(--text-dim); font-size: 0.8rem; flex: 1; }
+.card h4 .star { color: var(--accent); }
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }

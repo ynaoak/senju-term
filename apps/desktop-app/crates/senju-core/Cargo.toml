@@ -1,0 +1,22 @@
+[package]
+name = "senju-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "GUI-independent core of Senju Term: workflow store, SSH host store, placeholder templates, and session management (local PTY + SSH)."
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+portable-pty = "0.9"
+# Use the `ring` crypto backend instead of the default `aws-lc-rs`, whose
+# `aws-lc-sys` C build requires NASM on Windows. `ring` needs no NASM, so a
+# stock Rust toolchain builds Senju on Windows/macOS/Linux out of the box.
+russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
+dirs = "6"
+# Generates the throwaway rcfile/ZDOTDIR used to auto-inject shell integration
+# (see sessions::shell_integration) — a real dependency now, not just tests.
+tempfile = "3"
