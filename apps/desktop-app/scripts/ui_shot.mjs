@@ -60,8 +60,16 @@ const STUB = () => {
   // same byte-oriented base64 the Rust backend sends.
   const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
+  // Stands in for the real core.Channel: app.js registers one for terminal
+  // output at load time, so it has to exist before boot() runs.
+  class StubChannel {
+    constructor() { this.onmessage = () => {}; }
+    toJSON() { return '__CHANNEL__:0'; }
+  }
+
   window.__TAURI__ = {
     core: {
+      Channel: StubChannel,
       invoke: async (cmd, args) => {
         switch (cmd) {
           case 'get_settings':

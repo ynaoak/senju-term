@@ -4,6 +4,7 @@ use std::time::Duration;
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
+use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 
 use senju_core::distribution::{self, DistChannel};
@@ -17,6 +18,9 @@ struct AppState {
     sessions: SessionManager,
     /// Detected once at startup — see `senju_core::distribution`.
     channel: DistChannel,
+    /// Kept alongside the manager so `subscribe_output` can hand the sink the
+    /// webview's binary channel.
+    sink: Arc<TauriSink>,
 }
 
 /// Flush terminal output at most once every ~8ms per session (roughly a frame)
@@ -25,16 +29,51 @@ struct AppState {
 const FLUSH_INTERVAL: Duration = Duration::from_millis(8);
 const FLUSH_THRESHOLD: usize = 64 * 1024;
 
-/// Forwards session output/exit to the webview. Output bytes are base64
-/// encoded so multibyte sequences split across reads survive the JSON hop.
+/// Framing for the binary output channel.
 ///
-/// Reads are coalesced: instead of a base64+JSON+emit per PTY read (thousands
-/// per second during heavy output, each with full event-system overhead and a
-/// main-thread decode), bytes accumulate per session and a background flusher
-/// emits one batched event per session per tick.
+/// ```text
+///   [0]        kind: 0 = data, 1 = exit
+///   [1]        length of the session id in bytes
+///   [2..2+n]   session id (UTF-8)
+///   [2+n..]    output bytes, or the exit code as little-endian i32
+/// ```
+///
+/// Data and exit share one transport on purpose: they used to be two separate
+/// events, and an exit must never overtake the output that preceded it.
+const FRAME_DATA: u8 = 0;
+const FRAME_EXIT: u8 = 1;
+
+fn frame(kind: u8, id: &str, payload: &[u8]) -> Option<Vec<u8>> {
+    let idb = id.as_bytes();
+    if idb.len() > u8::MAX as usize {
+        return None; // session ids are UUIDs; anything longer is not ours
+    }
+    let mut out = Vec::with_capacity(2 + idb.len() + payload.len());
+    out.push(kind);
+    out.push(idb.len() as u8);
+    out.extend_from_slice(idb);
+    out.extend_from_slice(payload);
+    Some(out)
+}
+
+/// Forwards session output/exit to the webview.
+///
+/// Reads are coalesced: instead of an emit per PTY read (thousands per second
+/// during heavy output, each with full event-system overhead and a main-thread
+/// decode), bytes accumulate per session and a background flusher emits one
+/// batched message per session per tick.
+///
+/// The batch travels over a binary `Channel` once the webview has registered
+/// one (`subscribe_output`): Tauri hands anything past 1KB to the webview as a
+/// real ArrayBuffer, so a 64KB chunk crosses as 64KB of bytes instead of 87KB
+/// of base64 that the main thread then has to decode a byte at a time. Until
+/// that registration lands — the first frames of a restored session can beat
+/// it — output falls back to the base64 event the frontend has always
+/// understood, so nothing is dropped either way.
 struct TauriSink {
     app: AppHandle,
     pending: Mutex<HashMap<String, Vec<u8>>>,
+    out: Mutex<Option<Channel<InvokeResponseBody>>>,
 }
 
 #[derive(Clone, Serialize)]
@@ -54,6 +93,7 @@ impl TauriSink {
         let sink = Arc::new(Self {
             app,
             pending: Mutex::new(HashMap::new()),
+            out: Mutex::new(None),
         });
         let flusher = sink.clone();
         std::thread::spawn(move || loop {
@@ -63,8 +103,29 @@ impl TauriSink {
         sink
     }
 
+    fn set_output(&self, channel: Channel<InvokeResponseBody>) {
+        *self.out.lock().unwrap_or_else(|e| e.into_inner()) = Some(channel);
+    }
+
+    /// Sends one framed message over the binary channel. Returns false when no
+    /// channel is registered yet or the webview has gone away, so the caller
+    /// can fall back to the event path.
+    fn send_frame(&self, kind: u8, id: &str, payload: &[u8]) -> bool {
+        let guard = self.out.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(channel) = guard.as_ref() else {
+            return false;
+        };
+        let Some(bytes) = frame(kind, id, payload) else {
+            return false;
+        };
+        channel.send(InvokeResponseBody::Raw(bytes)).is_ok()
+    }
+
     fn emit_data(&self, id: &str, bytes: &[u8]) {
         if bytes.is_empty() {
+            return;
+        }
+        if self.send_frame(FRAME_DATA, id, bytes) {
             return;
         }
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
@@ -114,6 +175,9 @@ impl senju_core::EventSink for TauriSink {
 
     fn exit(&self, id: &str, code: i32) {
         self.flush_one(id); // any buffered output must land before the exit
+        if self.send_frame(FRAME_EXIT, id, &code.to_le_bytes()) {
+            return;
+        }
         let _ = self
             .app
             .emit_to("main", "session:exit", ExitEvent { id, code });
@@ -123,6 +187,15 @@ impl senju_core::EventSink for TauriSink {
 type CmdResult<T> = Result<T, String>;
 
 // -- Sessions -----------------------------------------------------------------
+
+/// Registers the webview's binary channel for terminal output. Called once,
+/// first thing at boot: every session created afterwards streams over it, and
+/// the sink falls back to the base64 event for anything emitted before this
+/// lands.
+#[tauri::command]
+fn subscribe_output(channel: Channel<InvokeResponseBody>, state: State<'_, AppState>) {
+    state.sink.set_output(channel);
+}
 
 #[tauri::command]
 fn create_local_session(
@@ -632,8 +705,9 @@ pub fn run() {
             let sink = TauriSink::new(app.handle().clone());
             app.manage(AppState {
                 stores,
-                sessions: SessionManager::new(sink),
+                sessions: SessionManager::new(sink.clone()),
                 channel,
+                sink,
             });
             // Restore the saved window geometry before the first paint.
             if let Some(window) = app.get_webview_window("main") {
@@ -660,6 +734,7 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            subscribe_output,
             create_local_session,
             create_ssh_session,
             test_ssh_connection,
@@ -709,4 +784,41 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn frames_carry_id_and_payload() {
+        let id = "6f1b2c3d-4e5f-4a6b-8c9d-0e1f2a3b4c5d";
+        let f = frame(FRAME_DATA, id, b"hello\r\n").unwrap();
+        assert_eq!(f[0], FRAME_DATA);
+        assert_eq!(f[1] as usize, id.len());
+        assert_eq!(&f[2..2 + id.len()], id.as_bytes());
+        assert_eq!(&f[2 + id.len()..], b"hello\r\n");
+    }
+
+    #[test]
+    fn exit_code_round_trips_as_little_endian() {
+        let f = frame(FRAME_EXIT, "s", &(-1i32).to_le_bytes()).unwrap();
+        let payload = &f[2 + 1..];
+        assert_eq!(i32::from_le_bytes(payload.try_into().unwrap()), -1);
+    }
+
+    #[test]
+    fn payload_bytes_are_not_reinterpreted() {
+        // A frame must survive bytes that are not valid UTF-8 — the reason the
+        // old transport base64-encoded everything.
+        let raw = [0x1b, 0x5b, 0x33, 0x31, 0x6d, 0xe3, 0x81, 0xff, 0x00];
+        let f = frame(FRAME_DATA, "abc", &raw).unwrap();
+        assert_eq!(&f[2 + 3..], &raw);
+    }
+
+    #[test]
+    fn over_long_ids_are_refused_rather_than_truncated() {
+        let id = "x".repeat(256);
+        assert!(frame(FRAME_DATA, &id, b"x").is_none());
+    }
 }

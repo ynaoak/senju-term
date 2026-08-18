@@ -8,7 +8,7 @@
  * Tauri invoke/events. */
 'use strict';
 
-const { invoke } = window.__TAURI__.core;
+const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 
@@ -855,9 +855,9 @@ function createThread(info, paneIdx, origin = {}) {
   });
   state.threads.push(thread);
   assignThread(paneIdx, info.id);
-  // GPU rendering, loaded after assignThread() has attached the host to a
+  // GPU rendering, applied after assignThread() has attached the host to a
   // visible pane (see loadWebgl for why the timing and fallbacks matter).
-  if (state.settings.gpu_rendering !== false) loadWebgl(thread);
+  applyGpuRendering();
   persistSessionSnapshot();
   // A new thread implies wanting to use it — surface the shell view (a tool
   // panel may be covering the terminal).
@@ -937,10 +937,23 @@ function unloadWebgl(thread) {
   thread.gl = null;
 }
 
-/** Applies the gpu_rendering setting to every open thread immediately. */
+/** Gives the WebGL renderer to the threads a pane is actually showing, and
+ * takes it away from every other thread.
+ *
+ * Browsers cap how many WebGL contexts may be live at once (Chromium: 16,
+ * measured by `node scripts/term_bench.mjs --contexts`) and drop the OLDEST
+ * one past the cap. Loading the addon per thread therefore meant that opening
+ * enough threads silently knocked GPU rendering off the ones opened first —
+ * and the thread you were looking at could be one of them. Parked threads
+ * gain nothing from a renderer anyway: their host element is detached from
+ * the pane, so they paint nothing until they are shown again.
+ *
+ * Also the entry point for the gpu_rendering setting. */
 function applyGpuRendering() {
+  const visible = new Set(state.panes.map((p) => p.threadId).filter(Boolean));
+  const enabled = state.settings.gpu_rendering !== false;
   for (const t of state.threads) {
-    if (state.settings.gpu_rendering !== false) loadWebgl(t);
+    if (enabled && visible.has(t.id)) loadWebgl(t);
     else unloadWebgl(t);
   }
 }
@@ -1111,6 +1124,7 @@ function setPaneThread(paneIdx, threadId) {
     empty.appendChild(btn);
     pane.body.appendChild(empty);
   }
+  applyGpuRendering(); // the set of visible threads just changed
   renderThreads();
 }
 
@@ -1168,6 +1182,7 @@ function removePane(idx) {
   state.panes[0].root.style.flex = '';
   if (state.panes.length < 2 && state.broadcast) setBroadcast(false, { silent: true });
   focusPane(Math.min(state.focusedPane, state.panes.length - 1));
+  applyGpuRendering(); // the closed pane's thread is parked; release its context
   updateSplitUi();
   renderThreads();
 }
@@ -4460,27 +4475,69 @@ $('#shortcuts').addEventListener('keydown', (ev) => {
 
 /* ---------------- backend events & boot ---------------- */
 
-listen('session:data', (ev) => {
-  const { id, data } = ev.payload;
+function onSessionData(id, bytes) {
   const thread = threadById(id);
   if (!thread) {
     // Output for a session whose thread hasn't been built yet — hold it.
     const e = preCreateEntry(id);
-    const bytes = b64ToBytes(data);
     if (e.size + bytes.length <= PRE_CREATE_LIMIT) {
       e.chunks.push(bytes);
       e.size += bytes.length;
     }
     return;
   }
-  thread.term.write(b64ToBytes(data));
+  thread.term.write(bytes);
   // Flag activity only for threads not currently shown in any pane; avoid a
   // re-render on every single chunk once the flag is already set.
   if (!thread.activity && !state.panes.some((p) => p.threadId === id)) {
     thread.activity = true;
     renderThreads();
   }
-});
+}
+
+function onSessionExit(id, code) {
+  const thread = threadById(id);
+  if (!thread) {
+    // The session died before its thread was built (a shell that fails to
+    // start, say). Remember it so `createThread` can show the output and then
+    // close, rather than leaving a row for a process that is already gone.
+    preCreateEntry(id).exit = code;
+    return;
+  }
+  handleSessionExit(thread, code);
+}
+
+/* Terminal output arrives over one binary channel — see TauriSink in
+ * src-tauri/src/lib.rs for the frame layout. Tauri hands anything past 1KB to
+ * the webview as a real ArrayBuffer, so a 64KB batch crosses as 64KB of bytes
+ * instead of 87KB of base64 that this thread would then decode a byte at a
+ * time. Data and exit share the channel so an exit can never overtake the
+ * output that preceded it. */
+const FRAME_DATA = 0;
+const FRAME_EXIT = 1;
+const frameDecoder = new TextDecoder();
+
+const outputChannel = new Channel();
+outputChannel.onmessage = (msg) => {
+  const buf = msg instanceof ArrayBuffer ? msg : (ArrayBuffer.isView(msg) ? msg.buffer : null);
+  if (!buf || buf.byteLength < 2) return;
+  const view = new Uint8Array(buf);
+  const idLen = view[1];
+  const body = 2 + idLen;
+  if (view.length < body) return;
+  const id = frameDecoder.decode(view.subarray(2, body));
+  if (view[0] === FRAME_DATA) onSessionData(id, view.subarray(body));
+  else if (view[0] === FRAME_EXIT && view.length >= body + 4) {
+    onSessionExit(id, new DataView(buf, view.byteOffset + body, 4).getInt32(0, true));
+  }
+};
+// Registered before boot() so a restored session's first bytes already have
+// somewhere to go; the events below cover the gap until this lands.
+invoke('subscribe_output', { channel: outputChannel }).catch(() => {});
+
+/* Fallback transport: what the backend emits until the channel above is
+ * registered. Same handlers, one base64 decode in front. */
+listen('session:data', (ev) => onSessionData(ev.payload.id, b64ToBytes(ev.payload.data)));
 
 /** Announces an exit and tears the thread down. Shared by the live event and
  * the replay of an exit that landed before the thread existed. */
@@ -4494,18 +4551,7 @@ function handleSessionExit(thread, code) {
   closeThread(thread.id, { kill: false });
 }
 
-listen('session:exit', (ev) => {
-  const { id, code } = ev.payload;
-  const thread = threadById(id);
-  if (!thread) {
-    // The session died before its thread was built (a shell that fails to
-    // start, say). Remember it so `createThread` can show the output and then
-    // close, rather than leaving a row for a process that is already gone.
-    preCreateEntry(id).exit = code;
-    return;
-  }
-  handleSessionExit(thread, code);
-});
+listen('session:exit', (ev) => onSessionExit(ev.payload.id, ev.payload.code));
 
 (async function boot() {
   // Paint every static [data-icon] placeholder in the chrome first.
