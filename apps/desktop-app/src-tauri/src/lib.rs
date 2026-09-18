@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -7,7 +8,9 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, State};
 
 use senju_core::distribution::{self, DistChannel};
-use senju_core::sessions::{resolve_jump_chain, SessionInfo, SshSecrets, SshTestReport};
+use senju_core::sessions::{
+    resolve_jump_chain, RemoteDirListing, SessionInfo, SshSecrets, SshTestReport, TransferSummary,
+};
 use senju_core::template;
 use senju_core::models::{HistoryEntry, SessionSnapshot};
 use senju_core::{LaunchSet, LocalSpec, Profile, SessionManager, Settings, SshHost, Stores, Workflow};
@@ -118,6 +121,21 @@ impl senju_core::EventSink for TauriSink {
             .app
             .emit_to("main", "session:exit", ExitEvent { id, code });
     }
+
+    fn transfer_progress(&self, transfer_id: &str, done: u64, total: u64) {
+        let _ = self.app.emit_to(
+            "main",
+            "transfer:progress",
+            TransferProgressEvent { id: transfer_id, done, total },
+        );
+    }
+}
+
+#[derive(Clone, Serialize)]
+struct TransferProgressEvent<'a> {
+    id: &'a str,
+    done: u64,
+    total: u64,
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -232,6 +250,63 @@ async fn test_ssh_connection(
         )
         .await
         .map_err(|e| e.to_string())
+}
+
+// -- SFTP file transfer -------------------------------------------------------------
+
+/// Lists a remote directory on an SSH thread (`path` empty = login home).
+#[tauri::command]
+async fn sftp_list_dir(
+    state: State<'_, AppState>,
+    id: String,
+    path: Option<String>,
+) -> CmdResult<RemoteDirListing> {
+    state
+        .sessions
+        .sftp_list_dir(&id, path.as_deref().unwrap_or(""))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Uploads a local file or folder (a path the OS handed us from a drop or an
+/// open dialog) into `remote_dir`. Progress arrives as `transfer:progress`
+/// events keyed by `transfer_id`; the command resolves when the copy ends.
+#[tauri::command]
+async fn sftp_upload(
+    state: State<'_, AppState>,
+    id: String,
+    transfer_id: String,
+    local_path: String,
+    remote_dir: String,
+) -> CmdResult<TransferSummary> {
+    state
+        .sessions
+        .sftp_upload(&id, &transfer_id, PathBuf::from(local_path), remote_dir)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Downloads one remote file to `local_path` (chosen via the save dialog).
+#[tauri::command]
+async fn sftp_download(
+    state: State<'_, AppState>,
+    id: String,
+    transfer_id: String,
+    remote_path: String,
+    local_path: String,
+) -> CmdResult<u64> {
+    state
+        .sessions
+        .sftp_download(&id, &transfer_id, remote_path, PathBuf::from(local_path))
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// Aborts an in-flight upload/download. The pending `sftp_*` call then fails
+/// with `TRANSFER_CANCELLED`.
+#[tauri::command]
+fn cancel_transfer(state: State<'_, AppState>, transfer_id: String) {
+    state.sessions.cancel_transfer(&transfer_id);
 }
 
 /// Opens a link (e.g. one xterm detected in terminal output) in the OS default
@@ -709,7 +784,11 @@ pub fn run() {
             save_settings,
             dist_info,
             open_update_manager,
-            notify
+            notify,
+            sftp_list_dir,
+            sftp_upload,
+            sftp_download,
+            cancel_transfer
         ])
         .build(tauri::generate_context!())
         .expect("error while running senju-term")

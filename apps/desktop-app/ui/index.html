@@ -275,6 +275,27 @@
   <!-- Toasts are the only feedback for several actions (copy, save, SSH
        disconnect), so announce them to assistive tech rather than leaving them
        purely visual. -->
+  <!-- SFTP: リモートファイルブラウザ(ダウンロード元の選択) -->
+  <div id="remote-browser" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="rb-title">
+    <div class="modal-box rb-box">
+      <h3 id="rb-title" data-i18n="sftp.browser.title">リモートのファイルをダウンロード</h3>
+      <div class="rb-pathbar">
+        <button id="rb-up" class="icon-btn" data-i18n-title="sftp.browser.up" title="親ディレクトリへ">↑</button>
+        <input id="rb-path" type="text" spellcheck="false" autocomplete="off" />
+        <button id="rb-go" class="ghost-btn" data-i18n="sftp.browser.go">移動</button>
+      </div>
+      <div id="rb-list" class="rb-list" role="listbox" tabindex="0"></div>
+      <p id="rb-status" class="field-hint"></p>
+      <div class="modal-actions">
+        <button id="rb-cancel" class="ghost-btn" data-i18n="modal.cancel">キャンセル</button>
+        <button id="rb-download" class="accent-btn" disabled data-i18n="sftp.browser.download">ダウンロード…</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SFTP: 進行中の転送 -->
+  <div id="transfers" class="hidden" aria-live="polite"></div>
+
   <div id="toast" class="hidden" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script src="app.js"></script>

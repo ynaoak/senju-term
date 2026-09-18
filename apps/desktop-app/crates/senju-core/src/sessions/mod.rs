@@ -6,11 +6,13 @@
 mod forward;
 mod jump;
 mod local;
+mod sftp;
 mod shell_integration;
 mod ssh;
 
 pub use forward::{parse_forward_spec, ForwardSpec};
 pub use jump::{resolve_jump_chain, MAX_JUMP_HOPS};
+pub use sftp::{join_remote, RemoteDirListing, RemoteEntry, TransferSummary};
 pub use ssh::SshTestReport;
 
 use std::collections::HashMap;
@@ -26,6 +28,10 @@ use crate::models::SshHost;
 pub trait EventSink: Send + Sync + 'static {
     fn data(&self, id: &str, data: &[u8]);
     fn exit(&self, id: &str, code: i32);
+    /// Byte-level progress of an SFTP transfer started through
+    /// [`SessionManager::sftp_upload`] / [`SessionManager::sftp_download`].
+    /// `total` is 0 when unknown. Default: ignored.
+    fn transfer_progress(&self, _transfer_id: &str, _done: u64, _total: u64) {}
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -129,6 +135,10 @@ type SessionMap = Arc<Mutex<HashMap<String, Backend>>>;
 pub struct SessionManager {
     sink: Arc<dyn EventSink>,
     sessions: SessionMap,
+    /// In-flight SFTP transfers by transfer id, so the UI can cancel one.
+    /// Aborting the task stops the copy where it is (a partial remote/local
+    /// file may remain — the UI says so).
+    transfers: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
     /// Overrides the known_hosts file SSH connections verify against.
     /// `None` means the real `~/.ssh/known_hosts`; tests point this at a
     /// tempfile so they never touch (or depend on) a real home directory.
@@ -146,6 +156,7 @@ impl SessionManager {
         Self {
             sink,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            transfers: Arc::new(Mutex::new(HashMap::new())),
             known_hosts_path,
         }
     }
@@ -355,6 +366,120 @@ impl SessionManager {
             }
         };
         ssh::SshSession::resize(&target, cols, rows).await
+    }
+
+    /// The SSH writer + SFTP cache of session `id`, or an error for a local /
+    /// unknown session. Looked up under the map lock, used outside it.
+    fn sftp_parts(
+        &self,
+        id: &str,
+    ) -> Result<(Arc<tokio::sync::Mutex<ssh::SshWriter>>, sftp::SftpCache), SessionError> {
+        let map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+        match map.get(id) {
+            Some(Backend::Ssh(s)) => Ok((s.writer(), s.sftp_cache())),
+            Some(Backend::Local(_)) => Err(SessionError::Ssh(
+                "ファイル転送は SSH スレッドでのみ使えます".into(),
+            )),
+            None => Err(SessionError::UnknownSession(id.into())),
+        }
+    }
+
+    /// Lists a remote directory over SFTP (empty / "." = the login home).
+    pub async fn sftp_list_dir(&self, id: &str, path: &str) -> Result<RemoteDirListing, SessionError> {
+        let (writer, cache) = self.sftp_parts(id)?;
+        let sftp = sftp::get_sftp(&writer, &cache).await?;
+        let out = sftp::list_dir(&sftp, path).await;
+        if out.is_err() {
+            sftp::reset_sftp(&cache).await;
+        }
+        out
+    }
+
+    /// Uploads a local file or folder into `remote_dir` on session `id`,
+    /// reporting progress through the sink under `transfer_id`. Cancelable
+    /// via [`Self::cancel_transfer`].
+    pub async fn sftp_upload(
+        &self,
+        id: &str,
+        transfer_id: &str,
+        local: PathBuf,
+        remote_dir: String,
+    ) -> Result<TransferSummary, SessionError> {
+        let (writer, cache) = self.sftp_parts(id)?;
+        let sink = self.sink.clone();
+        let tid = transfer_id.to_string();
+        let progress: sftp::ProgressFn = Arc::new(move |done, total| sink.transfer_progress(&tid, done, total));
+        let cache2 = cache.clone();
+        let task = tokio::spawn(async move {
+            let sftp = sftp::get_sftp(&writer, &cache2).await?;
+            let out = sftp::upload(&sftp, &local, &remote_dir, progress).await;
+            if out.is_err() {
+                sftp::reset_sftp(&cache2).await;
+            }
+            out
+        });
+        self.await_transfer(transfer_id, task).await
+    }
+
+    /// Downloads one remote file to `local` on session `id`. See
+    /// [`Self::sftp_upload`] for progress and cancellation.
+    pub async fn sftp_download(
+        &self,
+        id: &str,
+        transfer_id: &str,
+        remote: String,
+        local: PathBuf,
+    ) -> Result<u64, SessionError> {
+        let (writer, cache) = self.sftp_parts(id)?;
+        let sink = self.sink.clone();
+        let tid = transfer_id.to_string();
+        let progress: sftp::ProgressFn = Arc::new(move |done, total| sink.transfer_progress(&tid, done, total));
+        let cache2 = cache.clone();
+        let task = tokio::spawn(async move {
+            let sftp = sftp::get_sftp(&writer, &cache2).await?;
+            let out = sftp::download(&sftp, &remote, &local, progress).await;
+            if out.is_err() {
+                sftp::reset_sftp(&cache2).await;
+            }
+            out
+        });
+        self.await_transfer(transfer_id, task).await
+    }
+
+    /// Registers `task` under `transfer_id` for cancellation, awaits it, and
+    /// maps an abort into a distinguishable "cancelled" error.
+    async fn await_transfer<T>(
+        &self,
+        transfer_id: &str,
+        task: tokio::task::JoinHandle<Result<T, SessionError>>,
+    ) -> Result<T, SessionError> {
+        self.transfers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(transfer_id.to_string(), task.abort_handle());
+        let out = task.await;
+        self.transfers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(transfer_id);
+        match out {
+            Ok(r) => r,
+            Err(e) if e.is_cancelled() => Err(SessionError::Ssh("TRANSFER_CANCELLED".into())),
+            Err(e) => Err(SessionError::Ssh(format!("transfer task failed: {e}"))),
+        }
+    }
+
+    /// Aborts an in-flight transfer. Unknown ids are ignored (it may have just
+    /// finished).
+    pub fn cancel_transfer(&self, transfer_id: &str) {
+        if let Some(h) = self
+            .transfers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(transfer_id)
+        {
+            h.abort();
+        }
     }
 
     /// Terminates the session. The exit event is emitted by the session's own
