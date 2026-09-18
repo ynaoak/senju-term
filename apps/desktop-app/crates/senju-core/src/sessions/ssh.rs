@@ -18,7 +18,9 @@ use crate::models::{SshAuthMethod, SshHost};
 /// writes without holding the session-map lock.
 pub(crate) struct SshWriter {
     write_half: russh::ChannelWriteHalf<client::Msg>,
-    handle: Handle<Client>,
+    /// The connection handle — also used to open extra channels on the same
+    /// connection (the SFTP subsystem, see `sessions::sftp`).
+    pub(crate) handle: Handle<Client>,
 }
 
 /// The channel's read half, handed back rather than pumped immediately so
@@ -85,6 +87,8 @@ pub(crate) struct SshSession {
     /// before its underlying tunnel goes away.
     #[allow(dead_code)]
     jump_handles: Vec<Handle<Client>>,
+    /// Lazily opened SFTP subsystem for file transfers (see `sessions::sftp`).
+    sftp: super::sftp::SftpCache,
 }
 
 impl Drop for SshSession {
@@ -224,7 +228,7 @@ pub(crate) fn default_known_hosts_path() -> PathBuf {
 /// connect and "接続テスト" buttons indefinitely.
 const SSH_STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
-struct Client {
+pub(crate) struct Client {
     host: String,
     port: u16,
     /// `Some(fp)` means: the host was unknown on a *prior* handshake, the UI
@@ -557,6 +561,7 @@ impl SshSession {
                 runtime: tokio::runtime::Handle::current(),
                 forward_tasks,
                 jump_handles,
+                sftp: Arc::new(AsyncMutex::new(None)),
             },
             SshReader { read_half },
             banners,
@@ -565,6 +570,10 @@ impl SshSession {
 
     pub fn writer(&self) -> Arc<AsyncMutex<SshWriter>> {
         self.writer.clone()
+    }
+
+    pub(crate) fn sftp_cache(&self) -> super::sftp::SftpCache {
+        self.sftp.clone()
     }
 
     pub async fn write(writer: &AsyncMutex<SshWriter>, data: &[u8]) -> Result<(), SessionError> {

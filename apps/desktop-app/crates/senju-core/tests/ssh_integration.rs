@@ -580,3 +580,75 @@ fn kill_all_from_non_runtime_thread_does_not_panic() {
         tokio::time::sleep(Duration::from_millis(200)).await;
     });
 }
+
+/// SFTP over the shell's connection: upload a folder tree into the login
+/// home, list it back, download one file, and cancel a transfer. Uses the
+/// same password-auth server as the roundtrip tests.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs a live sshd with the sftp subsystem (see module docs)"]
+async fn sftp_upload_list_download_roundtrip() {
+    let sink = Arc::new(Capture::default());
+    let known_hosts_dir = tempfile::tempdir().unwrap();
+    let mgr = SessionManager::with_known_hosts_path(
+        sink.clone(),
+        Some(known_hosts_dir.path().join("known_hosts")),
+    );
+    let secrets = SshSecrets {
+        password: Some(env("SENJU_SSH_PASSWORD")),
+        passphrase: None,
+    };
+    let host = test_host(SshAuthMethod::Password);
+    let fp = learn_unknown_host_fingerprint(&mgr, &host, secrets.clone()).await;
+    let info = mgr
+        .create_ssh(&host, secrets, 80, 24, Some(fp))
+        .await
+        .expect("ssh connect");
+
+    // A local tree: dir/{a.txt, sub/b.bin}
+    let local = tempfile::tempdir().unwrap();
+    let stamp = format!("senju-sftp-{}", uuid::Uuid::new_v4());
+    let tree = local.path().join(&stamp);
+    std::fs::create_dir_all(tree.join("sub")).unwrap();
+    std::fs::write(tree.join("a.txt"), b"hello over sftp\n").unwrap();
+    let blob: Vec<u8> = (0..600_000u32).map(|i| (i % 251) as u8).collect();
+    std::fs::write(tree.join("sub/b.bin"), &blob).unwrap();
+
+    let home = mgr.sftp_list_dir(&info.id, "").await.expect("list home").path;
+    let summary = mgr
+        .sftp_upload(&info.id, "t1", tree.clone(), home.clone())
+        .await
+        .expect("upload");
+    assert_eq!(summary.files, 2);
+    assert_eq!(summary.bytes as usize, 16 + blob.len());
+
+    let remote_tree = senju_core::sessions::join_remote(&home, &stamp);
+    let listing = mgr.sftp_list_dir(&info.id, &remote_tree).await.expect("list tree");
+    let names: Vec<&str> = listing.entries.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, vec!["sub", "a.txt"], "dirs first, then files");
+
+    let dl = local.path().join("b.copy");
+    let got = mgr
+        .sftp_download(&info.id, "t2", format!("{remote_tree}/sub/b.bin"), dl.clone())
+        .await
+        .expect("download");
+    assert_eq!(got as usize, blob.len());
+    assert_eq!(std::fs::read(&dl).unwrap(), blob);
+
+    // Cancel: abort a large upload right away and expect the sentinel error.
+    let big = local.path().join("big.bin");
+    std::fs::write(&big, vec![7u8; 8 * 1024 * 1024]).unwrap();
+    let mgr2 = Arc::new(mgr);
+    let m = mgr2.clone();
+    let id = info.id.clone();
+    let h = home.clone();
+    let task = tokio::spawn(async move { m.sftp_upload(&id, "t3", big, h).await });
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    mgr2.cancel_transfer("t3");
+    let err = task.await.unwrap().expect_err("cancelled upload must fail");
+    assert!(err.to_string().contains("TRANSFER_CANCELLED"), "got: {err}");
+
+    // Leave the server tidy.
+    mgr2.write(&info.id, format!("rm -rf {remote_tree} big.bin; exit\n").as_bytes())
+        .await
+        .unwrap();
+}

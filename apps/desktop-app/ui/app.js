@@ -398,6 +398,29 @@ const STRINGS = {
   'confirm.sessionsRunning': { ja: '{count} 個のセッションが実行中です。終了しますか?', en: '{count} sessions are running. Quit?' },
   'confirm.quit': { ja: '終了', en: 'Quit' },
   'toast.noActiveTerm': { ja: 'アクティブなターミナルがありません', en: 'No active terminal' },
+  'menu.transfer': { ja: 'ファイル転送 (SFTP)', en: 'File transfer (SFTP)' },
+  'menu.upload': { ja: 'ファイルをアップロード…', en: 'Upload files…' },
+  'menu.download': { ja: 'ファイルをダウンロード…', en: 'Download a file…' },
+  'sftp.upload.title': { ja: 'アップロード先', en: 'Upload destination' },
+  'sftp.upload.ok': { ja: 'アップロード', en: 'Upload' },
+  'sftp.upload.dir': { ja: 'リモートのディレクトリ', en: 'Remote directory' },
+  'sftp.upload.files': { ja: '{n} 件を転送します: {list}', en: 'Transferring {n} item(s): {list}' },
+  'sftp.upload.hint': { ja: 'フォルダはその名前でリモートに再作成されます。同名のファイルは上書きされます。', en: 'Folders are recreated under their own name. Files with the same name are overwritten.' },
+  'sftp.upload.done': { ja: 'アップロード完了: {name}', en: 'Uploaded: {name}' },
+  'sftp.download.done': { ja: 'ダウンロード完了: {name}', en: 'Downloaded: {name}' },
+  'sftp.cancelled': { ja: 'キャンセルしました(途中まで書き込まれたファイルが残る場合があります)', en: 'Cancelled (a partially written file may remain)' },
+  'sftp.failed': { ja: '転送に失敗しました: {e}', en: 'Transfer failed: {e}' },
+  'sftp.notSsh': { ja: 'ファイル転送は SSH スレッドでのみ使えます', en: 'File transfer is only available on SSH threads' },
+  'sftp.browser.title': { ja: 'リモートのファイルをダウンロード', en: 'Download a remote file' },
+  'sftp.browser.up': { ja: '親ディレクトリへ', en: 'Parent directory' },
+  'sftp.browser.go': { ja: '移動', en: 'Go' },
+  'sftp.browser.download': { ja: 'ダウンロード…', en: 'Download…' },
+  'sftp.browser.loading': { ja: '読み込み中…', en: 'Loading…' },
+  'sftp.browser.empty': { ja: '(空のディレクトリ)', en: '(empty directory)' },
+  'sftp.browser.count': { ja: '{dirs} フォルダ / {files} ファイル — ダブルクリックで開く / ダウンロード', en: '{dirs} folders / {files} files — double-click to open / download' },
+  'xfer.cancel': { ja: 'キャンセル', en: 'Cancel' },
+  'xfer.running': { ja: '{done} / {total}', en: '{done} / {total}' },
+  'xfer.done': { ja: '完了', en: 'Done' },
   'toast.copied': { ja: 'コピーしました', en: 'Copied' },
   'toast.copyFailed': { ja: 'コピーに失敗: {e}', en: 'Failed to copy: {e}' },
   'toast.pasteFailed': { ja: '貼り付けに失敗: {e}', en: 'Failed to paste: {e}' },
@@ -827,6 +850,21 @@ function createThread(info, paneIdx, origin = {}) {
     return true;
   });
 
+  // Declared ahead of the OSC 7 handler below, which closes over it; assigned
+  // once the terminal is wired up (xterm parses asynchronously, and the
+  // handler guards against a not-yet-built thread anyway).
+  let thread;
+  // OSC 7 (`\e]7;file://host/path\a`) — shells that emit it (many zsh/fish
+  // setups, or a manual PROMPT_COMMAND) tell us the working directory. On
+  // SSH threads it becomes the default upload destination for dropped files.
+  term.parser.registerOscHandler(7, (data) => {
+    const m = /^file:\/\/[^/]*(\/.*)$/.exec(data);
+    if (m && thread) {
+      try { thread.remoteCwd = decodeURIComponent(m[1]); } catch { thread.remoteCwd = m[1]; }
+    }
+    return true;
+  });
+
   // Replay whatever the backend emitted while this thread was being built —
   // after the OSC 133 handler above is registered, so an early prompt still
   // opens its command block.
@@ -849,9 +887,10 @@ function createThread(info, paneIdx, origin = {}) {
   term.onResize(({ cols, rows }) =>
     invoke('session_resize', { id: info.id, cols, rows }).catch(() => {}));
 
-  const thread = {
+  thread = {
     id: info.id, title: info.title, kind: info.kind, pinned: false,
     term, fit, hostEl, search, customTitle: false, activity: false, blocks,
+    remoteCwd: '', // last OSC 7 working directory (SSH upload default)
     gl: null, // WebGL addon handle when GPU rendering is active
     // What this thread was launched from, for the session snapshot.
     profileId: origin.profileId || '', sshHostId: origin.sshHostId || '',
@@ -1292,6 +1331,7 @@ const ICONS = {
   chevronUp: '<polyline points="18 15 12 9 6 15"/>',
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
   grip: '<circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
@@ -3560,6 +3600,324 @@ function toast(message, isError = false) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), isError ? 5000 : 2500);
 }
 
+/* ---------------- SFTP file transfer (drag & drop / context menu) ---------------- */
+
+/** Quotes a local path for pasting into a shell prompt: bare when it is
+ * plain, otherwise single-quoted (POSIX) or double-quoted (Windows). */
+function shellQuotePath(p) {
+  if (/^[A-Za-z0-9_\-.\/:\\~+=@%]+$/.test(p)) return p;
+  return navigator.userAgent.includes('Windows')
+    ? `"${p.replace(/"/g, '""')}"`
+    : `'${p.replace(/'/g, `'\\''`)}'`;
+}
+
+function formatBytes(n) {
+  if (!Number.isFinite(n)) return '?';
+  if (n < 1024) return `${n} B`;
+  const u = ['KB', 'MB', 'GB', 'TB'];
+  let v = n / 1024; let i = 0;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
+}
+
+function baseName(p) {
+  const s = p.replace(/[\\/]+$/, '');
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+/** The pane body under a physical-pixel window position (drag-drop events
+ * report physical coordinates), or null. */
+function paneBodyAtPhysical(pos) {
+  if (!pos) return null;
+  const scale = window.devicePixelRatio || 1;
+  const el = document.elementFromPoint(pos.x / scale, pos.y / scale);
+  return el ? el.closest('.pane-body') : null;
+}
+
+function clearDropTargets() {
+  document.querySelectorAll('.pane-body.drop-target').forEach((el) => el.classList.remove('drop-target'));
+}
+
+/** OS file drops (Tauri delivers them as window events rather than DOM drop
+ * events). A drop on an SSH pane uploads via SFTP; on a local pane it pastes
+ * the quoted path(s) at the prompt, like most terminals do. */
+appWindow.onDragDropEvent((ev) => {
+  const pl = ev.payload;
+  if (pl.type === 'enter' || pl.type === 'over') {
+    const body = paneBodyAtPhysical(pl.position);
+    clearDropTargets();
+    if (body) body.classList.add('drop-target');
+    return;
+  }
+  clearDropTargets();
+  if (pl.type !== 'drop' || !pl.paths?.length) return;
+  const body = paneBodyAtPhysical(pl.position);
+  const idx = body ? state.panes.findIndex((p) => p.body === body) : state.focusedPane;
+  if (idx < 0) return;
+  if (idx !== state.focusedPane) focusPane(idx);
+  const thread = threadById(state.panes[idx].threadId);
+  if (!thread) return;
+  if (thread.kind === 'ssh') {
+    uploadPathsToThread(thread, pl.paths);
+  } else {
+    const text = pl.paths.map(shellQuotePath).join(' ');
+    invoke('session_write', { id: thread.id, data: text }).catch((e) => toast(String(e), true));
+    thread.term.focus();
+  }
+}).catch(() => {});
+
+/** Context-menu "Upload…": native multi-file picker, then the same flow as
+ * a drop. */
+async function pickAndUpload(thread) {
+  let paths;
+  try {
+    paths = await window.__TAURI__.dialog.open({ multiple: true, directory: false });
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!paths) return;
+  uploadPathsToThread(thread, Array.isArray(paths) ? paths : [paths]);
+}
+
+/** Confirms the remote destination (OSC 7 cwd when known, else the SFTP
+ * login directory), then uploads each path one after another. */
+async function uploadPathsToThread(thread, paths) {
+  if (thread.kind !== 'ssh') {
+    toast(tr('sftp.notSsh'), true);
+    return;
+  }
+  let dir = thread.remoteCwd || '';
+  if (!dir) {
+    try {
+      dir = (await invoke('sftp_list_dir', { id: thread.id, path: '' })).path;
+    } catch (e) {
+      toast(tr('sftp.failed', { e }), true);
+      return;
+    }
+  }
+  const names = paths.map(baseName);
+  const list = names.length > 4 ? `${names.slice(0, 4).join(', ')} …` : names.join(', ');
+  openModal({
+    title: tr('sftp.upload.title'),
+    okLabel: tr('sftp.upload.ok'),
+    body: [
+      { tag: 'note', label: tr('sftp.upload.files', { n: paths.length, list }) },
+      field(tr('sftp.upload.dir'), 'dir', dir, { required: true }),
+      { tag: 'note', label: tr('sftp.upload.hint') },
+    ],
+    onOk: async (v) => {
+      const remoteDir = v.dir.trim();
+      // Sequential on purpose: one SFTP pipeline saturates the link, and it
+      // keeps progress rows readable.
+      (async () => {
+        for (const p of paths) {
+          // eslint-disable-next-line no-await-in-loop
+          const ok = await runTransfer({
+            thread, kind: 'upload', name: baseName(p),
+            invoke: (transferId) => invoke('sftp_upload', {
+              id: thread.id, transferId, localPath: p, remoteDir,
+            }),
+          });
+          if (!ok) break;
+        }
+      })();
+    },
+  });
+}
+
+/* Transfer panel: one row per in-flight copy, progress from
+ * `transfer:progress`, cancel button aborts the backend task. */
+const transfers = new Map();
+
+function renderTransfersVisibility() {
+  $('#transfers').classList.toggle('hidden', transfers.size === 0);
+}
+
+function transferRow(id, kind, name) {
+  const el = document.createElement('div');
+  el.className = 'xfer indeterminate';
+  el.innerHTML = `
+    <div class="xfer-name">${icon(kind)}<span></span></div>
+    <button class="xfer-cancel icon-btn" title="${tr('xfer.cancel')}">${icon('x')}</button>
+    <div class="xfer-meta"></div>
+    <div class="xfer-bar"><i></i></div>`;
+  el.querySelector('.xfer-name span').textContent = name;
+  el.querySelector('.xfer-cancel').addEventListener('click', () => {
+    invoke('cancel_transfer', { transferId: id }).catch(() => {});
+  });
+  $('#transfers').appendChild(el);
+  return el;
+}
+
+/** Runs one upload/download to completion with a progress row; resolves
+ * true on success, false on cancel/error (already reported). */
+async function runTransfer({ thread, kind, name, invoke: start }) {
+  const id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
+  const el = transferRow(id, kind, name);
+  transfers.set(id, { el, kind, name });
+  renderTransfersVisibility();
+  const finish = (ok, msg) => {
+    el.classList.remove('indeterminate');
+    el.classList.add(ok ? 'done' : 'error');
+    el.querySelector('.xfer-meta').textContent = msg;
+    el.querySelector('.xfer-cancel').disabled = true;
+    setTimeout(() => {
+      el.remove();
+      transfers.delete(id);
+      renderTransfersVisibility();
+    }, ok ? 2500 : 8000);
+  };
+  try {
+    await start(id);
+    finish(true, tr('xfer.done'));
+    toast(tr(kind === 'upload' ? 'sftp.upload.done' : 'sftp.download.done', { name }));
+    return true;
+  } catch (e) {
+    const msg = String(e);
+    if (msg.includes('TRANSFER_CANCELLED')) {
+      finish(false, tr('sftp.cancelled'));
+    } else {
+      finish(false, tr('sftp.failed', { e: msg }));
+      toast(tr('sftp.failed', { e: msg }), true);
+    }
+    return false;
+  } finally {
+    thread.term?.focus();
+  }
+}
+
+listen('transfer:progress', (ev) => {
+  const { id, done, total } = ev.payload;
+  const t = transfers.get(id);
+  if (!t) return;
+  if (total > 0) {
+    t.el.classList.remove('indeterminate');
+    t.el.querySelector('.xfer-bar > i').style.width = `${Math.min(100, (done / total) * 100).toFixed(1)}%`;
+    t.el.querySelector('.xfer-meta').textContent = tr('xfer.running', {
+      done: formatBytes(done), total: formatBytes(total),
+    });
+  } else {
+    t.el.querySelector('.xfer-meta').textContent = formatBytes(done);
+  }
+});
+
+/* Remote browser: navigate the SSH host's file system over SFTP and pick a
+ * file to download. Directories open on double-click (or ↑ / path bar). */
+const rb = { thread: null, path: '', selected: null, entries: [] };
+
+function rbStatus(text) {
+  $('#rb-status').textContent = text;
+}
+
+async function rbLoad(path) {
+  if (!rb.thread) return;
+  rbStatus(tr('sftp.browser.loading'));
+  $('#rb-download').disabled = true;
+  rb.selected = null;
+  let listing;
+  try {
+    listing = await invoke('sftp_list_dir', { id: rb.thread.id, path });
+  } catch (e) {
+    rbStatus(tr('sftp.failed', { e }));
+    return;
+  }
+  rb.path = listing.path;
+  rb.entries = listing.entries;
+  $('#rb-path').value = listing.path;
+  const list = $('#rb-list');
+  list.innerHTML = '';
+  if (!listing.entries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'rb-empty';
+    empty.textContent = tr('sftp.browser.empty');
+    list.appendChild(empty);
+  }
+  for (const e of listing.entries) {
+    const row = document.createElement('div');
+    row.className = `rb-row${e.is_dir ? ' dir' : ''}`;
+    row.setAttribute('role', 'option');
+    row.innerHTML = `<span class="rb-ico">${icon(e.is_dir ? 'folder' : 'file')}</span>
+      <span class="rb-name"></span><span class="rb-size"></span><span class="rb-date"></span>`;
+    row.querySelector('.rb-name').textContent = e.name + (e.is_symlink ? ' →' : '');
+    row.querySelector('.rb-size').textContent = formatBytes(e.size);
+    row.querySelector('.rb-date').textContent = e.modified
+      ? new Date(e.modified * 1000).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '';
+    row.addEventListener('click', () => rbSelect(e, row));
+    row.addEventListener('dblclick', () => (e.is_dir ? rbLoad(e.path) : rbDownload(e)));
+    list.appendChild(row);
+  }
+  const dirs = listing.entries.filter((e) => e.is_dir).length;
+  rbStatus(tr('sftp.browser.count', { dirs, files: listing.entries.length - dirs }));
+}
+
+function rbSelect(entry, row) {
+  $('#rb-list').querySelectorAll('.rb-row.selected').forEach((el) => el.classList.remove('selected'));
+  row.classList.add('selected');
+  rb.selected = entry;
+  $('#rb-download').disabled = entry.is_dir;
+}
+
+function rbParent() {
+  if (!rb.path || rb.path === '/') return;
+  const trimmed = rb.path.replace(/\/+$/, '');
+  const i = trimmed.lastIndexOf('/');
+  rbLoad(i <= 0 ? '/' : trimmed.slice(0, i));
+}
+
+async function rbDownload(entry) {
+  const thread = rb.thread;
+  if (!thread || !entry || entry.is_dir) return;
+  let dest;
+  try {
+    dest = await window.__TAURI__.dialog.save({ defaultPath: entry.name });
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!dest) return;
+  closeRemoteBrowser();
+  runTransfer({
+    thread, kind: 'download', name: entry.name,
+    invoke: (transferId) => invoke('sftp_download', {
+      id: thread.id, transferId, remotePath: entry.path, localPath: dest,
+    }),
+  });
+}
+
+function openRemoteBrowser(thread) {
+  if (!thread || thread.kind !== 'ssh') {
+    toast(tr('sftp.notSsh'), true);
+    return;
+  }
+  rb.thread = thread;
+  $('#remote-browser').classList.remove('hidden');
+  rbLoad(thread.remoteCwd || '');
+}
+
+function closeRemoteBrowser() {
+  $('#remote-browser').classList.add('hidden');
+  $('#rb-list').innerHTML = '';
+  rb.thread = null;
+  rb.selected = null;
+  focusedThread()?.term.focus();
+}
+
+$('#rb-cancel').addEventListener('click', closeRemoteBrowser);
+$('#rb-up').addEventListener('click', rbParent);
+$('#rb-go').addEventListener('click', () => rbLoad($('#rb-path').value.trim()));
+$('#rb-path').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter') { ev.preventDefault(); rbLoad($('#rb-path').value.trim()); }
+});
+$('#rb-download').addEventListener('click', () => rbDownload(rb.selected));
+$('#remote-browser').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') { ev.preventDefault(); closeRemoteBrowser(); }
+});
+$('#remote-browser').addEventListener('mousedown', (ev) => {
+  if (ev.target === ev.currentTarget) closeRemoteBrowser();
+});
+
 /* ---------------- sidebars & shortcuts ---------------- */
 
 /** Header views. "シェル" shows the terminal workspace (thread list + panes);
@@ -3736,6 +4094,8 @@ function openTermContextMenu(x, y) {
   const menu = $('#term-context-menu');
   ctxMenuStack = [menu];
   fillWorkflowMenu(menu, buildWorkflowTree(state.workflows), 0, true);
+  const t = focusedThread();
+  if (t && t.kind === 'ssh') prependTransferMenu(menu, t);
 
   // Position at the cursor, clamped inside the window (unhide first so the
   // menu has measurable dimensions).
@@ -3782,6 +4142,32 @@ function fillWorkflowMenu(menuEl, node, level, isRoot) {
     });
     menuEl.appendChild(manage);
   }
+}
+
+/** SFTP upload/download rows at the top of the context menu (SSH threads
+ * only — a local shell has nothing to transfer to). */
+function prependTransferMenu(menuEl, thread) {
+  const frag = document.createDocumentFragment();
+  const label = document.createElement('div');
+  label.className = 'popup-label';
+  label.textContent = tr('menu.transfer');
+  frag.appendChild(label);
+  const mk = (ico, text, onClick) => {
+    const item = document.createElement('button');
+    item.className = 'popup-item';
+    item.setAttribute('role', 'menuitem');
+    item.innerHTML = `<span class="pi-line">${icon(ico)}<span class="pi-name"></span></span>`;
+    item.querySelector('.pi-name').textContent = text;
+    item.addEventListener('mouseenter', () => closeSubmenusFrom(1));
+    item.addEventListener('click', () => { closeTermContextMenu(); onClick(); });
+    return item;
+  };
+  frag.appendChild(mk('upload', tr('menu.upload'), () => pickAndUpload(thread)));
+  frag.appendChild(mk('download', tr('menu.download'), () => openRemoteBrowser(thread)));
+  const sep = document.createElement('div');
+  sep.className = 'popup-sep';
+  frag.appendChild(sep);
+  menuEl.insertBefore(frag, menuEl.firstChild);
 }
 
 /** A leaf (runnable) workflow row. Hovering it collapses any deeper submenu. */
