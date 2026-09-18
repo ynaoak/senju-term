@@ -226,6 +226,18 @@ pub struct Settings {
     /// language later needs no schema change.
     #[serde(default = "default_language")]
     pub language: String,
+    /// Terminal color scheme, independent of the UI theme: "" follows the
+    /// UI theme (dark/light), a preset id ("solarized-dark", "dracula", …)
+    /// picks a built-in palette, and "custom" uses `term_colors`. Free
+    /// string so presets can be added without a schema change; unknown ids
+    /// fall back to following the UI theme.
+    #[serde(default)]
+    pub term_theme: String,
+    /// User-edited palette for `term_theme == "custom"`: xterm theme keys
+    /// (`background`, `foreground`, `cursor`, `black` … `brightWhite`) to
+    /// `#rrggbb`. Keys left out fall back to the UI theme's palette.
+    #[serde(default)]
+    pub term_colors: std::collections::BTreeMap<String, String>,
     /// Recreate the previous session's local threads on startup from the
     /// saved snapshot. Defaults on; SSH threads are reported, not
     /// reconnected (credentials are never persisted).
@@ -318,6 +330,8 @@ impl Default for Settings {
             scrollback: default_scrollback(),
             theme: default_theme(),
             language: default_language(),
+            term_theme: String::new(),
+            term_colors: Default::default(),
             restore_session: default_restore_session(),
             gpu_rendering: default_gpu_rendering(),
             shell_integration: default_shell_integration(),

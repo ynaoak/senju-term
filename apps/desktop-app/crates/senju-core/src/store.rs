@@ -678,6 +678,10 @@ mod tests {
             scrollback: 5000,
             theme: "light".into(),
             language: "en".into(),
+            term_theme: "custom".into(),
+            term_colors: [("background".to_string(), "#000000".to_string()), ("red".to_string(), "#ff0000".to_string())]
+                .into_iter()
+                .collect(),
             restore_session: false,
             gpu_rendering: false,
             shell_integration: false,

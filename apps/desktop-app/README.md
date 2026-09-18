@@ -30,6 +30,7 @@
 - xterm.js による 256 色 / True Color 描画。フォントファミリー・スクロールバック行数(既定 10,000 行)は設定画面から変更可能
 - **GPU レンダリング(WebGL)**: xterm の WebGL アドオンで描画を GPU 高速化(既定オン)。WebGL が使えない環境では自動で通常レンダラにフォールバックし、コンテキスト喪失時も安全に復帰します。設定「ターミナル > GPU レンダリング」でオフにでき、変更は開いているスレッドにも即時適用されます
 - **ライト / ダークテーマ**: 設定画面の「外観 > テーマ」で切替。アプリ UI とターミナルの配色(ANSI カラー含む)が連動して切り替わります
+- **ターミナルの配色プリセット / カスタム**: 設定「外観 > ターミナルの配色」で、UI テーマとは独立にターミナル本体の配色を選べます。組み込みプリセットは Solarized Dark / Solarized Light / Dracula / Nord / Gruvbox Dark / One Dark / Monokai / Tokyo Night / Catppuccin Mocha。「カスタム…」を選ぶと背景・文字・カーソル・ANSI 16 色をカラーピッカーで編集でき、プリセットからのコピーや UI テーマ配色へのリセットもできます。変更は開いているスレッドに即時プレビューされ、「保存」で確定します(`settings.json` の `term_theme` / `term_colors`)
 
 ### コマンドブロック(Warp 相当・シェル統合)
 - シェルが [OSC 133](https://gitlab.freedesktop.org/Per_Bothner/specifications/blob/master/proposals/semantic-prompts.md) シーケンスを発行すると、コマンド単位の「ブロック」を認識します

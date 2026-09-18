@@ -158,6 +158,11 @@
                   <option value="light" data-i18n="settings.theme.light">ライト</option>
                 </select>
               </label>
+              <label><span data-i18n="settings.termTheme">ターミナルの配色</span>
+                <select name="term_theme"></select>
+              </label>
+              <p class="field-hint" data-i18n="settings.termTheme.hint">ターミナル本体の配色(背景・文字・ANSI 16 色)。アプリの UI テーマとは独立に選べます。変更は開いているスレッドに即時プレビューされ、「保存」で確定します。</p>
+              <div id="term-colors-editor" class="term-colors hidden"></div>
               <label><span data-i18n="settings.fontSize">フォントサイズ</span>
                 <input name="font_size" type="number" min="8" max="32" />
               </label>

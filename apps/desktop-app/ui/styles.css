@@ -1382,3 +1382,35 @@ label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 .xfer.error .xfer-bar > i { background: var(--danger); }
 .xfer.error .xfer-meta { color: var(--danger); }
 @keyframes xfer-slide { from { margin-left: 0; } to { margin-left: 60%; } }
+
+/* ---------------- terminal color editor (settings) ---------------- */
+.term-colors {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+  gap: 6px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-raised);
+}
+.term-colors.hidden { display: none; }
+.term-colors .tc-group { grid-column: 1 / -1; color: var(--text-dim); font-size: 0.72rem; letter-spacing: 0.05em; margin-top: 4px; }
+.term-colors .tc-group:first-child { margin-top: 0; }
+.term-colors label.tc-swatch {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: var(--text);
+}
+.term-colors label.tc-swatch input[type="color"] {
+  width: 28px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  cursor: pointer;
+}
+.term-colors .tc-actions { grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 6px; }
