@@ -25,7 +25,7 @@ const state = {
   profiles: [],
   launchSets: [],      // { id, name, items: [{ profile_id, ssh_host_id, workflow_id }] }
   history: [],         // { command, kind, at } — cross-session command history
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10 },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', term_theme: '', term_colors: {}, restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10 },
   renaming: null,      // thread id currently being renamed inline in the sidebar
   dist: null,          // { channel, installer, inAppUpdates, hasExternalManager }
 };
@@ -369,6 +369,34 @@ const STRINGS = {
   'settings.theme': { ja: 'テーマ', en: 'Theme' },
   'settings.theme.dark': { ja: 'ダーク', en: 'Dark' },
   'settings.theme.light': { ja: 'ライト', en: 'Light' },
+  'settings.termTheme': { ja: 'ターミナルの配色', en: 'Terminal colors' },
+  'settings.termTheme.hint': { ja: 'ターミナル本体の配色(背景・文字・ANSI 16 色)。アプリの UI テーマとは独立に選べます。変更は開いているスレッドに即時プレビューされ、「保存」で確定します。', en: 'The terminal\'s own palette (background, text, 16 ANSI colors), independent of the UI theme. Changes preview live in open threads and are kept on Save.' },
+  'settings.termTheme.follow': { ja: 'UI テーマに従う(ダーク / ライト)', en: 'Follow UI theme (dark / light)' },
+  'settings.termTheme.custom': { ja: 'カスタム…', en: 'Custom…' },
+  'tc.group.base': { ja: '基本', en: 'Base' },
+  'tc.group.normal': { ja: 'ANSI 0–7', en: 'ANSI 0–7' },
+  'tc.group.bright': { ja: 'ANSI 8–15(明るい)', en: 'ANSI 8–15 (bright)' },
+  'tc.copyFrom': { ja: 'プリセットからコピー:', en: 'Copy from preset:' },
+  'tc.reset': { ja: 'UI テーマの配色に戻す', en: 'Reset to UI theme palette' },
+  'tc.background': { ja: '背景', en: 'Background' },
+  'tc.foreground': { ja: '文字', en: 'Foreground' },
+  'tc.cursor': { ja: 'カーソル', en: 'Cursor' },
+  'tc.black': { ja: '黒', en: 'Black' },
+  'tc.red': { ja: '赤', en: 'Red' },
+  'tc.green': { ja: '緑', en: 'Green' },
+  'tc.yellow': { ja: '黄', en: 'Yellow' },
+  'tc.blue': { ja: '青', en: 'Blue' },
+  'tc.magenta': { ja: 'マゼンタ', en: 'Magenta' },
+  'tc.cyan': { ja: 'シアン', en: 'Cyan' },
+  'tc.white': { ja: '白', en: 'White' },
+  'tc.brightBlack': { ja: '明るい黒', en: 'Bright black' },
+  'tc.brightRed': { ja: '明るい赤', en: 'Bright red' },
+  'tc.brightGreen': { ja: '明るい緑', en: 'Bright green' },
+  'tc.brightYellow': { ja: '明るい黄', en: 'Bright yellow' },
+  'tc.brightBlue': { ja: '明るい青', en: 'Bright blue' },
+  'tc.brightMagenta': { ja: '明るいマゼンタ', en: 'Bright magenta' },
+  'tc.brightCyan': { ja: '明るいシアン', en: 'Bright cyan' },
+  'tc.brightWhite': { ja: '明るい白', en: 'Bright white' },
   'settings.language': { ja: '言語', en: 'Language' },
   'settings.fontSize': { ja: 'フォントサイズ', en: 'Font size' },
   'settings.fontFamily': { ja: 'フォントファミリー (空欄 = 既定)', en: 'Font family (blank = default)' },
@@ -503,6 +531,14 @@ function applyLanguage() {
   renderLaunchSets();
   renderProfileSettingOptions();
   applyAutoUpdateAvailability();
+  // Terminal color scheme controls carry translated labels; rebuild them
+  // keeping whatever the user has picked / edited so far.
+  renderTermThemeOptions();
+  {
+    const editor = $('#term-colors-editor');
+    const live = editor.querySelector('input[data-tc-key]') ? readTermColorEditor() : (state.settings.term_colors || {});
+    renderTermColorEditor(live);
+  }
   if (!$('#shortcuts').classList.contains('hidden')) renderShortcuts();
   if (palette.open) updatePalette();
 }
@@ -538,8 +574,117 @@ const TERM_THEMES = {
   },
 };
 
-function currentTermTheme() {
+/* Built-in terminal palettes, selectable independently of the UI theme.
+ * Keys follow xterm's ITheme; cursorAccent / selectionBackground are derived
+ * in `buildTermTheme` so each preset only lists the visible colors. */
+const TERM_PRESETS = {
+  'solarized-dark': { name: 'Solarized Dark', colors: {
+    background: '#002b36', foreground: '#839496', cursor: '#93a1a1',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+    blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#586e75', brightRed: '#cb4b16', brightGreen: '#586e75',
+    brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4',
+    brightCyan: '#93a1a1', brightWhite: '#fdf6e3' } },
+  'solarized-light': { name: 'Solarized Light', colors: {
+    background: '#fdf6e3', foreground: '#657b83', cursor: '#586e75',
+    black: '#073642', red: '#dc322f', green: '#859900', yellow: '#b58900',
+    blue: '#268bd2', magenta: '#d33682', cyan: '#2aa198', white: '#eee8d5',
+    brightBlack: '#002b36', brightRed: '#cb4b16', brightGreen: '#586e75',
+    brightYellow: '#657b83', brightBlue: '#839496', brightMagenta: '#6c71c4',
+    brightCyan: '#93a1a1', brightWhite: '#fdf6e3' } },
+  dracula: { name: 'Dracula', colors: {
+    background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2',
+    black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
+    blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
+    brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94',
+    brightYellow: '#ffffa5', brightBlue: '#d6acff', brightMagenta: '#ff92df',
+    brightCyan: '#a4ffff', brightWhite: '#ffffff' } },
+  nord: { name: 'Nord', colors: {
+    background: '#2e3440', foreground: '#d8dee9', cursor: '#d8dee9',
+    black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
+    blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
+    brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c',
+    brightYellow: '#ebcb8b', brightBlue: '#81a1c1', brightMagenta: '#b48ead',
+    brightCyan: '#8fbcbb', brightWhite: '#eceff4' } },
+  'gruvbox-dark': { name: 'Gruvbox Dark', colors: {
+    background: '#282828', foreground: '#ebdbb2', cursor: '#ebdbb2',
+    black: '#282828', red: '#cc241d', green: '#98971a', yellow: '#d79921',
+    blue: '#458588', magenta: '#b16286', cyan: '#689d6a', white: '#a89984',
+    brightBlack: '#928374', brightRed: '#fb4934', brightGreen: '#b8bb26',
+    brightYellow: '#fabd2f', brightBlue: '#83a598', brightMagenta: '#d3869b',
+    brightCyan: '#8ec07c', brightWhite: '#ebdbb2' } },
+  'one-dark': { name: 'One Dark', colors: {
+    background: '#282c34', foreground: '#abb2bf', cursor: '#528bff',
+    black: '#282c34', red: '#e06c75', green: '#98c379', yellow: '#e5c07b',
+    blue: '#61afef', magenta: '#c678dd', cyan: '#56b6c2', white: '#abb2bf',
+    brightBlack: '#5c6370', brightRed: '#e06c75', brightGreen: '#98c379',
+    brightYellow: '#e5c07b', brightBlue: '#61afef', brightMagenta: '#c678dd',
+    brightCyan: '#56b6c2', brightWhite: '#ffffff' } },
+  monokai: { name: 'Monokai', colors: {
+    background: '#272822', foreground: '#f8f8f2', cursor: '#f8f8f0',
+    black: '#272822', red: '#f92672', green: '#a6e22e', yellow: '#f4bf75',
+    blue: '#66d9ef', magenta: '#ae81ff', cyan: '#a1efe4', white: '#f8f8f2',
+    brightBlack: '#75715e', brightRed: '#f92672', brightGreen: '#a6e22e',
+    brightYellow: '#f4bf75', brightBlue: '#66d9ef', brightMagenta: '#ae81ff',
+    brightCyan: '#a1efe4', brightWhite: '#f9f8f5' } },
+  'tokyo-night': { name: 'Tokyo Night', colors: {
+    background: '#1a1b26', foreground: '#c0caf5', cursor: '#c0caf5',
+    black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
+    blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
+    brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#9ece6a',
+    brightYellow: '#e0af68', brightBlue: '#7aa2f7', brightMagenta: '#bb9af7',
+    brightCyan: '#7dcfff', brightWhite: '#c0caf5' } },
+  'catppuccin-mocha': { name: 'Catppuccin Mocha', colors: {
+    background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc',
+    black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af',
+    blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
+    brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1',
+    brightYellow: '#f9e2af', brightBlue: '#89b4fa', brightMagenta: '#f5c2e7',
+    brightCyan: '#94e2d5', brightWhite: '#a6adc8' } },
+};
+
+/** The editable color slots, in display order, with their i18n labels. */
+const TERM_COLOR_KEYS = [
+  ['background', 'tc.background'], ['foreground', 'tc.foreground'], ['cursor', 'tc.cursor'],
+  ['black', 'tc.black'], ['red', 'tc.red'], ['green', 'tc.green'], ['yellow', 'tc.yellow'],
+  ['blue', 'tc.blue'], ['magenta', 'tc.magenta'], ['cyan', 'tc.cyan'], ['white', 'tc.white'],
+  ['brightBlack', 'tc.brightBlack'], ['brightRed', 'tc.brightRed'], ['brightGreen', 'tc.brightGreen'],
+  ['brightYellow', 'tc.brightYellow'], ['brightBlue', 'tc.brightBlue'], ['brightMagenta', 'tc.brightMagenta'],
+  ['brightCyan', 'tc.brightCyan'], ['brightWhite', 'tc.brightWhite'],
+];
+
+function hexToRgba(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/** Completes a palette (bg/fg/cursor + ANSI 16) into a full xterm theme:
+ * missing slots come from the UI theme's palette, and the two derived
+ * colors (cursor accent, selection) follow background / cursor. */
+function buildTermTheme(colors) {
+  const base = TERM_THEMES[state.settings.theme] || TERM_THEMES.dark;
+  const out = { ...base };
+  for (const [key] of TERM_COLOR_KEYS) {
+    const v = colors && colors[key];
+    if (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v)) out[key] = v;
+  }
+  out.cursorAccent = out.background;
+  out.selectionBackground = hexToRgba(out.cursor, 0.25);
+  return out;
+}
+
+/** Resolves a term_theme id + custom colors to an xterm theme. Unknown ids
+ * (a preset removed in a later version) follow the UI theme. */
+function resolveTermTheme(id, custom) {
+  if (id === 'custom') return buildTermTheme(custom || {});
+  if (id && TERM_PRESETS[id]) return buildTermTheme(TERM_PRESETS[id].colors);
   return TERM_THEMES[state.settings.theme] || TERM_THEMES.dark;
+}
+
+function currentTermTheme() {
+  return resolveTermTheme(state.settings.term_theme, state.settings.term_colors);
 }
 
 /** Applies the configured UI theme to the chrome and every live terminal. */
@@ -2883,6 +3028,10 @@ async function loadSettings() {
   f.scrollback.value = state.settings.scrollback;
   f.theme.value = state.settings.theme === 'light' ? 'light' : 'dark';
   f.language.value = state.settings.language === 'en' ? 'en' : 'ja';
+  renderTermThemeOptions();
+  f.term_theme.value = termThemeSelectValue(state.settings.term_theme);
+  renderTermColorEditor(state.settings.term_colors || {});
+  updateTermColorEditorVisibility();
   f.restore_session.checked = state.settings.restore_session !== false;
   f.gpu_rendering.checked = state.settings.gpu_rendering !== false;
   f.shell_integration.checked = state.settings.shell_integration !== false;
@@ -2895,6 +3044,127 @@ async function loadSettings() {
   applyTheme();
   applyLanguage();
 }
+
+/* ---- terminal color scheme (settings) ---- */
+
+/** The select's value for a stored id: unknown presets show as "follow". */
+function termThemeSelectValue(id) {
+  return id === 'custom' || TERM_PRESETS[id] ? id : '';
+}
+
+function renderTermThemeOptions() {
+  const sel = $('#settings-form').elements.term_theme;
+  const prev = sel.value;
+  sel.innerHTML = '';
+  const add = (value, text) => {
+    const o = document.createElement('option');
+    o.value = value;
+    o.textContent = text;
+    sel.appendChild(o);
+  };
+  add('', tr('settings.termTheme.follow'));
+  for (const [id, p] of Object.entries(TERM_PRESETS)) add(id, p.name);
+  add('custom', tr('settings.termTheme.custom'));
+  sel.value = prev;
+}
+
+/** Builds the 19-swatch editor from `colors` (missing slots show the UI
+ * theme's palette so every input has a meaningful starting value). */
+function renderTermColorEditor(colors) {
+  const box = $('#term-colors-editor');
+  box.innerHTML = '';
+  const effective = buildTermTheme(colors);
+  const groups = [
+    ['tc.group.base', ['background', 'foreground', 'cursor']],
+    ['tc.group.normal', ['black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']],
+    ['tc.group.bright', ['brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite']],
+  ];
+  for (const [groupKey, keys] of groups) {
+    const g = document.createElement('div');
+    g.className = 'tc-group';
+    g.textContent = tr(groupKey);
+    box.appendChild(g);
+    for (const key of keys) {
+      const label = document.createElement('label');
+      label.className = 'tc-swatch';
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.dataset.tcKey = key;
+      input.value = effective[key];
+      input.addEventListener('input', previewTermTheme);
+      label.appendChild(input);
+      const span = document.createElement('span');
+      span.textContent = tr(TERM_COLOR_KEYS.find(([k]) => k === key)[1]);
+      label.appendChild(span);
+      box.appendChild(label);
+    }
+  }
+  // Seed the editor from a preset / reset to the UI theme palette.
+  const actions = document.createElement('div');
+  actions.className = 'tc-actions';
+  const copyLabel = document.createElement('span');
+  copyLabel.className = 'field-hint';
+  copyLabel.textContent = tr('tc.copyFrom');
+  const copySel = document.createElement('select');
+  for (const [id, p] of Object.entries(TERM_PRESETS)) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = p.name;
+    copySel.appendChild(o);
+  }
+  copySel.addEventListener('change', () => {
+    renderTermColorEditor(TERM_PRESETS[copySel.value].colors);
+    previewTermTheme();
+  });
+  const reset = document.createElement('button');
+  reset.type = 'button';
+  reset.className = 'ghost-btn';
+  reset.textContent = tr('tc.reset');
+  reset.addEventListener('click', () => {
+    renderTermColorEditor({});
+    previewTermTheme();
+  });
+  actions.append(copyLabel, copySel, reset);
+  box.appendChild(actions);
+}
+
+function readTermColorEditor() {
+  const out = {};
+  for (const input of $('#term-colors-editor').querySelectorAll('input[data-tc-key]')) {
+    out[input.dataset.tcKey] = input.value.toLowerCase();
+  }
+  return out;
+}
+
+function updateTermColorEditorVisibility() {
+  const custom = $('#settings-form').elements.term_theme.value === 'custom';
+  $('#term-colors-editor').classList.toggle('hidden', !custom);
+}
+
+/** Live preview: pushes the form's current selection to every open
+ * terminal without touching saved settings (Save persists; navigating away
+ * and re-applying the theme restores the saved palette). */
+function previewTermTheme() {
+  const f = $('#settings-form').elements;
+  const id = f.term_theme.value;
+  const theme = resolveTermTheme(id, id === 'custom' ? readTermColorEditor() : null);
+  for (const t of state.threads) t.term.options.theme = theme;
+}
+
+$('#settings-form').elements.term_theme.addEventListener('change', () => {
+  const f = $('#settings-form').elements;
+  if (f.term_theme.value === 'custom') {
+    // First switch to custom with nothing saved: start from whatever the
+    // user was just looking at, rather than a blank UI-theme palette.
+    const saved = state.settings.term_colors || {};
+    if (!Object.keys(saved).length) {
+      const prevId = state.settings.term_theme;
+      renderTermColorEditor(TERM_PRESETS[prevId] ? TERM_PRESETS[prevId].colors : {});
+    }
+  }
+  updateTermColorEditorVisibility();
+  previewTermTheme();
+});
 
 /* A Store or package-manager build never self-updates, so the toggle would be
  * a lie. Disable it and swap the hint for who does own updates — the setting's
@@ -2927,6 +3197,9 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     scrollback: parseInt(f.elements.scrollback.value, 10) || 10000,
     theme: f.elements.theme.value === 'light' ? 'light' : 'dark',
     language: f.elements.language.value === 'en' ? 'en' : 'ja',
+    term_theme: f.elements.term_theme.value,
+    term_colors: f.elements.term_theme.value === 'custom'
+      ? readTermColorEditor() : (state.settings.term_colors || {}),
     restore_session: f.elements.restore_session.checked,
     gpu_rendering: f.elements.gpu_rendering.checked,
     shell_integration: f.elements.shell_integration.checked,
