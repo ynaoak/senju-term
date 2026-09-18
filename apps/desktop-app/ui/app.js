@@ -141,7 +141,7 @@ const STRINGS = {
   'wf.group.ph': { ja: '未入力 = 未分類', en: 'Blank = uncategorized' },
   'wf.field.tags': { ja: 'タグ (カンマ区切り)', en: 'Tags (comma-separated)' },
   'wf.section.command': { ja: 'コマンド', en: 'Command' },
-  'wf.field.template': { ja: 'テンプレート ( {{名前}} / {{名前:既定値}} でプレースホルダ )', en: 'Template ( use {{name}} / {{name:default}} for placeholders )' },
+  'wf.field.template': { ja: 'テンプレート ( {{名前}} / {{名前:既定値}} / {{名前|選択肢1,選択肢2}} でプレースホルダ )', en: 'Template ( use {{name}} / {{name:default}} / {{name|choice1,choice2}} for placeholders )' },
   'wf.section.launch': { ja: '起動方法', en: 'How to run' },
   'wf.field.shortcut': { ja: 'ショートカット (任意・Ctrl / Alt / Meta 必須)', en: 'Shortcut (optional; requires Ctrl / Alt / Meta)' },
   'wf.field.showButton': { ja: 'シェル表示にクイックボタンを表示', en: 'Show a quick button in the shell view' },
@@ -2133,12 +2133,22 @@ async function importWorkflows() {
   });
 }
 
+/** Run-time parameter dialog. A `{{name|a,b,c}}` placeholder renders as a
+ * dropdown limited to its options (default = the explicit `:default` if it
+ * is one of them, else the first); everything else is a text field. */
 function promptPlaceholders(w, placeholders) {
   return new Promise((resolve) => {
     openModal({
       title: tr('wf.paramTitle', { name: w.name }),
       okLabel: tr('common.run'),
-      body: placeholders.map((p) => field(p.name, `ph_${p.name}`, p.default ?? '')),
+      body: placeholders.map((p) => {
+        const opts = Array.isArray(p.options) ? p.options : [];
+        if (opts.length) {
+          const initial = p.default && opts.includes(p.default) ? p.default : opts[0];
+          return fieldSelect(p.name, `ph_${p.name}`, initial, opts.map((o) => [o, o]));
+        }
+        return field(p.name, `ph_${p.name}`, p.default ?? '');
+      }),
       onOk: (values) => {
         const out = {};
         for (const p of placeholders) out[p.name] = values[`ph_${p.name}`];
