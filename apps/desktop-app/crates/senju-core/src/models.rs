@@ -162,8 +162,41 @@ pub struct HistoryEntry {
     /// "local" or "ssh" — where it ran, for display only.
     #[serde(default)]
     pub kind: String,
+    /// Unix seconds of the most recent run.
     #[serde(default)]
     pub at: u64,
+    /// Where it ran: the saved SSH host's name for SSH threads, the profile
+    /// name for local ones (empty when unknown). Filterable in the palette.
+    #[serde(default)]
+    pub host: String,
+    /// Exit status of the most recent run, when the shell reported one via
+    /// OSC 133 `D;<code>` (`None` for older entries or a bare `D`).
+    #[serde(default)]
+    pub exit: Option<i32>,
+    /// Wall-clock duration of the most recent run in milliseconds (0 when
+    /// unknown).
+    #[serde(default)]
+    pub duration_ms: u64,
+    /// How many times this command has been recorded. Re-running an
+    /// existing command bumps this instead of adding a second entry.
+    #[serde(default = "default_runs")]
+    pub runs: u32,
+}
+
+fn default_runs() -> u32 {
+    1
+}
+
+/// Per-run details recorded alongside a history command (see
+/// [`crate::Stores::add_history`]).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct HistoryMeta {
+    #[serde(default)]
+    pub host: String,
+    #[serde(default)]
+    pub exit: Option<i32>,
+    #[serde(default)]
+    pub duration_ms: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

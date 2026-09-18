@@ -298,6 +298,7 @@ const STRINGS = {
   'palette.foot.run': { ja: '実行', en: 'Run' },
   'palette.foot.insert': { ja: '挿入', en: 'Insert' },
   'palette.foot.close': { ja: '閉じる', en: 'Close' },
+  'palette.foot.filters': { ja: '履歴の絞り込み: @ホスト  !failed / !ok  #ssh / #local', en: 'History filters: @host  !failed / !ok  #ssh / #local' },
   'palette.newLocalThread': { ja: '新しいローカルスレッド', en: 'New local thread' },
   'palette.splitPane': { ja: 'ペインを上下分割', en: 'Split pane vertically' },
   'palette.splitPaneH': { ja: 'ペインを左右分割', en: 'Split pane horizontally' },
@@ -842,7 +843,7 @@ function createThread(info, paneIdx, origin = {}) {
         if (b.sawOutput && !b.marker.isDisposed) {
           const exit = arg !== undefined ? parseInt(arg, 10) : NaN;
           renderBlockToolbar(term, blocks, b, exit);
-          recordBlockCommand(term, b, info.kind);
+          recordBlockCommand(term, b, thread, exit);
           maybeNotifyBlockDone(info.id, term, b, exit);
         }
       }
@@ -3198,15 +3199,51 @@ function paletteEntries() {
     const date = h.at
       ? new Date(h.at * 1000).toLocaleString(lang, { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
       : '';
+    const where = `${h.kind === 'ssh' ? 'SSH' : tr('kind.local')}${h.host ? ` ${h.host}` : ''}`;
+    const parts = [where];
+    if (h.exit !== null && h.exit !== undefined) parts.push(h.exit === 0 ? '✓' : `✗ ${h.exit}`);
+    if (h.duration_ms >= 1000) parts.push(formatElapsed(h.duration_ms));
+    if (h.runs > 1) parts.push(`×${h.runs}`);
+    if (date) parts.push(date);
     entries.push({
       kind: 'hist',
       label: h.command,
-      detail: `${h.kind === 'ssh' ? 'SSH' : tr('kind.local')}${date ? ` · ${date}` : ''}`,
+      detail: parts.join(' · '),
+      hist: h,
       run: () => sendToActive(h.command, true),
       insert: () => sendToActive(h.command, false),
     });
   }
   return entries;
+}
+
+/** Splits a palette query into free text plus history filters:
+ *   `@host`    only history entries whose host contains `host`
+ *   `!failed`  only entries that exited non-zero (`!ok` = zero)
+ *   `#ssh` / `#local`   only that kind
+ * Filters apply to history rows; other rows are hidden while any filter is
+ * active (the user is clearly looking for a past command). */
+function parsePaletteQuery(raw) {
+  const f = { text: [], host: null, exit: null, kind: null };
+  for (const tok of raw.split(/\s+/).filter(Boolean)) {
+    if (tok.startsWith('@') && tok.length > 1) f.host = tok.slice(1).toLowerCase();
+    else if (/^!(failed|fail|err|error)$/i.test(tok)) f.exit = 'fail';
+    else if (/^!(ok|success)$/i.test(tok)) f.exit = 'ok';
+    else if (/^#(ssh|local)$/i.test(tok)) f.kind = tok.slice(1).toLowerCase();
+    else f.text.push(tok);
+  }
+  f.active = f.host !== null || f.exit !== null || f.kind !== null;
+  f.query = f.text.join(' ');
+  return f;
+}
+
+function histMatchesFilters(h, f) {
+  if (!f.active) return true;
+  if (f.kind && h.kind !== f.kind) return false;
+  if (f.host && !(h.host || '').toLowerCase().includes(f.host)) return false;
+  if (f.exit === 'fail' && !(typeof h.exit === 'number' && h.exit !== 0)) return false;
+  if (f.exit === 'ok' && h.exit !== 0) return false;
+  return true;
 }
 
 /** Subsequence fuzzy match; returns a score (lower = better) or -1. */
@@ -3253,8 +3290,10 @@ function closePalette() {
 }
 
 function updatePalette() {
-  const q = $('#palette-input').value.trim();
+  const f = parsePaletteQuery($('#palette-input').value.trim());
+  const q = f.query;
   palette.items = paletteEntries()
+    .filter((e) => (e.kind === 'hist' ? histMatchesFilters(e.hist, f) : !f.active))
     .map((e) => ({ e, s: fuzzyScore(q, `${e.label} ${e.detail}`) }))
     .filter((x) => x.s >= 0)
     .sort((a, b) => a.s - b.s)
@@ -4695,14 +4734,34 @@ function blockCommandText(term, block) {
   return (cut >= 0 ? text.slice(cut) : text).trim();
 }
 
+/** Where a thread's commands run, for the history: the saved SSH host's
+ * name, or the local profile's name (empty when unknown). */
+function threadHostLabel(thread) {
+  if (!thread) return '';
+  if (thread.kind === 'ssh') {
+    return state.hosts.find((h) => h.id === thread.sshHostId)?.name || thread.title || '';
+  }
+  return state.profiles?.find?.((p) => p.id === thread.profileId)?.name || '';
+}
+
 /** Persists a finished block's command into the cross-session history (and
- * the in-memory mirror the palette searches). Fire-and-forget. */
-function recordBlockCommand(term, block, kind) {
+ * the in-memory mirror the palette searches), with where it ran, its exit
+ * status and how long it took. Fire-and-forget. */
+function recordBlockCommand(term, block, thread, exit) {
   const command = blockCommandText(term, block);
-  if (!command) return;
-  state.history = [{ command, kind, at: Math.floor(Date.now() / 1000) },
-    ...state.history.filter((h) => h.command !== command)];
-  invoke('add_history_entry', { command, kind }).catch(() => {});
+  if (!command || !thread) return;
+  const kind = thread.kind;
+  const meta = {
+    host: threadHostLabel(thread),
+    exit: Number.isNaN(exit) ? null : exit,
+    duration_ms: block.startedAt ? Math.max(0, Date.now() - block.startedAt) : 0,
+  };
+  const prev = state.history.find((h) => h.command === command);
+  state.history = [
+    { command, kind, at: Math.floor(Date.now() / 1000), ...meta, runs: (prev?.runs || 0) + 1 },
+    ...state.history.filter((h) => h.command !== command),
+  ];
+  invoke('add_history_entry', { command, kind, meta }).catch(() => {});
 }
 
 /** Desktop notification for a command that ran at least the configured
