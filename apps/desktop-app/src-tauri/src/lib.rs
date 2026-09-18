@@ -604,6 +604,20 @@ fn save_window_state(window: &tauri::Window) {
     }
 }
 
+/// Shows a native desktop notification. The webview decides *when* (a long
+/// command finished in a hidden thread — see `maybeNotifyBlockDone` in
+/// ui/app.js); this side only renders it through the OS notification center.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) -> Result<(), String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .map_err(|e| e.to_string())
+}
+
 pub fn run() {
     // Which channel this copy came from decides whether the app may update
     // itself. `bundle_type()` is the marker the Tauri bundler stamps into each
@@ -615,7 +629,8 @@ pub fn run() {
     let mut builder = tauri::Builder::default()
         // Native save/open dialogs for workflow export/import.
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_notification::init());
 
     // Registered only where in-app updates are permitted. Leaving the plugin
     // out of a Store or package-manager build is stronger than hiding the
@@ -693,7 +708,8 @@ pub fn run() {
             get_settings,
             save_settings,
             dist_info,
-            open_update_manager
+            open_update_manager,
+            notify
         ])
         .build(tauri::generate_context!())
         .expect("error while running senju-term")

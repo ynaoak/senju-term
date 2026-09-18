@@ -180,6 +180,14 @@
                 <span data-i18n="settings.shellIntegration">シェル統合を自動で有効化(コマンドブロック用)</span>
               </label>
               <p class="field-hint" data-i18n="settings.shellIntegration.hint">bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。</p>
+              <label class="checkbox-row">
+                <input name="notify_long_commands" type="checkbox" />
+                <span data-i18n="settings.notifyLong">長時間コマンドの完了をデスクトップ通知</span>
+              </label>
+              <p class="field-hint" data-i18n="settings.notifyLong.hint">非表示のスレッド、またはウィンドウが非アクティブな時にコマンドが終わると OS の通知を出します(要シェル統合)。表示中のスレッドを見ている時は通知しません。</p>
+              <label><span data-i18n="settings.notifyThreshold">通知する最短実行時間(秒)</span>
+                <input name="notify_threshold_secs" type="number" min="0" max="86400" />
+              </label>
             </fieldset>
             <fieldset class="settings-group">
               <legend data-i18n="settings.group.startup">起動</legend>

@@ -636,6 +636,8 @@ mod tests {
             ai_api_key: "sk-ant-test".into(),
             ai_model: "claude-haiku-4-5".into(),
             auto_update_check: false,
+            notify_long_commands: false,
+            notify_threshold_secs: 30,
         };
         s.save_settings(&new).unwrap();
         assert_eq!(s.settings(), new);
