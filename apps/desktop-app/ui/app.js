@@ -25,7 +25,7 @@ const state = {
   profiles: [],
   launchSets: [],      // { id, name, items: [{ profile_id, ssh_host_id, workflow_id }] }
   history: [],         // { command, kind, at } — cross-session command history
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', restore_session: true, gpu_rendering: true, shell_integration: true },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10 },
   renaming: null,      // thread id currently being renamed inline in the sidebar
   dist: null,          // { channel, installer, inAppUpdates, hasExternalManager }
 };
@@ -386,6 +386,13 @@ const STRINGS = {
   'settings.dataHint': { ja: '設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。', en: 'Settings and saved data are stored as JSON files in the app config directory.' },
   'settings.loadFailed': { ja: '設定の読み込みに失敗、既定値を使用します: {e}', en: 'Failed to load settings; using defaults: {e}' },
   'settings.saved': { ja: '設定を保存しました', en: 'Settings saved' },
+  'settings.notifyLong': { ja: '長時間コマンドの完了をデスクトップ通知', en: 'Desktop notification when a long command finishes' },
+  'settings.notifyLong.hint': { ja: '非表示のスレッド、またはウィンドウが非アクティブな時にコマンドが終わると OS の通知を出します(要シェル統合)。表示中のスレッドを見ている時は通知しません。', en: 'Sends an OS notification when a command finishes in a hidden thread or while the window is unfocused (needs shell integration). Watching the thread in the foreground never notifies.' },
+  'settings.notifyThreshold': { ja: '通知する最短実行時間(秒)', en: 'Minimum duration to notify (seconds)' },
+  'notify.done.ok': { ja: '✓ コマンド完了 — {thread}', en: '✓ Command finished — {thread}' },
+  'notify.done.err': { ja: '✗ コマンド失敗 (exit {exit}) — {thread}', en: '✗ Command failed (exit {exit}) — {thread}' },
+  'notify.done.body': { ja: '{command}\n所要時間 {elapsed}', en: '{command}\nTook {elapsed}' },
+  'notify.command.unknown': { ja: '(コマンド)', en: '(command)' },
 
   // Clipboard / quit / paste confirmations
   'confirm.sessionsRunning': { ja: '{count} 個のセッションが実行中です。終了しますか?', en: '{count} sessions are running. Quit?' },
@@ -797,6 +804,8 @@ function createThread(info, paneIdx, origin = {}) {
       const b = openBlock();
       if (b) {
         b.sawOutput = true;
+        // Wall-clock start of the command, for the completion notification.
+        if (!b.startedAt) b.startedAt = Date.now();
         // First byte of output/command-echo: the fold boundary (command line
         // itself stays visible; only what follows is ever collapsed).
         if (!b.bodyMarker) b.bodyMarker = term.registerMarker(0);
@@ -811,6 +820,7 @@ function createThread(info, paneIdx, origin = {}) {
           const exit = arg !== undefined ? parseInt(arg, 10) : NaN;
           renderBlockToolbar(term, blocks, b, exit);
           recordBlockCommand(term, b, info.kind);
+          maybeNotifyBlockDone(info.id, term, b, exit);
         }
       }
     }
@@ -2825,6 +2835,9 @@ async function loadSettings() {
   f.restore_session.checked = state.settings.restore_session !== false;
   f.gpu_rendering.checked = state.settings.gpu_rendering !== false;
   f.shell_integration.checked = state.settings.shell_integration !== false;
+  f.notify_long_commands.checked = state.settings.notify_long_commands !== false;
+  f.notify_threshold_secs.value = Number.isFinite(Number(state.settings.notify_threshold_secs))
+    ? state.settings.notify_threshold_secs : 10;
   f.ai_api_key.value = state.settings.ai_api_key || '';
   f.ai_model.value = state.settings.ai_model || '';
   f.auto_update_check.checked = state.settings.auto_update_check !== false;
@@ -2866,6 +2879,8 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     restore_session: f.elements.restore_session.checked,
     gpu_rendering: f.elements.gpu_rendering.checked,
     shell_integration: f.elements.shell_integration.checked,
+    notify_long_commands: f.elements.notify_long_commands.checked,
+    notify_threshold_secs: Math.max(0, parseInt(f.elements.notify_threshold_secs.value, 10) || 0),
     ai_api_key: f.elements.ai_api_key.value.trim(),
     ai_model: f.elements.ai_model.value.trim(),
     auto_update_check: f.elements.auto_update_check.checked,
@@ -4292,6 +4307,41 @@ function recordBlockCommand(term, block, kind) {
   state.history = [{ command, kind, at: Math.floor(Date.now() / 1000) },
     ...state.history.filter((h) => h.command !== command)];
   invoke('add_history_entry', { command, kind }).catch(() => {});
+}
+
+/** Desktop notification for a command that ran at least the configured
+ * threshold and finished while the user wasn't looking — the thread is not
+ * shown in any pane, or the window itself is unfocused. A command watched in
+ * the foreground never notifies. Fire-and-forget: a platform without a
+ * notification center just drops it. */
+function maybeNotifyBlockDone(threadId, term, block, exit) {
+  const s = state.settings;
+  if (s.notify_long_commands === false || !block.startedAt) return;
+  const elapsedMs = Date.now() - block.startedAt;
+  const threshold = Math.max(0, Number(s.notify_threshold_secs) || 0) * 1000;
+  if (elapsedMs < threshold) return;
+  const visible = state.panes.some((p) => p.threadId === threadId);
+  if (visible && document.hasFocus()) return;
+  const thread = threadById(threadId);
+  const ok = exit === 0;
+  const command = blockCommandText(term, block) || tr('notify.command.unknown');
+  const title = tr(ok ? 'notify.done.ok' : 'notify.done.err', {
+    thread: thread ? thread.title : '',
+    exit: Number.isNaN(exit) ? '?' : exit,
+  });
+  const body = tr('notify.done.body', { command, elapsed: formatElapsed(elapsedMs) });
+  invoke('notify', { title, body }).catch(() => {});
+}
+
+/** "1m 05s" / "12s" style duration for the notification body. */
+function formatElapsed(ms) {
+  const total = Math.round(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`;
+  if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`;
+  return `${sec}s`;
 }
 
 /** Renders the small always-on-hover toolbar (copy / fold / exit chip)

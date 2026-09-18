@@ -223,6 +223,16 @@ pub struct Settings {
     /// build without updater signing configured simply no-ops.
     #[serde(default = "default_auto_update_check")]
     pub auto_update_check: bool,
+    /// Desktop notification when a command block finishes after running for
+    /// at least `notify_threshold_secs`, but only when the user is not
+    /// looking at it (the thread is hidden or the window is unfocused).
+    /// Needs OSC 133 shell integration to know when a command ends.
+    #[serde(default = "default_notify_long_commands")]
+    pub notify_long_commands: bool,
+    /// Minimum command duration, in seconds, before a completion notification
+    /// is sent. Zero notifies for every finished command.
+    #[serde(default = "default_notify_threshold_secs")]
+    pub notify_threshold_secs: u32,
 }
 
 fn default_font_size() -> u16 {
@@ -257,6 +267,14 @@ fn default_auto_update_check() -> bool {
     true
 }
 
+fn default_notify_long_commands() -> bool {
+    true
+}
+
+fn default_notify_threshold_secs() -> u32 {
+    10
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -273,6 +291,8 @@ impl Default for Settings {
             ai_api_key: String::new(),
             ai_model: String::new(),
             auto_update_check: default_auto_update_check(),
+            notify_long_commands: default_notify_long_commands(),
+            notify_threshold_secs: default_notify_threshold_secs(),
         }
     }
 }
