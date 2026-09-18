@@ -12,7 +12,7 @@ use senju_core::sessions::{
     resolve_jump_chain, RemoteDirListing, SessionInfo, SshSecrets, SshTestReport, TransferSummary,
 };
 use senju_core::template;
-use senju_core::models::{HistoryEntry, SessionSnapshot};
+use senju_core::models::{HistoryEntry, HistoryMeta, SessionSnapshot};
 use senju_core::{LaunchSet, LocalSpec, Profile, SessionManager, Settings, SshHost, Stores, Workflow};
 
 struct AppState {
@@ -514,11 +514,19 @@ fn list_history(state: State<AppState>) -> Vec<HistoryEntry> {
     state.stores.history()
 }
 
+/// Records a finished command block. `meta` carries where it ran, its exit
+/// status and duration — all optional, so the frontend can send what the
+/// shell integration actually reported.
 #[tauri::command]
-fn add_history_entry(state: State<AppState>, command: String, kind: String) -> CmdResult<()> {
+fn add_history_entry(
+    state: State<AppState>,
+    command: String,
+    kind: String,
+    meta: Option<HistoryMeta>,
+) -> CmdResult<()> {
     state
         .stores
-        .add_history(&command, &kind)
+        .add_history(&command, &kind, &meta.unwrap_or_default())
         .map_err(|e| e.to_string())
 }
 

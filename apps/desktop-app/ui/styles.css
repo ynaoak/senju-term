@@ -1042,6 +1042,7 @@ label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 }
 .palette-foot span { display: inline-flex; align-items: center; gap: 4px; }
 .palette-foot kbd { font-size: 0.68rem; padding: 1px 5px; }
+.palette-foot .palette-foot-filters { margin-left: auto; opacity: 0.85; white-space: pre; }
 
 #palette-results li {
   display: flex;

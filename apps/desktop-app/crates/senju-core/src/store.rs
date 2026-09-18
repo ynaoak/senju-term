@@ -7,7 +7,7 @@ use std::sync::Mutex;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::models::{HistoryEntry, LaunchSet, Profile, SessionSnapshot, Settings, SshHost, Workflow};
+use crate::models::{HistoryEntry, HistoryMeta, LaunchSet, Profile, SessionSnapshot, Settings, SshHost, Workflow};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -180,10 +180,11 @@ impl Stores {
     }
 
     /// Prepends a command to the history. Blank commands are ignored; an
-    /// earlier entry with the same command text is removed (the list answers
-    /// "find that command again", not frequency analysis), and the list is
-    /// capped so the file can't grow without bound.
-    pub fn add_history(&self, command: &str, kind: &str) -> Result<(), StoreError> {
+    /// earlier entry with the same command text is replaced (the list answers
+    /// "find that command again", not frequency analysis — though `runs`
+    /// keeps a count), carrying the latest run's host / exit / duration, and
+    /// the list is capped so the file can't grow without bound.
+    pub fn add_history(&self, command: &str, kind: &str, meta: &HistoryMeta) -> Result<(), StoreError> {
         const CAP: usize = 2000;
         let command = command.trim();
         if command.is_empty() {
@@ -195,8 +196,26 @@ impl Stores {
             .unwrap_or(0);
         let _g = self.guard();
         let mut items: Vec<HistoryEntry> = self.read("history", Vec::new);
+        let runs = items
+            .iter()
+            .filter(|e| e.command == command)
+            .map(|e| e.runs)
+            .max()
+            .unwrap_or(0)
+            .saturating_add(1);
         items.retain(|e| e.command != command);
-        items.insert(0, HistoryEntry { command: command.into(), kind: kind.into(), at });
+        items.insert(
+            0,
+            HistoryEntry {
+                command: command.into(),
+                kind: kind.into(),
+                at,
+                host: meta.host.trim().to_string(),
+                exit: meta.exit,
+                duration_ms: meta.duration_ms,
+                runs,
+            },
+        );
         items.truncate(CAP);
         self.write("history", &items)
     }
@@ -605,17 +624,46 @@ mod tests {
     fn history_dedupes_caps_and_orders() {
         let (_d, s) = stores();
         assert!(s.history().is_empty());
-        s.add_history("cargo test", "local").unwrap();
-        s.add_history("ls -la", "ssh").unwrap();
-        // Re-running an old command moves it to the front instead of duplicating.
-        s.add_history("cargo test", "local").unwrap();
+        let meta = |host: &str, exit: Option<i32>, ms: u64| HistoryMeta {
+            host: host.into(),
+            exit,
+            duration_ms: ms,
+        };
+        s.add_history("cargo test", "local", &meta("bash", Some(0), 1200)).unwrap();
+        s.add_history("ls -la", "ssh", &meta("prod-web", Some(0), 30)).unwrap();
+        // Re-running an old command moves it to the front instead of
+        // duplicating, carries the newest run's details and bumps the count.
+        s.add_history("cargo test", "local", &meta("zsh", Some(101), 5000)).unwrap();
         let h = s.history();
         assert_eq!(h.iter().map(|e| e.command.as_str()).collect::<Vec<_>>(), ["cargo test", "ls -la"]);
         assert_eq!(h[1].kind, "ssh");
+        assert_eq!(h[1].host, "prod-web");
         assert!(h[0].at > 0);
+        assert_eq!(h[0].exit, Some(101));
+        assert_eq!(h[0].duration_ms, 5000);
+        assert_eq!(h[0].host, "zsh");
+        assert_eq!(h[0].runs, 2);
+        assert_eq!(h[1].runs, 1);
         // Blank commands are ignored.
-        s.add_history("   ", "local").unwrap();
+        s.add_history("   ", "local", &HistoryMeta::default()).unwrap();
         assert_eq!(s.history().len(), 2);
+    }
+
+    // History files written before the metadata fields existed must still
+    // load: missing fields default, and `runs` defaults to 1 (not 0).
+    #[test]
+    fn history_reads_pre_metadata_entries() {
+        let (_d, s) = stores();
+        let path = s.dir.join("history.json");
+        std::fs::write(&path, r#"[{"command":"ls","kind":"local","at":5}]"#).unwrap();
+        let h = s.history();
+        assert_eq!(h.len(), 1);
+        assert_eq!(h[0].exit, None);
+        assert_eq!(h[0].host, "");
+        assert_eq!(h[0].runs, 1);
+        // A re-run then counts from that implicit 1.
+        s.add_history("ls", "local", &HistoryMeta::default()).unwrap();
+        assert_eq!(s.history()[0].runs, 2);
     }
 
     #[test]
