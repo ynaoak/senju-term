@@ -1,13 +1,17 @@
 //! JSON-file-backed persistence. Each collection lives in its own file under
 //! the app config directory so users can inspect and back it up by hand.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{de::DeserializeOwned, Serialize};
 
-use crate::models::{HistoryEntry, HistoryMeta, LaunchSet, Profile, SessionSnapshot, Settings, SshHost, Workflow};
+use crate::models::{
+    DevServerPreset, HistoryEntry, HistoryMeta, LaunchSet, Profile, SessionSnapshot, Settings, SshHost,
+    Workflow,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -55,7 +59,49 @@ impl Stores {
         let _g = self.guard();
         let mut items = self.read("workflows", default_workflows);
         items.retain(|w| w.id != id);
-        self.write("workflows", &items)
+        self.write("workflows", &items)?;
+        // Its remembered placeholder values go with it: they are only ever
+        // looked up by this id, and a new workflow is never handed an old
+        // id, so keeping them would be a leak with no reader.
+        self.clear_workflow_inputs_locked(id)
+    }
+
+    // -- Remembered placeholder values --------------------------------------
+    //
+    // `workflow-inputs.json`: workflow id -> { placeholder name -> last value }.
+    // What the user typed into a workflow's `{{…}}` prompt last time, offered
+    // as the default next time. Per machine and deliberately *not* part of
+    // the settings export (`share`): the values are whatever was typed —
+    // hostnames, paths, possibly a token someone pasted into a parameter —
+    // and none of that belongs in a file meant to be shared.
+
+    pub fn workflow_inputs(&self, workflow_id: &str) -> HashMap<String, String> {
+        let all: HashMap<String, HashMap<String, String>> = self.read("workflow-inputs", HashMap::new);
+        all.get(workflow_id).cloned().unwrap_or_default()
+    }
+
+    /// Replaces the remembered values for one workflow. An empty map forgets
+    /// them (the prompt's "remember" box unticked).
+    pub fn save_workflow_inputs(
+        &self,
+        workflow_id: &str,
+        values: HashMap<String, String>,
+    ) -> Result<(), StoreError> {
+        let _g = self.guard();
+        if values.is_empty() {
+            return self.clear_workflow_inputs_locked(workflow_id);
+        }
+        let mut all: HashMap<String, HashMap<String, String>> = self.read("workflow-inputs", HashMap::new);
+        all.insert(workflow_id.to_string(), values);
+        self.write("workflow-inputs", &all)
+    }
+
+    fn clear_workflow_inputs_locked(&self, workflow_id: &str) -> Result<(), StoreError> {
+        let mut all: HashMap<String, HashMap<String, String>> = self.read("workflow-inputs", HashMap::new);
+        if all.remove(workflow_id).is_none() {
+            return Ok(());
+        }
+        self.write("workflow-inputs", &all)
     }
 
     /// Reorders the stored workflows to match the given id order. Ids not in
@@ -78,9 +124,30 @@ impl Stores {
     }
 
     pub fn save_ssh_host(&self, mut host: SshHost) -> Result<SshHost, StoreError> {
+        // Label fields are normalized before validation so "Prod / Web" and
+        // "Prod/Web" land in the same group, and a stray space or a repeated
+        // tag never makes two hosts look differently labeled when they are
+        // not. The same split-trim-join the panel applies, done here so the
+        // import path and settings import get it too.
+        host.group = normalize_group(&host.group);
+        let mut tags: Vec<String> = Vec::new();
+        for t in host.tags.iter().map(|t| t.trim()).filter(|t| !t.is_empty()) {
+            if !tags.iter().any(|x| x == t) {
+                tags.push(t.to_string());
+            }
+        }
+        host.tags = tags;
+        host.color = host.color.trim().to_ascii_lowercase();
         validate_ssh_host(&host)?;
         if host.id.is_empty() {
             host.id = uuid::Uuid::new_v4().to_string();
+        }
+        // Turning the save box off is the user withdrawing consent, so the
+        // stored secrets go now rather than lingering until something else
+        // happens to clean them up.
+        if !host.save_credentials {
+            host.password.clear();
+            host.passphrase.clear();
         }
         let _g = self.guard();
         let mut items = self.read("ssh-hosts", Vec::new);
@@ -90,6 +157,8 @@ impl Stores {
     }
 
     pub fn delete_ssh_host(&self, id: &str) -> Result<(), StoreError> {
+        // The credentials live on the host record, so removing it takes them
+        // with it — nothing separate to clean up.
         let _g = self.guard();
         let mut items: Vec<SshHost> = self.read("ssh-hosts", Vec::new);
         items.retain(|h| h.id != id);
@@ -161,6 +230,36 @@ impl Stores {
         self.write("launch-sets", &items)
     }
 
+    // -- Dev server presets ---------------------------------------------------
+
+    pub fn list_dev_servers(&self) -> Vec<DevServerPreset> {
+        self.read("dev-servers", Vec::new)
+    }
+
+    pub fn save_dev_server(&self, mut preset: DevServerPreset) -> Result<DevServerPreset, StoreError> {
+        if preset.name.trim().is_empty() {
+            return Err(StoreError::Invalid("名前を入力してください".into()));
+        }
+        if preset.root.trim().is_empty() {
+            return Err(StoreError::Invalid("公開するディレクトリを入力してください".into()));
+        }
+        if preset.id.is_empty() {
+            preset.id = uuid::Uuid::new_v4().to_string();
+        }
+        let _g = self.guard();
+        let mut items = self.read("dev-servers", Vec::new);
+        upsert(&mut items, preset.clone(), |p| &p.id);
+        self.write("dev-servers", &items)?;
+        Ok(preset)
+    }
+
+    pub fn delete_dev_server(&self, id: &str) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut items: Vec<DevServerPreset> = self.read("dev-servers", Vec::new);
+        items.retain(|p| p.id != id);
+        self.write("dev-servers", &items)
+    }
+
     // -- Session snapshot -----------------------------------------------------
 
     pub fn session_snapshot(&self) -> SessionSnapshot {
@@ -222,13 +321,38 @@ impl Stores {
 
     // -- Settings -------------------------------------------------------------
 
+    /// Settings as the app should see them: the file's contents with the AI
+    /// API key filled in from the OS credential store.
+    ///
+    /// The key is read straight out of the file — see the field's own docs for
+    /// where it lives and what that costs.
     pub fn settings(&self) -> Settings {
         self.read("settings", Settings::default)
     }
 
+    /// Persists settings.
+    ///
+    /// An empty `ai_api_key` means "leave the saved one alone", not "erase
+    /// it": the editor never receives the stored key (so it cannot send it
+    /// back), and treating blank as a delete would wipe the key every time
+    /// someone changed the font size. Use [`Self::clear_ai_api_key`] to
+    /// remove it.
     pub fn save_settings(&self, settings: &Settings) -> Result<(), StoreError> {
+        let mut to_write = settings.clone();
         let _g = self.guard();
-        self.write("settings", settings)
+        if to_write.ai_api_key.is_empty() {
+            to_write.ai_api_key = self.read("settings", Settings::default).ai_api_key;
+        }
+        self.write("settings", &to_write)
+    }
+
+    /// Erases the stored AI API key. Separate from `save_settings` because
+    /// there deleting and "not changing it" are indistinguishable.
+    pub fn clear_ai_api_key(&self) -> Result<(), StoreError> {
+        let _g = self.guard();
+        let mut settings: Settings = self.read("settings", Settings::default);
+        settings.ai_api_key.clear();
+        self.write("settings", &settings)
     }
 
     // -- Internals -------------------------------------------------------------
@@ -293,10 +417,27 @@ fn backup_corrupt(path: &Path) {
     let _ = fs::rename(path, candidate);
 }
 
+/// Canonical `/`-separated group path: segments trimmed, empties dropped.
+/// `"Prod / Web"` and `" Prod//Web "` both become `"Prod/Web"`.
+fn normalize_group(raw: &str) -> String {
+    raw.split('/')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// Rejects an SSH host that would only fail later with an opaque socket/auth
 /// error, so the editor can show the problem inline at save time.
 fn validate_ssh_host(host: &SshHost) -> Result<(), StoreError> {
-    use crate::models::SshAuthMethod;
+    use crate::models::{SshAuthMethod, HOST_COLORS};
+    if !host.color.is_empty() && !HOST_COLORS.contains(&host.color.as_str()) {
+        return Err(StoreError::Invalid(format!(
+            "ラベル色 \"{}\" は使えません (使えるのは {})",
+            host.color,
+            HOST_COLORS.join(" / ")
+        )));
+    }
     if host.host.trim().is_empty() {
         return Err(StoreError::Invalid("ホストを入力してください".into()));
     }
@@ -315,9 +456,22 @@ fn validate_ssh_host(host: &SshHost) -> Result<(), StoreError> {
     }
     // Forward specs are validated at save time so a typo surfaces in the
     // editor rather than as a banner on the next connect.
+    let mut taken: Vec<u16> = Vec::new();
     for raw in host.forwards.iter().filter(|s| !s.trim().is_empty()) {
-        if let Err(e) = crate::sessions::parse_forward_spec(raw) {
-            return Err(StoreError::Invalid(format!("ポートフォワード {e}")));
+        let spec = crate::sessions::parse_forward_spec(raw)
+            .map_err(|e| StoreError::Invalid(format!("ポートフォワード {e}")))?;
+        // Two forwards on one local port: only the first would bind, and the
+        // second would fail as a banner long after the typo was made. `-R`
+        // listens on the server, so it takes no local port and never collides
+        // here.
+        if let Some(port) = spec.local_bind_port() {
+            if taken.contains(&port) {
+                return Err(StoreError::Invalid(format!(
+                    "ポートフォワード \"{}\": ローカルポート {port} が重複しています",
+                    raw.trim()
+                )));
+            }
+            taken.push(port);
         }
     }
     Ok(())
@@ -592,8 +746,16 @@ mod tests {
                 username: "deploy".into(),
                 auth_method: SshAuthMethod::Key,
                 key_path: "~/.ssh/id_ed25519".into(),
+                save_credentials: false,
+                password: String::new(),
+                passphrase: String::new(),
                 forwards: Vec::new(),
                 jump_hosts: Vec::new(),
+                group: String::new(),
+                tags: Vec::new(),
+                color: String::new(),
+                log_sessions: false,
+                auto_reconnect: false,
             })
             .unwrap();
         let listed = s.list_ssh_hosts();
@@ -653,9 +815,8 @@ mod tests {
     // load: missing fields default, and `runs` defaults to 1 (not 0).
     #[test]
     fn history_reads_pre_metadata_entries() {
-        let (_d, s) = stores();
-        let path = s.dir.join("history.json");
-        std::fs::write(&path, r#"[{"command":"ls","kind":"local","at":5}]"#).unwrap();
+        let (d, s) = stores();
+        std::fs::write(d.path().join("history.json"), r#"[{"command":"ls","kind":"local","at":5}]"#).unwrap();
         let h = s.history();
         assert_eq!(h.len(), 1);
         assert_eq!(h[0].exit, None);
@@ -685,14 +846,94 @@ mod tests {
             restore_session: false,
             gpu_rendering: false,
             shell_integration: false,
-            ai_api_key: "sk-ant-test".into(),
+            // The API key deliberately travels a different road (the OS
+            // credential store), so it is not part of this file roundtrip —
+            // `ai_api_key_never_reaches_the_file` covers it.
+            ai_api_key: String::new(),
             ai_model: "claude-haiku-4-5".into(),
             auto_update_check: false,
             notify_long_commands: false,
             notify_threshold_secs: 30,
+            session_log_dir: "~/logs".into(),
+            session_log_plain: false,
+            session_log_local: true,
         };
         s.save_settings(&new).unwrap();
         assert_eq!(s.settings(), new);
+    }
+
+    /// The whole point of moving the key: whatever the OS credential store
+     /// The key is saved, read back, and cleared on demand — and a blank key
+    /// on the way in is "leave it alone", not "erase it".
+    ///
+    /// That last part is the one worth pinning: the editor is never given the
+    /// stored key (see `SettingsView`), so every ordinary settings save sends
+    /// a blank one. Treating blank as a delete would wipe the key whenever
+    /// somebody changed the font size.
+    #[test]
+    fn a_blank_api_key_leaves_the_saved_one_alone() {
+        let (dir, s) = stores();
+        s.save_settings(&Settings { ai_api_key: "sk-ant-secret".into(), ..Settings::default() })
+            .unwrap();
+        assert_eq!(s.settings().ai_api_key, "sk-ant-secret");
+
+        // An unrelated change, carrying no key, the way the editor sends it.
+        s.save_settings(&Settings { font_size: 18, ..Settings::default() }).unwrap();
+        let after = s.settings();
+        assert_eq!(after.font_size, 18);
+        assert_eq!(after.ai_api_key, "sk-ant-secret", "an unrelated save erased the key");
+
+        // Deleting is its own explicit operation.
+        s.clear_ai_api_key().unwrap();
+        assert_eq!(s.settings().ai_api_key, "");
+        let raw = fs::read_to_string(dir.path().join("settings.json")).unwrap();
+        assert!(!raw.contains("sk-ant-secret"), "the cleared key is still on disk");
+    }
+
+    /// Turning the save box off is the user withdrawing consent, so the
+    /// credentials go with it rather than lingering in the file until
+    /// something else happens to clean them up.
+    #[test]
+    fn unchecking_save_credentials_erases_them() {
+        let (dir, s) = stores();
+        let saved = s
+            .save_ssh_host(SshHost {
+                id: String::new(),
+                name: "prod".into(),
+                host: "example.com".into(),
+                port: 22,
+                username: "deploy".into(),
+                auth_method: SshAuthMethod::Password,
+                key_path: String::new(),
+                save_credentials: true,
+                password: "hunter2".into(),
+                passphrase: "correct-horse".into(),
+                forwards: Vec::new(),
+                jump_hosts: Vec::new(),
+                group: String::new(),
+                tags: Vec::new(),
+                color: String::new(),
+                log_sessions: false,
+                auto_reconnect: false,
+            })
+            .unwrap();
+        assert_eq!(s.list_ssh_hosts()[0].password, "hunter2");
+
+        let off = s
+            .save_ssh_host(SshHost { save_credentials: false, ..saved.clone() })
+            .unwrap();
+        assert_eq!(off.password, "", "the returned host still carries the password");
+        assert_eq!(off.passphrase, "");
+        let raw = fs::read_to_string(dir.path().join("ssh-hosts.json")).unwrap();
+        assert!(!raw.contains("hunter2"), "the password is still in the file");
+        assert!(!raw.contains("correct-horse"), "the passphrase is still in the file");
+
+        // Deleting the host takes its credentials with it.
+        s.save_ssh_host(SshHost { save_credentials: true, password: "hunter2".into(), ..saved.clone() })
+            .unwrap();
+        s.delete_ssh_host(&saved.id).unwrap();
+        let raw = fs::read_to_string(dir.path().join("ssh-hosts.json")).unwrap();
+        assert!(!raw.contains("hunter2"));
     }
 
     // Q3: a corrupt store file must not be silently treated as empty and then
@@ -711,8 +952,16 @@ mod tests {
                 username: "deploy".into(),
                 auth_method: SshAuthMethod::Password,
                 key_path: String::new(),
+                save_credentials: false,
+                password: String::new(),
+                passphrase: String::new(),
                 forwards: Vec::new(),
                 jump_hosts: Vec::new(),
+                group: String::new(),
+                tags: Vec::new(),
+                color: String::new(),
+                log_sessions: false,
+                auto_reconnect: false,
             })
             .unwrap();
         let path = dir.path().join("ssh-hosts.json");
@@ -746,8 +995,16 @@ mod tests {
             username: "u".into(),
             auth_method: SshAuthMethod::Password,
             key_path: String::new(),
+            save_credentials: false,
+            password: String::new(),
+            passphrase: String::new(),
             forwards: Vec::new(),
             jump_hosts: Vec::new(),
+            group: String::new(),
+            tags: Vec::new(),
+            color: String::new(),
+            log_sessions: false,
+            auto_reconnect: false,
         };
         assert!(matches!(
             s.save_ssh_host(SshHost { host: "".into(), ..base.clone() }),
@@ -777,7 +1034,155 @@ mod tests {
                 ..base.clone()
             })
             .is_ok());
+        // The other two kinds save too, mixed with a bare -L line.
+        assert!(s
+            .save_ssh_host(SshHost {
+                forwards: vec![
+                    "8080:localhost:80".into(),
+                    "-R 9000:localhost:3000".into(),
+                    "-D 1080".into(),
+                ],
+                ..base.clone()
+            })
+            .is_ok());
+        // Two forwards on one local port: only the first would ever bind, so
+        // catch it here rather than as a banner on the next connect.
+        assert!(matches!(
+            s.save_ssh_host(SshHost {
+                forwards: vec!["8080:localhost:80".into(), "-D 8080".into()],
+                ..base.clone()
+            }),
+            Err(StoreError::Invalid(_))
+        ));
+        // ...but -R listens on the server, so its port is not a local one and
+        // may repeat a local forward's number without conflict.
+        assert!(s
+            .save_ssh_host(SshHost {
+                forwards: vec!["8080:localhost:80".into(), "-R 8080:localhost:3000".into()],
+                ..base.clone()
+            })
+            .is_ok());
         // A valid host still saves.
         assert!(s.save_ssh_host(base).is_ok());
+    }
+
+    // -- labels: group / tags / color ----------------------------------------
+
+    fn labeled(group: &str, tags: &[&str], color: &str) -> SshHost {
+        SshHost {
+            id: String::new(),
+            name: "n".into(),
+            host: "h.example.com".into(),
+            port: 22,
+            username: "u".into(),
+            auth_method: SshAuthMethod::Agent,
+            key_path: String::new(),
+            save_credentials: false,
+            password: String::new(),
+            passphrase: String::new(),
+            forwards: Vec::new(),
+            jump_hosts: Vec::new(),
+            group: group.into(),
+            tags: tags.iter().map(|s| s.to_string()).collect(),
+            color: color.into(),
+            log_sessions: false,
+            auto_reconnect: false,
+        }
+    }
+
+    /// Two spellings of one group must file under one heading, or the panel
+    /// shows "Prod" and "Prod " as different places with one host each.
+    #[test]
+    fn host_group_is_normalized_on_save() {
+        let (_d, s) = stores();
+        let saved = s.save_ssh_host(labeled(" Prod / Web // ", &[], "")).unwrap();
+        assert_eq!(saved.group, "Prod/Web");
+        assert_eq!(s.list_ssh_hosts()[0].group, "Prod/Web");
+        let bare = s.save_ssh_host(labeled(" / ", &[], "")).unwrap();
+        assert_eq!(bare.group, "", "a path of only separators is ungrouped");
+    }
+
+    #[test]
+    fn host_tags_are_trimmed_and_deduplicated() {
+        let (_d, s) = stores();
+        let saved = s
+            .save_ssh_host(labeled("", &[" db ", "", "db", "cache", "  "], ""))
+            .unwrap();
+        assert_eq!(saved.tags, vec!["db".to_string(), "cache".to_string()]);
+    }
+
+    /// The color names a CSS token; anything else would silently style
+    /// nothing, and a host the user thinks is marked red would not be.
+    #[test]
+    fn host_color_must_be_a_known_name() {
+        let (_d, s) = stores();
+        for ok in crate::models::HOST_COLORS {
+            s.save_ssh_host(labeled("", &[], ok)).unwrap();
+        }
+        assert_eq!(s.save_ssh_host(labeled("", &[], " Red ")).unwrap().color, "red",
+            "case and whitespace are forgiven");
+        assert_eq!(s.save_ssh_host(labeled("", &[], "")).unwrap().color, "");
+        let err = s.save_ssh_host(labeled("", &[], "#ff0000")).unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)), "hex is not a label color: {err:?}");
+        let err = s.save_ssh_host(labeled("", &[], "crimson")).unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)));
+    }
+
+    /// Hosts saved before labels existed carry none of the fields; they must
+    /// still load, ungrouped and uncolored, rather than fail to parse.
+    #[test]
+    fn host_without_label_fields_still_loads() {
+        let (d, s) = stores();
+        std::fs::write(
+            d.path().join("ssh-hosts.json"),
+            r#"[{"id":"old","name":"old","host":"h","port":22,"username":"u","auth_method":"password","key_path":""}]"#,
+        )
+        .unwrap();
+        let hosts = s.list_ssh_hosts();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0].group, "");
+        assert!(hosts[0].tags.is_empty());
+        assert_eq!(hosts[0].color, "");
+        assert!(!hosts[0].log_sessions && !hosts[0].auto_reconnect, "opt-ins default off");
+    }
+
+    // -- remembered placeholder values ----------------------------------------
+
+    #[test]
+    fn workflow_inputs_roundtrip_and_forget() {
+        let (_d, s) = stores();
+        assert!(s.workflow_inputs("w1").is_empty());
+        let mut v = HashMap::new();
+        v.insert("env".to_string(), "staging".to_string());
+        v.insert("tag".to_string(), "v1.2".to_string());
+        s.save_workflow_inputs("w1", v.clone()).unwrap();
+        assert_eq!(s.workflow_inputs("w1"), v);
+        assert!(s.workflow_inputs("other").is_empty(), "keyed by workflow");
+        // Empty = forget.
+        s.save_workflow_inputs("w1", HashMap::new()).unwrap();
+        assert!(s.workflow_inputs("w1").is_empty());
+    }
+
+    /// Deleting a workflow must not leave its last inputs on disk.
+    #[test]
+    fn deleting_a_workflow_drops_its_inputs() {
+        let (_d, s) = stores();
+        let w = s
+            .save_workflow(Workflow {
+                id: String::new(),
+                name: "deploy".into(),
+                description: String::new(),
+                command: "deploy {{env}}".into(),
+                tags: vec![],
+                group: String::new(),
+                shortcut: String::new(),
+                show_button: false,
+            })
+            .unwrap();
+        let mut v = HashMap::new();
+        v.insert("env".to_string(), "prod".to_string());
+        s.save_workflow_inputs(&w.id, v).unwrap();
+        s.delete_workflow(&w.id).unwrap();
+        assert!(s.workflow_inputs(&w.id).is_empty());
     }
 }

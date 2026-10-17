@@ -56,6 +56,13 @@ body.theme-light .sc-row { border-bottom-color: rgba(212, 218, 226, 0.7); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* `hidden` is the plain way to take an element off screen, but the UA rule
+   behind it is only `display: none` at the lowest precedence — any `display`
+   this sheet sets on the same element (and it sets `flex` on plenty) silently
+   wins and the element stays visible. Restating it makes the attribute mean
+   what it reads as. */
+[hidden] { display: none !important; }
+
 /* Respect the OS "reduce motion" setting: drop all animation/transition. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -88,6 +95,23 @@ body {
   user-select: none;
 }
 
+/* The shell workspace's own controls (thread list, splits, broadcast), set
+   into the bar as one enclosed group so they read as belonging together and
+   to one view rather than as four unrelated toolbar buttons.
+   The buttons already carry their own outlines, so a darker well alone was
+   not enough to bind them — the group needs its own edge to be a group. */
+#shell-tools {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+/* Hidden outside the shell view, where every one of them is inert. */
+#shell-tools.hidden { display: none; }
+
 #brand {
   display: flex;
   align-items: center;
@@ -111,7 +135,51 @@ body {
   filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.5));
 }
 
-.spacer { flex: 1; align-self: stretch; }
+.spacer { flex: 1; align-self: stretch; min-width: 0; }
+
+/* A narrow window must never squeeze a titlebar control: a shrunk flex item
+   wraps its label one character per line and the whole bar grows tall. Every
+   control keeps its natural width and one line; the bar sheds labels in steps
+   below instead, and only the tab strip is allowed to give way. */
+#topbar > *, #shell-tools > * { flex-shrink: 0; white-space: nowrap; }
+/* Last resort: the tabs scroll sideways rather than overflow the window. */
+#topbar > #header-tabs {
+  flex-shrink: 1;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+#header-tabs::-webkit-scrollbar { display: none; }
+/* Fade whichever edge has tabs scrolled past it (set by updateHeaderTabsOverflow
+   in app.js), so a clipped strip doesn't pass for the whole set. */
+#header-tabs.more-start {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px);
+  mask-image: linear-gradient(to right, transparent, #000 28px);
+}
+#header-tabs.more-end {
+  -webkit-mask-image: linear-gradient(to left, transparent, #000 28px);
+  mask-image: linear-gradient(to left, transparent, #000 28px);
+}
+#header-tabs.more-start.more-end {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 28px, #000 calc(100% - 28px), transparent);
+}
+
+/* Step 1: the shell tools and the palette go icon-only (their tooltips still
+   name them) and the shortcut chip drops out. */
+@media (max-width: 1420px) {
+  #shell-tools .tb-label, #palette-btn .tb-label, #palette-btn kbd { display: none; }
+  #shell-tools .ghost-btn, #palette-btn { padding: 5px 8px; }
+}
+/* Step 2: the wordmark gives way to the icon alone, and the tabs tighten. */
+@media (max-width: 1100px) {
+  #brand .tb-label { display: none; }
+  #header-tabs .hdr-tab { padding: 3px 9px; }
+}
+/* Step 3: the tabs tighten once more before they have to scroll. */
+@media (max-width: 960px) {
+  #header-tabs .hdr-tab { padding: 3px 6px; font-size: 0.8rem; }
+}
 
 /* Center tool-panel tabs: a segmented pill of rounded buttons. */
 #header-tabs {
@@ -362,6 +430,14 @@ input[type="number"]::-webkit-outer-spin-button {
 .thread-item.pinned.shown { border-color: var(--accent); }
 
 .thread-item .kind { font-size: 0.72rem; color: var(--violet); min-width: 2em; }
+/* A session being written to a log file. Small and red, like a recorder's
+   REC light: present only while the file is open, so its absence means
+   nothing is being kept. */
+.thread-item .rec { color: var(--danger); font-size: 0.55rem; flex: 0 0 auto; }
+/* A thread whose session dropped and is being brought back. */
+.thread-item .reconnecting { color: var(--text-dim); flex: 0 0 auto; animation: spin 1.6s linear infinite; }
+.thread-item.reconnecting .title { color: var(--text-dim); font-style: italic; }
+@keyframes spin { to { transform: rotate(360deg); } }
 .thread-item.local .kind { color: var(--accent-dim); }
 .thread-item .activity-dot {
   display: none;
@@ -700,11 +776,83 @@ body.col-resizing .pane-body { pointer-events: none; user-select: none; }
 #terminals.broadcast .pane.focused .pane-head {
   box-shadow: inset 0 2px 0 var(--accent), inset 2px 0 0 var(--accent);
 }
-#broadcast-toggle.active {
+#broadcast-toggle.active,
+#task-toggle.active {
   color: var(--accent);
   border-color: var(--accent-dim);
   background: var(--bg-panel);
 }
+
+/* ---------- task pane ---------- */
+/* The task list sits beside the panes instead of taking the window as a tool
+   view: pressing a task means "run this and watch it", so the list and the
+   shell it types into have to be on screen together. A fixed column, like the
+   thread bar on the other side — the terminal keeps the rest. */
+#taskpane {
+  flex: none;
+  width: 320px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 10px 12px 18px;
+  overflow-y: auto;
+  background: var(--bg-panel);
+}
+
+#taskpane.hidden { display: none; }
+/* It belongs to the terminal workspace, so it goes when that does. */
+#body.tool-view #taskpane,
+#body.tool-view #taskpane-grip { display: none; }
+
+/* The pane's width is draggable, the same as the split between panes. The
+   grip doubles as the edge between the terminal and the pane, so the pane
+   itself carries no border — two lines side by side would just look like a
+   mistake. */
+#taskpane-grip {
+  flex: 0 0 6px;
+  cursor: col-resize;
+  background: var(--border);
+  transition: background 0.15s;
+  position: relative;
+  z-index: 5;
+}
+#taskpane-grip:hover { background: var(--accent-dim); }
+/* Widen the grab zone beyond the visible bar (cf. .splitter::after). */
+#taskpane-grip::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  right: -4px;
+}
+#taskpane-grip.hidden { display: none; }
+
+.taskpane-head { display: flex; align-items: center; gap: 4px; }
+.taskpane-head h2 {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.taskpane-head h2 .ph-icon { color: var(--accent); display: inline-flex; }
+.taskpane-head h2 .ph-icon svg { width: 16px; height: 16px; }
+
+/* `.panel-note` grows to fill a toolbar row; in this column that would stretch
+   it down the pane. It also carries a full path, which has to wrap. */
+#taskpane .panel-note {
+  flex: none;
+  margin: 0;
+  word-break: break-all;
+}
+#taskpane .panel-note:empty { display: none; }
+/* The cards are already one per row at this width; drop the grid's minimum so
+   a narrow window can't push them into a horizontal overflow. */
+#taskpane .card-list { grid-template-columns: minmax(0, 1fr); }
 
 /* ---------- sidebar ---------- */
 /* Tool views (Workflows / SSH / 端末 / 設定) render as the main window content
@@ -815,7 +963,7 @@ body.col-resizing .pane-body { pointer-events: none; user-select: none; }
   word-break: break-all;
   user-select: text;
 }
-.host-badges { margin-bottom: 10px; }
+.host-badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 10px; }
 .auth-badge {
   display: inline-flex;
   align-items: center;
@@ -851,6 +999,157 @@ body.col-resizing .pane-body { pointer-events: none; user-select: none; }
 .wf-reorder .icon-btn .ico { width: 14px; height: 14px; }
 .wf-reorder .icon-btn:disabled { opacity: 0.35; cursor: default; }
 .wf-reorder .icon-btn:disabled:hover { background: var(--bg-raised); border-color: var(--border); }
+
+/* Task panel: one card per manifest, listing the commands that file declares.
+   The rows are their own list rather than the usual `.card .row` buttons —
+   a package.json can declare a couple of dozen scripts, so each needs its own
+   line (name + command on the left, one run button on the right) instead of a
+   wrapping pile of equal-looking buttons. */
+.task-card h4 { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.task-file {
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  word-break: break-all;
+  user-select: text;
+}
+.task-runner {
+  flex: none;
+  font-size: 0.72rem;
+  color: var(--accent);
+  background: rgba(0, 229, 190, 0.12);
+  border-radius: 10px;
+  padding: 2px 9px;
+}
+.task-list { list-style: none; display: flex; flex-direction: column; gap: 9px; }
+.task-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "name run" "cmd run";
+  gap: 4px 10px;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+.task-row:first-child { border-top: 0; padding-top: 0; }
+.task-text {
+  grid-area: name;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+.task-name { font-size: 0.88rem; font-weight: 600; word-break: break-all; }
+/* A script body can be a whole pipeline; one truncated line of it is a useful
+   hint, the whole thing would push the command itself out of view. */
+.task-detail {
+  min-width: 0;
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.card .task-cmd { grid-area: cmd; margin-bottom: 0; }
+.task-run {
+  grid-area: run;
+  align-self: center;
+  font-size: 0.82rem;
+  padding: 4px 9px;
+  white-space: nowrap;
+}
+.task-run .ico { width: 14px; height: 14px; }
+
+/* Dev server panel. The start form is a small grid rather than the usual
+   `.panel-head` row: it carries a path, a port and three toggles, which is
+   more than one line can hold at a readable size. */
+.srv-start {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 14px;
+  align-items: end;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+  margin-bottom: 20px;
+}
+.srv-start > label { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.srv-start > label > span:first-child { font-size: 0.8rem; color: var(--text-dim); }
+.srv-dir-row { display: flex; gap: 6px; min-width: 0; }
+.srv-dir-row input { flex: 1; min-width: 0; }
+.srv-dir-row button { white-space: nowrap; }
+.srv-port input { width: 9ch; }
+/* The checkboxes and the action row span both columns and wrap, so a narrow
+   window stacks them instead of squeezing the path field. */
+.srv-check,
+.srv-actions,
+.srv-start .field-hint { grid-column: 1 / -1; }
+.srv-check {
+  flex-direction: row !important;
+  align-items: center;
+  gap: 7px !important;
+  font-size: 0.85rem;
+}
+.srv-check input { width: auto; }
+.srv-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.srv-start .field-hint { margin: 0; }
+
+.srv-heading {
+  font-size: 0.82rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  margin: 0 0 10px;
+}
+#srv-running, #srv-presets { margin-bottom: 22px; }
+
+.srv-card h4 { margin-bottom: 6px; word-break: break-all; }
+/* Reads as a link, is a button — see runningServerCard for why. */
+.srv-url {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+  word-break: break-all;
+}
+.srv-url:hover { text-decoration: underline; }
+.srv-root {
+  color: var(--text-dim);
+  font-size: 0.78rem;
+  margin-bottom: 9px;
+  word-break: break-all;
+  user-select: text;
+}
+
+.srv-log-head { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.srv-log-head .srv-heading { margin: 0; flex: 1; }
+.srv-log {
+  list-style: none;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 8px 10px;
+  /* A page load is dozens of requests; the list scrolls instead of pushing the
+     rest of the panel off screen. */
+  max-height: 260px;
+  overflow-y: auto;
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.76rem;
+  user-select: text;
+}
+.srv-log-empty { color: var(--text-dim); font-size: 0.8rem; }
+.srv-log-row { display: flex; gap: 10px; padding: 2px 0; align-items: baseline; }
+.srv-log-row .lg-status { width: 3ch; flex: none; }
+/* Theme tokens, not literals: the light theme redefines both, and a hardcoded
+   green on white is unreadable. */
+.srv-log-row.ok .lg-status { color: var(--accent); }
+.srv-log-row.bad .lg-status { color: var(--danger); }
+.srv-log-row .lg-method { width: 5ch; flex: none; color: var(--text-dim); }
+.srv-log-row .lg-path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.srv-log-row .lg-port { flex: none; color: var(--text-dim); }
 
 /* Drag handle: grab cursor, and its dots use the accent on hover. */
 .wf-drag-handle { cursor: grab; }
@@ -896,6 +1195,60 @@ body.col-resizing .pane-body { pointer-events: none; user-select: none; }
   padding: 0 6px;
 }
 .wf-group-badge { color: var(--text-dim) !important; background: var(--bg-raised) !important; }
+
+/* Host group headings carry the group's two actions on the right. */
+.host-group-head .hg-actions { margin-left: auto; display: flex; gap: 4px; }
+.host-group-head .hg-actions .ghost-btn { font-size: 0.78rem; padding: 2px 8px; }
+.host-group-head .hg-actions .ico { width: 13px; height: 13px; color: currentColor; }
+
+/* ---------- host label colors ---------- */
+/* One token per color per theme: the dark set is the lighter shade, the light
+   set the darker, so a label reads on both canvases. `--label` is resolved by
+   the [data-color] element and inherited by whatever draws it beneath — the
+   dot, the card edge, the thread row's badge, the pane's frame. */
+:root {
+  --label-red: #f0665e;
+  --label-orange: #f0883e;
+  --label-yellow: #e3b341;
+  --label-green: #3fb950;
+  --label-blue: #58a6ff;
+  --label-purple: #a371f7;
+}
+body.theme-light {
+  --label-red: #cf222e;
+  --label-orange: #bc4c00;
+  --label-yellow: #9a6700;
+  --label-green: #1a7f37;
+  --label-blue: #0969da;
+  --label-purple: #8250df;
+}
+[data-color="red"] { --label: var(--label-red); }
+[data-color="orange"] { --label: var(--label-orange); }
+[data-color="yellow"] { --label: var(--label-yellow); }
+[data-color="green"] { --label: var(--label-green); }
+[data-color="blue"] { --label: var(--label-blue); }
+[data-color="purple"] { --label: var(--label-purple); }
+
+.host-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--label);
+  flex: 0 0 auto;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+.card[data-color] { border-left: 3px solid var(--label); }
+/* Thread rows: the kind badge takes the host's color. */
+.thread-item[data-color] .kind { color: var(--label); font-weight: 700; }
+/* Panes: a 2px frame plus the header stripe. This is the one place the color
+   has to be unmissable — it exists so "this is prod" registers before a
+   command is typed, not after. Focus keeps its own left bar in the header. */
+.pane[data-color] { outline: 2px solid var(--label); outline-offset: -2px; }
+.pane[data-color] .pane-head { box-shadow: inset 0 2px 0 var(--label); }
+.pane[data-color].focused .pane-head { box-shadow: inset 0 2px 0 var(--label), inset 2px 0 0 var(--accent); }
+.pane[data-color] .pane-kind { color: var(--label); font-weight: 700; }
 
 .tag {
   display: inline-block;
@@ -958,7 +1311,10 @@ body.col-resizing .pane-body { pointer-events: none; user-select: none; }
    column }` base rule specificity so this actually overrides it. */
 label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 .form input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
-.field-hint { color: var(--text-dim); font-size: 0.78rem; margin-top: -4px; line-height: 1.5; }
+/* `pre-line` so a hint can list its cases on separate lines (the port-forward
+   field explains three). Spaces still collapse, so single-line hints written
+   before this are unaffected. */
+.field-hint { color: var(--text-dim); font-size: 0.78rem; margin-top: -4px; line-height: 1.5; white-space: pre-line; }
 .hint { color: var(--text-dim); font-size: 0.8rem; margin-top: 14px; }
 
 /* Settings grouped into labelled cards (外観 / ターミナル / 起動). */
@@ -1263,6 +1619,8 @@ label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 .popup-item .pi-name { font-size: 0.9rem; }
 .popup-item .pi-cmd { font-size: 0.75rem; color: var(--text-dim); font-family: Consolas, monospace; }
 .popup-sep { height: 1px; background: var(--border); margin: 5px 6px; }
+/* OS file drag hovering a pane: the drop target, before anything is sent. */
+.pane-body.drop-target { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .popup-label { color: var(--text-dim); font-size: 0.7rem; letter-spacing: 0.06em; padding: 2px 10px 4px; }
 .popup-empty { color: var(--text-dim); font-size: 0.85rem; padding: 6px 10px 8px; }
 
@@ -1300,88 +1658,84 @@ label.checkbox-row { flex-direction: row; align-items: center; gap: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 
-/* ---------------- SFTP: drop target, remote browser, transfer panel ---------------- */
-/* A pane body lights up while files are dragged over it, so it is obvious
- * which thread will receive the drop. */
-.pane-body.drop-target::after {
-  content: '';
-  position: absolute;
-  inset: 4px;
-  border: 2px dashed var(--accent);
-  border-radius: var(--radius);
-  background: color-mix(in srgb, var(--accent) 10%, transparent);
-  pointer-events: none;
-  z-index: 5;
+/* ---------- SFTP transfer progress ---------- */
+.xfer { display: flex; align-items: center; gap: 10px; }
+/* A bar with no `value` renders indeterminate, which is exactly what a
+   transfer whose total the server would not report should show — better than
+   a percentage computed from a zero denominator. */
+.xfer-bar { flex: 1; height: 8px; accent-color: var(--accent); }
+.xfer-text {
+  font-family: Consolas, monospace;
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+  /* Digits change every frame; a fixed slot stops the row jittering. */
+  min-width: 12ch;
+  text-align: right;
 }
 
-.rb-box { width: min(720px, 94vw); padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 10px; }
-.rb-box h3 { margin: 0 0 4px; font-size: 1.05rem; }
-.rb-pathbar { display: flex; gap: 6px; align-items: center; }
-.rb-pathbar input { flex: 1; font-family: Consolas, monospace; font-size: 0.85rem; }
+/* ---------- remote file browser (SFTP) ---------- */
+.rb { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.rb-head { display: flex; align-items: center; gap: 8px; }
+/* The path is the one thing here that can be arbitrarily long. It scrolls on
+   its own rather than widening the modal or wrapping the buttons away. */
+.rb-path {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-size: 0.85rem;
+  color: var(--accent);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+}
+.rb-head button { flex: none; }
 .rb-list {
-  height: min(360px, 55vh);
+  list-style: none;
+  /* A capped, scrolling pane: a home directory with hundreds of entries must
+     not push the modal's buttons off screen. */
+  max-height: 46vh;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  background: var(--bg-raised);
-  outline: none;
+  background: var(--bg);
+  scrollbar-gutter: stable;
 }
 .rb-row {
   display: grid;
-  grid-template-columns: 22px 1fr 90px 130px;
-  gap: 8px;
+  /* Name takes the slack; size and date keep fixed columns so the eye can
+     run down them instead of tracking ragged text. */
+  grid-template-columns: 18px 1fr auto auto;
   align-items: center;
-  padding: 5px 10px;
-  font-size: 0.86rem;
-  cursor: default;
-  user-select: none;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+  cursor: pointer;
 }
-.rb-row:hover { background: color-mix(in srgb, var(--accent) 8%, transparent); }
-.rb-row.selected { background: color-mix(in srgb, var(--accent) 18%, transparent); }
-.rb-row .rb-ico { display: inline-flex; color: var(--text-dim); }
-.rb-row .rb-ico .ico { width: 15px; height: 15px; }
+.rb-row:hover { background: var(--bg-raised); }
+.rb-row.dir .rb-name { color: var(--accent); font-weight: 600; }
+.rb-ico { display: inline-flex; color: var(--text-dim); }
 .rb-row.dir .rb-ico { color: var(--accent); }
-.rb-row .rb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rb-row .rb-size, .rb-row .rb-date { color: var(--text-dim); font-size: 0.78rem; text-align: right; font-variant-numeric: tabular-nums; }
-.rb-row.dir .rb-size { visibility: hidden; }
-.rb-empty { padding: 16px; color: var(--text-dim); font-size: 0.85rem; text-align: center; }
-.rb-box .modal-actions { margin-top: 2px; }
-
-#transfers {
-  position: fixed;
-  right: 18px;
-  bottom: 74px;
-  width: min(380px, calc(100vw - 36px));
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  z-index: 89;
+.rb-ico .ico { width: 15px; height: 15px; }
+.rb-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rb-size, .rb-date {
+  color: var(--text-dim);
+  font-family: Consolas, monospace;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
-#transfers.hidden { display: none; }
-.xfer {
-  background: var(--bg-raised);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px 10px 8px 12px;
-  box-shadow: var(--shadow-md);
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 2px 8px;
-  font-size: 0.82rem;
-}
-.xfer .xfer-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.xfer .xfer-name .ico { width: 13px; height: 13px; vertical-align: -2px; margin-right: 4px; color: var(--accent); }
-.xfer .xfer-cancel { grid-row: span 2; border: none; padding: 0 4px; color: var(--text-dim); }
-.xfer .xfer-cancel:hover { color: var(--danger); }
-.xfer .xfer-meta { color: var(--text-dim); font-size: 0.74rem; font-variant-numeric: tabular-nums; }
-.xfer .xfer-bar { grid-column: 1 / -1; height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; margin-top: 4px; }
-.xfer .xfer-bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width 0.15s linear; }
-.xfer.indeterminate .xfer-bar > i { width: 40%; animation: xfer-slide 1.1s ease-in-out infinite alternate; }
-.xfer.done .xfer-bar > i { width: 100%; }
-.xfer.error { border-color: var(--danger); }
-.xfer.error .xfer-bar > i { background: var(--danger); }
-.xfer.error .xfer-meta { color: var(--danger); }
-@keyframes xfer-slide { from { margin-left: 0; } to { margin-left: 60%; } }
+.rb-size { min-width: 8ch; text-align: right; }
+.rb-empty { padding: 10px; color: var(--text-dim); font-size: 0.85rem; }
+.rb-status { color: var(--text-dim); font-size: 0.78rem; }
+.rb-status.err { color: var(--danger); }
 
 /* ---------------- terminal color editor (settings) ---------------- */
 .term-colors {

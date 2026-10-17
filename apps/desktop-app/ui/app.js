@@ -8,7 +8,7 @@
  * Tauri invoke/events. */
 'use strict';
 
-const { invoke } = window.__TAURI__.core;
+const { invoke, Channel } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 const appWindow = window.__TAURI__.window.getCurrentWindow();
 
@@ -25,6 +25,22 @@ const state = {
   profiles: [],
   launchSets: [],      // { id, name, items: [{ profile_id, ssh_host_id, workflow_id }] }
   history: [],         // { command, kind, at } — cross-session command history
+  // Tasks found in the focused thread's working directory. Cached rather than
+  // fetched on demand so the palette, which builds its list synchronously, has
+  // something to offer; `thread` records whose cwd it describes so a stale
+  // cache is never shown against the wrong shell.
+  tasks: { thread: '', cwd: '', groups: [] },
+  // Whether the task pane is showing beside the panes, and how wide it is.
+  // Deliberately not persisted, like the thread bar's own toggle and the
+  // splitter's ratio: both are per-sitting choices about how much of the
+  // window the terminal gets. The width does survive closing and reopening
+  // the pane, so a size dragged once is not thrown away on the next toggle.
+  taskPane: false,
+  taskPaneWidth: 320,
+  // Built-in dev servers. `running` mirrors the backend (which owns the real
+  // sockets), `presets` is the saved-settings store, `log` is a capped ring of
+  // recent requests — it exists only to be looked at, so it is never persisted.
+  servers: { running: [], presets: [], log: [] },
   settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', term_theme: '', term_colors: {}, restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10 },
   renaming: null,      // thread id currently being renamed inline in the sidebar
   dist: null,          // { channel, installer, inAppUpdates, hasExternalManager }
@@ -57,6 +73,8 @@ const STRINGS = {
   'topbar.splitH': { ja: '左右分割', en: 'Split right' },
   'topbar.broadcast.title': { ja: '入力を表示中の全ペインへ送信 (Ctrl+Shift+B)', en: 'Send keystrokes to every visible pane (Ctrl+Shift+B)' },
   'topbar.broadcast': { ja: '一斉入力', en: 'Broadcast' },
+  'topbar.tasks.title': { ja: 'ターミナルの横にタスク一覧を開く — 作業ディレクトリの package.json・Cargo.toml・Makefile などから実行できるコマンドを読み取ります', en: 'Open the task list beside the terminal — the commands declared by package.json, Cargo.toml, Makefile and friends in the working directory' },
+  'topbar.tasks': { ja: 'タスク', en: 'Tasks' },
   'topbar.palette.title': { ja: 'コマンドパレット (Ctrl+Shift+P)', en: 'Command palette (Ctrl+Shift+P)' },
   'topbar.palette': { ja: 'パレット', en: 'Palette' },
   'topbar.help.title': { ja: 'キーボードショートカット (Ctrl+Shift+/)', en: 'Keyboard shortcuts (Ctrl+Shift+/)' },
@@ -70,6 +88,8 @@ const STRINGS = {
   'thread.emptyTitle': { ja: 'スレッドがありません', en: 'No threads' },
   'thread.emptyHint': { ja: '「＋ 新規」で作成できます。', en: 'Create one with “+ New”.' },
   'thread.activity.title': { ja: '新しい出力があります', en: 'New output' },
+  'thread.logging.title': { ja: 'セッションを記録中: {path}', en: 'Logging this session to {path}' },
+  'toast.logFailed': { ja: 'セッションログを開けませんでした (記録なしで続行): {e}', en: 'Could not open the session log (continuing without one): {e}' },
   'thread.unpin': { ja: '固定を解除', en: 'Unpin' },
   'thread.pin': { ja: '左ペインに固定', en: 'Pin to the left pane' },
   'thread.close.title': { ja: 'スレッドを終了', en: 'Close thread' },
@@ -99,6 +119,7 @@ const STRINGS = {
   'common.save': { ja: '保存', en: 'Save' },
   'common.cancel': { ja: 'キャンセル', en: 'Cancel' },
   'common.connect': { ja: '接続', en: 'Connect' },
+  'common.ok': { ja: 'OK', en: 'OK' },
   'common.launch': { ja: '起動', en: 'Launch' },
   'common.register': { ja: '登録', en: 'Add' },
   'common.add': { ja: '追加', en: 'Add' },
@@ -111,6 +132,66 @@ const STRINGS = {
 
   // Workflows panel
   'panel.workflows.title': { ja: 'ワークフロー', en: 'Workflows' },
+  'taskpane.title': { ja: 'タスク', en: 'Tasks' },
+  'tasks.refresh': { ja: '再読み込み', en: 'Refresh' },
+  'tasks.run': { ja: '実行', en: 'Run' },
+  'tasks.hint': { ja: 'クリックで実行 / Shift+クリックで入力欄に挿入', en: 'Click to run · Shift-click to insert without running' },
+  'tasks.cwd': { ja: '作業ディレクトリ: {dir}', en: 'Working directory: {dir}' },
+  'tab.servers': { ja: 'サーバー', en: 'Servers' },
+  'panel.servers.title': { ja: 'サーバー', en: 'Servers' },
+  'panel.servers.desc': { ja: '任意のディレクトリを組み込みサーバーで公開します。ファイルを変更するとブラウザが自動でリロードします。待ち受けは 127.0.0.1 のみで、外部からは接続できません。', en: 'Serves any directory over a built-in HTTP server, reloading the browser when a file changes. It listens on 127.0.0.1 only and is not reachable from other machines.' },
+  'srv.field.root': { ja: '公開するディレクトリ', en: 'Directory to serve' },
+  'srv.root.ph': { ja: '/path/to/site', en: '/path/to/site' },
+  'srv.noRoot': { ja: '公開するディレクトリを指定してください。', en: 'Pick a directory to serve.' },
+  'srv.browse': { ja: '選択', en: 'Browse' },
+  'srv.useCwd': { ja: '現在地', en: 'Current' },
+  'srv.useCwd.none': { ja: 'シェルの作業ディレクトリがまだ分かりません(シェル統合が必要です)。', en: 'The shell has not reported a working directory yet (shell integration required).' },
+  'srv.field.port': { ja: 'ポート', en: 'Port' },
+  'srv.field.hotReload': { ja: 'ホットリロード', en: 'Hot reload' },
+  'srv.field.spa': { ja: 'SPA モード', en: 'SPA mode' },
+  'srv.field.openBrowser': { ja: '起動後にブラウザを開く', en: 'Open the browser once it is up' },
+  'srv.start': { ja: '起動', en: 'Start' },
+  'srv.stop': { ja: '停止', en: 'Stop' },
+  'srv.open': { ja: '開く', en: 'Open' },
+  'srv.copy': { ja: 'URL をコピー', en: 'Copy URL' },
+  'srv.savePreset': { ja: 'この設定を保存', en: 'Save this setup' },
+  'srv.portHint': { ja: 'ポートに 0 を指定すると、空いているポートを自動で割り当てます。', en: 'Port 0 asks the OS for a free port.' },
+  'srv.runningTitle': { ja: '起動中', en: 'Running' },
+  'srv.presetsTitle': { ja: '保存した設定', en: 'Saved setups' },
+  'srv.logTitle': { ja: 'アクセスログ', en: 'Access log' },
+  'srv.logClear': { ja: '消去', en: 'Clear' },
+  'srv.empty.running': { ja: '起動中のサーバーはありません', en: 'No server is running' },
+  'srv.empty.running.hint': { ja: 'ディレクトリを選んで「起動」を押すと、ここに URL が出ます。', en: 'Pick a directory and press Start; the URL appears here.' },
+  'srv.empty.presets': { ja: '保存した設定はありません', en: 'No saved setups' },
+  'srv.empty.presets.hint': { ja: 'よく使う公開設定を保存しておくと、一覧から 1 クリックで起動できます。', en: 'Save a setup you use often and it starts from this list in one click.' },
+  'srv.empty.log': { ja: 'まだリクエストはありません。', en: 'No requests yet.' },
+  'srv.badge.hot': { ja: 'ホットリロード', en: 'Hot reload' },
+  'srv.badge.spa': { ja: 'SPA', en: 'SPA' },
+  'srv.uptime': { ja: '稼働 {t}', en: 'up {t}' },
+  'srv.started': { ja: '{url} で起動しました', en: 'Serving at {url}' },
+  'srv.stopped': { ja: 'サーバーを停止しました', en: 'Server stopped' },
+  'srv.reloaded': { ja: '{path} の変更でリロードしました', en: 'Reloaded: {path} changed' },
+  'srv.watchLimited': { ja: 'ディレクトリ数が多いため、監視は {n} 件までに制限しました。この範囲外のファイルを変更しても自動リロードされません。', en: 'The tree is large, so only {n} directories are watched. Changes outside that set will not reload the page.' },
+  'srv.watchFailed': { ja: 'ファイル監視を開始できませんでした。サーバーは動作していますが、自動リロードは無効です: {e}', en: 'Could not watch the directory, so auto reload is off (the server itself is running): {e}' },
+  'srv.copied': { ja: 'URL をコピーしました', en: 'URL copied' },
+  'srv.preset.editTitle.new': { ja: 'サーバー設定を保存', en: 'Save a server setup' },
+  'srv.preset.editTitle.edit': { ja: 'サーバー設定を編集', en: 'Edit server setup' },
+  'srv.preset.name': { ja: '名前', en: 'Name' },
+  'srv.preset.deleteConfirm': { ja: '「{name}」を削除しますか?', en: 'Delete "{name}"?' },
+  'srv.autoPort': { ja: '自動', en: 'auto' },
+  'palette.startServer': { ja: 'サーバー起動: {name}', en: 'Start server: {name}' },
+  'palette.stopServer': { ja: 'サーバー停止: {url}', en: 'Stop server: {url}' },
+  'tasks.empty.noThread.title': { ja: 'シェルがありません', en: 'No shell open' },
+  'tasks.empty.ssh.title': { ja: 'SSH は未対応', en: 'SSH not supported yet' },
+  'tasks.empty.noCwd.title': { ja: '作業ディレクトリが不明です', en: 'Working directory unknown' },
+  'tasks.empty.none.title': { ja: 'タスクはありません', en: 'No tasks here' },
+  'tasks.empty.noThread': { ja: 'シェルを開くと、その作業ディレクトリのタスクがここに並びます。', en: 'Open a shell and the tasks in its working directory will appear here.' },
+  'tasks.empty.ssh': { ja: 'SSH スレッドは未対応です。作業ディレクトリを知るにはリモート側のシェル統合が必要で、まだ入れていません。', en: 'SSH threads are not supported yet: knowing the working directory needs shell integration on the remote side, which is not in place.' },
+  'tasks.empty.noCwd': { ja: '作業ディレクトリをまだ受け取っていません。シェルでコマンドを 1 回実行すると分かります (設定のシェル統合が必要です)。', en: 'No working directory reported yet. Run one command in the shell and it will arrive — shell integration must be enabled in Settings.' },
+  'tasks.empty.none': { ja: 'このディレクトリには、読み取れるタスク定義がありませんでした。', en: 'No task definitions were found in this directory.' },
+  'palette.task': { ja: 'タスク: {name}', en: 'Task: {name}' },
+  'palette.tasksOpen': { ja: 'タスク一覧を開く', en: 'Open the task list' },
+  'palette.tasksClose': { ja: 'タスク一覧を閉じる', en: 'Close the task list' },
   'panel.workflows.desc': { ja: 'よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。', en: 'Turn frequently used commands into templates. Run them from search, shortcuts, or quick buttons.' },
   'panel.workflows.search.ph': { ja: 'コマンドを検索…', en: 'Search commands…' },
   'wf.quickButton': { ja: 'クイックボタン', en: 'Quick button' },
@@ -142,6 +223,7 @@ const STRINGS = {
   'wf.field.tags': { ja: 'タグ (カンマ区切り)', en: 'Tags (comma-separated)' },
   'wf.section.command': { ja: 'コマンド', en: 'Command' },
   'wf.field.template': { ja: 'テンプレート ( {{名前}} / {{名前:既定値}} / {{名前|選択肢1,選択肢2}} でプレースホルダ )', en: 'Template ( use {{name}} / {{name:default}} / {{name|choice1,choice2}} for placeholders )' },
+  'wf.builtins.hint': { ja: '組み込み変数 (入力なしで自動展開): {{$cwd}} 作業ディレクトリ · {{$host}} {{$user}} {{$port}} 接続先 (SSH) · {{$thread}} スレッド名 · {{$date}} {{$time}} {{$datetime}} {{$timestamp}} 日時 · {{$selection}} 選択テキスト · {{$clipboard}} クリップボード (参照時のみ読み取り)', en: 'Built-in variables (filled without prompting): {{$cwd}} working directory · {{$host}} {{$user}} {{$port}} SSH destination · {{$thread}} thread name · {{$date}} {{$time}} {{$datetime}} {{$timestamp}} · {{$selection}} selected text · {{$clipboard}} clipboard (read only when referenced)' },
   'wf.section.launch': { ja: '起動方法', en: 'How to run' },
   'wf.field.shortcut': { ja: 'ショートカット (任意・Ctrl / Alt / Meta 必須)', en: 'Shortcut (optional; requires Ctrl / Alt / Meta)' },
   'wf.field.showButton': { ja: 'シェル表示にクイックボタンを表示', en: 'Show a quick button in the shell view' },
@@ -159,7 +241,7 @@ const STRINGS = {
 
   // SSH hosts panel
   'panel.hosts.title': { ja: 'SSH 接続', en: 'SSH Connections' },
-  'panel.hosts.desc': { ja: '接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。', en: 'Register destinations. Connect from the new-thread menu or the list below. Passwords are never saved.' },
+  'panel.hosts.desc': { ja: '接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。グループにまとめると、一斉接続と一斉実行ができます。', en: 'Register destinations. Connect from the new-thread menu or the list below. Group hosts to connect to, or run a command on, all of them at once.' },
   'panel.hosts.search.ph': { ja: 'ホストを検索…', en: 'Search hosts…' },
   'host.loadFailed': { ja: 'SSH ホストの読み込みに失敗: {e}', en: 'Failed to load SSH hosts: {e}' },
   'auth.password': { ja: 'パスワード', en: 'Password' },
@@ -190,13 +272,97 @@ const STRINGS = {
   'host.field.username': { ja: 'ユーザー名', en: 'Username' },
   'host.section.auth': { ja: '認証', en: 'Authentication' },
   'host.section.forwards': { ja: 'ポートフォワード', en: 'Port forwarding' },
-  'host.field.forwards': { ja: 'ローカルフォワード (-L)(1 行に 1 件)', en: 'Local forwards (-L), one per line' },
-  'host.field.forwards.hint': { ja: '「ローカルポート:リモートホスト:リモートポート」形式(例: 8080:localhost:80)。接続時に 127.0.0.1 で自動開始し、切断で停止します。結果はターミナルに表示されます。', en: 'Format: local_port:remote_host:remote_port (e.g. 8080:localhost:80). Started on 127.0.0.1 when the session connects, stopped when it ends. Results are shown in the terminal.' },
+  'host.field.forwards': { ja: 'ポートフォワード(1 行に 1 件)', en: 'Port forwards, one per line' },
+  'host.field.forwards.hint': { ja: '接続時に自動開始し、切断で停止します。結果はターミナルに表示されます。\n・ローカル (-L): 「8080:localhost:80」(接頭辞なしでも -L)\n・リモート (-R): 「-R 9000:localhost:3000」— サーバー側のポート:こちらのホスト:こちらのポート\n・動的 (-D): 「-D 1080」— SOCKS5 プロキシ\nリスナーは必ずループバックに限定されます(-L / -D はこの PC の 127.0.0.1、-R はサーバーの 127.0.0.1)。', en: 'Started when the session connects, stopped when it ends. Results are shown in the terminal.\n• Local (-L): "8080:localhost:80" (the prefix may be omitted)\n• Remote (-R): "-R 9000:localhost:3000" — server_port:local_host:local_port\n• Dynamic (-D): "-D 1080" — a SOCKS5 proxy\nListeners are always bound to loopback (127.0.0.1 on this machine for -L/-D, on the server for -R).' },
   'host.section.jump': { ja: '多段接続(踏み台 / ProxyJump)', en: 'Multi-hop (jump hosts / ProxyJump)' },
   'host.field.jump': { ja: '経由する踏み台(接続順)', en: 'Jump hosts (in connection order)' },
   'host.field.jump.hint': { ja: '登録済みの SSH ホストを踏み台として上から順に経由し、このホストへ接続します(ssh -J 相当)。各踏み台は 127.0.0.1 上のトンネルを段階的に開いて接続され、ホスト鍵は段ごとに検証されます。認証情報は接続時に段ごとに入力し、保存されません。', en: 'Connect to this host through the selected saved hosts, top to bottom (like ssh -J). Each hop is reached over a 127.0.0.1 tunnel opened on the previous hop, and every hop\'s host key is verified. Credentials are entered per hop at connect time and never saved.' },
   'host.jump.add': { ja: '踏み台を追加', en: 'Add jump host' },
   'host.jump.pick': { ja: '(ホストを選択)', en: '(pick a host)' },
+  'host.section.label': { ja: 'ラベル', en: 'Labels' },
+  'host.section.log': { ja: 'セッションログ', en: 'Session log' },
+  'host.section.reconnect': { ja: '再接続', en: 'Reconnect' },
+  'host.field.autoReconnect': { ja: '接続が切れたら自動で再接続する', en: 'Reconnect automatically when the connection drops' },
+  'host.field.autoReconnect.hint': { ja: '回線断などでセッションが途中で切れたとき、同じスレッドのまま 2・4・8・16・30 秒の間隔で最大 5 回つなぎ直します。exit で終了したときと、アプリの起動時(セッション復元)は対象外です。保存済みの資格情報があれば使い、無ければ最初の再試行で 1 回だけ入力を求めます。ホスト鍵の問題があれば自動では続けません。', en: 'When the session drops mid-way (a network blip, say), the same thread reconnects at 2, 4, 8, 16 and 30 s, up to five times. A clean exit and app startup (session restore) are not covered. Saved credentials are reused; otherwise the first retry asks once. Any host-key problem stops the retries.' },
+  'reconnect.start': { ja: '[Senju] 接続が切れました。{sec} 秒後に再接続します ({n}/{max})', en: '[Senju] Connection lost. Reconnecting in {sec}s ({n}/{max})' },
+  'reconnect.retry': { ja: '[Senju] 再接続できませんでした: {msg} — {sec} 秒後に再試行 ({n}/{max})', en: '[Senju] Reconnect failed: {msg} — retrying in {sec}s ({n}/{max})' },
+  'reconnect.ok': { ja: '[Senju] 再接続しました', en: '[Senju] Reconnected' },
+  'reconnect.gaveUp': { ja: '[Senju] 再接続をあきらめました: {reason}', en: '[Senju] Gave up reconnecting: {reason}' },
+  'reconnect.reason.max': { ja: '{max} 回失敗', en: '{max} failures' },
+  'reconnect.reason.cancelled': { ja: '資格情報の入力がキャンセルされました', en: 'credential prompt cancelled' },
+  'reconnect.reason.hostKey': { ja: 'ホスト鍵に問題があります。SSH パネルから手動で接続してください', en: 'host key problem — connect manually from the SSH panel' },
+  'reconnect.reason.hostGone': { ja: 'ホストの登録が削除されています', en: 'the host record was deleted' },
+  'reconnect.badge.title': { ja: '再接続中 ({n}/{max})', en: 'Reconnecting ({n}/{max})' },
+  'toast.reconnected': { ja: '「{title}」に再接続しました', en: 'Reconnected “{title}”' },
+  'toast.reconnectGaveUp': { ja: '「{title}」の再接続をあきらめました: {reason}', en: 'Gave up reconnecting “{title}”: {reason}' },
+  'host.knownHosts': { ja: 'ホスト鍵', en: 'Host keys' },
+  'host.knownHosts.title': { ja: '記録済みのホスト鍵 (~/.ssh/known_hosts)', en: 'Recorded host keys (~/.ssh/known_hosts)' },
+  'host.knownHosts.hint': { ja: '接続時に照合するサーバー鍵の記録です。サーバーを再インストールした等で鍵が正当に変わったときは、その行を削除すると次回の接続が初回扱い (フィンガープリントの確認) になります。鍵が変わった理由に心当たりが無い場合は削除しないでください — 中間者攻撃の可能性があります。', en: 'The server keys checked on every connection. If a server\'s key changed legitimately (a reinstall, say), remove its line and the next connection is treated as a first contact, with a fingerprint prompt. Do not remove a line if you cannot explain why the key changed — that is what a man-in-the-middle looks like.' },
+  'host.knownHosts.empty': { ja: 'まだ記録されたホスト鍵はありません。', en: 'No host keys recorded yet.' },
+  'host.knownHosts.hashed': { ja: '(ハッシュ化されたホスト名)', en: '(hashed host name)' },
+  'host.knownHosts.unparsed': { ja: '(鍵を解析できません)', en: '(key does not parse)' },
+  'host.knownHosts.line': { ja: '{line} 行目', en: 'line {line}' },
+  'host.knownHosts.ok': { ja: '選択した行を削除', en: 'Remove selected' },
+  'host.knownHosts.none': { ja: '削除する行を選んでください', en: 'Pick the lines to remove' },
+  'host.knownHosts.removed': { ja: 'known_hosts から {n} 行削除しました', en: 'Removed {n} line(s) from known_hosts' },
+  'host.keygen': { ja: '鍵ペアを生成', en: 'Generate key pair' },
+  'host.keygen.title': { ja: 'SSH 鍵ペアを生成 (Ed25519)', en: 'Generate an SSH key pair (Ed25519)' },
+  'host.keygen.name': { ja: 'ファイル名 (~/.ssh/ に保存)', en: 'File name (saved under ~/.ssh/)' },
+  'host.keygen.comment': { ja: 'コメント (鍵の識別用・公開鍵の末尾に付きます)', en: 'Comment (labels the key; appended to the public key)' },
+  'host.keygen.passphrase': { ja: 'パスフレーズ (任意・保存されません)', en: 'Passphrase (optional; never stored)' },
+  'host.keygen.passphrase2': { ja: 'パスフレーズ (確認)', en: 'Passphrase (again)' },
+  'host.keygen.mismatch': { ja: 'パスフレーズが一致しません', en: 'The passphrases do not match' },
+  'host.keygen.hint': { ja: '秘密鍵は OpenSSH 形式で ~/.ssh/<名前> に権限 0600 で保存し、公開鍵は <名前>.pub に保存します。既存のファイルは上書きしません。', en: 'The private key is written in OpenSSH format to ~/.ssh/<name> with mode 0600, the public key to <name>.pub. Existing files are never overwritten.' },
+  'host.keygen.ok': { ja: '生成', en: 'Generate' },
+  'host.keygen.done.title': { ja: '鍵ペアを生成しました', en: 'Key pair generated' },
+  'host.keygen.done.paths': { ja: '秘密鍵: {priv}\n公開鍵: {pub}', en: 'Private key: {priv}\nPublic key: {pub}' },
+  'host.keygen.done.fp': { ja: 'フィンガープリント: {fp}', en: 'Fingerprint: {fp}' },
+  'host.keygen.done.pub': { ja: '公開鍵 (サーバーの ~/.ssh/authorized_keys へ追加する 1 行)', en: 'Public key (the line to add to the server\'s ~/.ssh/authorized_keys)' },
+  'host.keygen.done.copy': { ja: '公開鍵をコピー', en: 'Copy public key' },
+  'host.keygen.copied': { ja: '公開鍵をコピーしました', en: 'Public key copied' },
+  'host.keygen.done.next': { ja: '接続中のホストには、ホストカードの「公開鍵を配置」で authorized_keys へ追記できます。', en: 'For a host you are connected to, "Install public key" on its card appends it to authorized_keys.' },
+  'host.install': { ja: '公開鍵を配置', en: 'Install public key' },
+  'host.install.title': { ja: '{host} へ公開鍵を配置 (ssh-copy-id 相当)', en: 'Install a public key on {host} (like ssh-copy-id)' },
+  'host.install.hint': { ja: '接続中のセッションの SFTP で、リモートの ~/.ssh/authorized_keys に公開鍵を追記します (~/.ssh は 0700、authorized_keys は 0600 に揃えます)。同じ鍵が既にあれば何もしません。', en: 'Appends the key to the remote ~/.ssh/authorized_keys over the open session\'s SFTP (~/.ssh is set to 0700, the file to 0600). Nothing happens if the key is already there.' },
+  'host.install.key': { ja: '配置する公開鍵', en: 'Public key to install' },
+  'host.install.switch': { ja: '配置後、このホストの認証方式を「秘密鍵」に切り替える', en: 'Afterwards, switch this host\'s auth method to the private key' },
+  'host.install.ok': { ja: '配置', en: 'Install' },
+  'host.install.needSession': { ja: 'このホストへ接続中のスレッドがありません。パスワード等で一度接続してから実行してください。', en: 'No open session to this host. Connect once (with a password, say) and try again.' },
+  'host.install.noKeys': { ja: '~/.ssh に公開鍵 (.pub) がありません。先に「鍵ペアを生成」してください。', en: 'No public key (.pub) in ~/.ssh. Generate a key pair first.' },
+  'host.install.added': { ja: '{host} の authorized_keys へ公開鍵を追加しました', en: 'Added the public key to authorized_keys on {host}' },
+  'host.install.present': { ja: '{host} には同じ公開鍵が既にあります', en: '{host} already has that public key' },
+  'host.install.switched': { ja: '認証方式を秘密鍵 ({path}) に切り替えました', en: 'Auth method switched to the private key ({path})' },
+  'ssh.mismatch.title': { ja: 'ホスト鍵が記録と一致しません: {host}', en: 'Host key does not match the record: {host}' },
+  'ssh.mismatch.body': { ja: 'known_hosts の {line} 行目に記録された鍵と、サーバーが提示した鍵 ({keyType} {fingerprint}) が異なります。中間者攻撃の可能性があるため接続を中止しました。\n\nサーバーを再インストールした等、鍵が変わった理由に心当たりがある場合だけ、記録を削除して接続し直してください。次の接続は初回扱いになり、新しいフィンガープリントの確認が出ます。', en: 'The key the server presented ({keyType} {fingerprint}) differs from the one recorded on line {line} of known_hosts. The connection was aborted: this is what a man-in-the-middle looks like.\n\nOnly if you know why the key changed (the server was reinstalled, say), remove the record and reconnect. The next connection is then a first contact, with a prompt for the new fingerprint.' },
+  'ssh.mismatch.remove': { ja: '記録を削除して接続し直す', en: 'Remove the record and reconnect' },
+  'host.field.logSessions': { ja: 'このホストへのセッションを記録する', en: 'Log sessions to this host' },
+  'host.field.logSessions.hint': { ja: '接続するたびに、ターミナルに流れた内容を設定「セッションログ」のフォルダへ保存します。記録中のスレッドには一覧に ● が付きます。', en: 'Every session to this host is written to the folder set under Settings > Session logs. Threads being logged show a ● in the list.' },
+  'host.field.group': { ja: 'グループ (階層は / 区切り。例: Prod/Web)', en: 'Group (nest with /, e.g. Prod/Web)' },
+  'host.group.ph': { ja: '未入力 = 未分類', en: 'Blank = uncategorized' },
+  'host.field.tags': { ja: 'タグ (カンマ区切り)', en: 'Tags (comma-separated)' },
+  'host.field.color': { ja: '色ラベル', en: 'Color label' },
+  'host.field.color.hint': { ja: 'カードとスレッド一覧に色が付き、接続中はペインがこの色で縁取られます。本番機を赤にしておくと、打つ前に気づけます。', en: 'Colors the card and its thread rows, and frames the pane while connected — mark production red and you notice before you type.' },
+  'host.color.none': { ja: 'なし', en: 'None' },
+  'host.color.red': { ja: '赤', en: 'Red' },
+  'host.color.orange': { ja: '橙', en: 'Orange' },
+  'host.color.yellow': { ja: '黄', en: 'Yellow' },
+  'host.color.green': { ja: '緑', en: 'Green' },
+  'host.color.blue': { ja: '青', en: 'Blue' },
+  'host.color.purple': { ja: '紫', en: 'Purple' },
+  'host.group.connectAll': { ja: 'すべて接続', en: 'Connect all' },
+  'host.group.connectAll.title': { ja: 'このグループの未接続ホストへ順に接続します', en: 'Connect every host in this group that is not open yet, one after another' },
+  'host.group.runAll': { ja: '一斉実行…', en: 'Run on all…' },
+  'host.group.runAll.title': { ja: 'このグループの接続中ホストへ同じコマンドを送ります', en: 'Send one command to every connected host in this group' },
+  'host.connectAll.allOpen': { ja: '{group} のホストはすべて接続済みです', en: 'Every host in {group} is already connected' },
+  'host.connectAll.skipped': { ja: '接続済みの {n} 件はスキップします', en: 'Skipping {n} already connected' },
+  'host.run.title': { ja: '{group} へ一斉実行', en: 'Run on {group}' },
+  'host.run.command': { ja: 'コマンド', en: 'Command' },
+  'host.run.targets': { ja: '送信先 (接続中のホストのみ)', en: 'Targets (connected hosts only)' },
+  'host.run.notConnected': { ja: '未接続 — 送られません', en: 'not connected — will not receive it' },
+  'host.run.none': { ja: '{group} に接続中のホストがありません。先に「すべて接続」してください', en: 'No connected host in {group}. Use “Connect all” first' },
+  'host.run.ok': { ja: '実行', en: 'Run' },
+  'host.run.noneChecked': { ja: '送信先を 1 つ以上選んでください', en: 'Pick at least one target' },
+  'host.run.sent': { ja: '{n} 件のホストへ送信しました', en: 'Sent to {n} host(s)' },
   'ssh.jump.missing': { ja: '踏み台に指定されたホストが見つかりません。設定を確認してください', en: 'A configured jump host no longer exists — check the host settings.' },
   'ssh.jump.selfRef': { ja: '踏み台に接続先自身は指定できません', en: 'A host cannot be its own jump host.' },
   'secret.hop': { ja: '{role}: {name}', en: '{role}: {name}' },
@@ -285,6 +451,38 @@ const STRINGS = {
   'menu.launchSets': { ja: '起動セット', en: 'Launch Sets' },
   'menu.manageProfiles': { ja: '⚙ プロファイルを管理…', en: '⚙ Manage profiles…' },
   'menu.runWorkflow': { ja: 'ワークフローを実行', en: 'Run workflow' },
+  'host.field.saveCreds': { ja: 'パスワード / パスフレーズを保存する', en: 'Save the password / passphrase' },
+  'host.field.saveCreds.hint': { ja: '既定はオフです。オンにすると、接続が成功したときだけ入力した内容を設定ディレクトリの ssh-hosts.json に平文で保存し、次回以降は入力を省略します。設定の書き出しには含まれないため、書き出したファイルを共有しても漏れませんが、この PC の設定ディレクトリを読める人は読めます。オフに戻す、またはホストを削除すると保存済みの内容も消えます。', en: 'Off by default. When on, what you type is saved — only after the connection succeeds — in plain text in ssh-hosts.json in the config directory, and reused next time. Settings export leaves it out, so a shared export never carries it, but anyone who can read this machine\u0027s config directory can read it. Turning this off, or deleting the host, removes what was saved.' },
+  'secret.saved': { ja: '保存済みの認証情報を使用します', en: 'Using saved credentials' },
+  'settings.aiApiKey.savedPlaceholder': { ja: '保存済み(変更する場合のみ入力)', en: 'Saved — enter a new key only to replace it' },
+  'settings.aiApiKey.clear': { ja: '保存済みのキーを削除する', en: 'Delete the saved key' },
+  'sftp.upload.title': { ja: 'ファイルをアップロード (SFTP)', en: 'Upload a file (SFTP)' },
+  'sftp.download.title': { ja: 'ファイルをダウンロード (SFTP)', en: 'Download a file (SFTP)' },
+  'sftp.remotePath': { ja: 'リモートのパス', en: 'Remote path' },
+  'sftp.remotePath.hint': { ja: '`~` と相対パスはサーバー側で解決されます(接続時のホームが基準)。既存のファイルは上書きされます。', en: '`~` and relative paths are resolved on the server (against the login home). An existing file is overwritten.' },
+  'sftp.cancel': { ja: '中止', en: 'Cancel transfer' },
+  'sftp.done': { ja: '転送しました({bytes}) — {path}', en: 'Transferred {bytes} — {path}' },
+  'sftp.needSsh': { ja: 'ファイル転送は SSH スレッドでのみ利用できます', en: 'File transfer is only available on an SSH thread' },
+  'menu.transfer': { ja: 'ファイル転送 (SFTP)', en: 'File transfer (SFTP)' },
+  'menu.upload': { ja: 'ファイルをアップロード…', en: 'Upload files…' },
+  'menu.uploadDir': { ja: 'フォルダをアップロード…', en: 'Upload a folder…' },
+  'menu.download': { ja: 'リモートファイルを開く…', en: 'Browse remote files…' },
+  'sftp.drop.title': { ja: 'アップロード先', en: 'Upload destination' },
+  'sftp.drop.files': { ja: '{n} 件を転送します: {list}', en: 'Transferring {n} item(s): {list}' },
+  'sftp.drop.dir': { ja: 'リモートのディレクトリ', en: 'Remote directory' },
+  'sftp.drop.hint': { ja: 'フォルダはその名前でリモートに再作成されます(既存のディレクトリは再利用)。同名のファイルは上書きされます。`~` と相対パスはサーバー側で解決されます。', en: 'Folders are recreated under their own name (existing directories are reused). Files with the same name are overwritten. `~` and relative paths are resolved on the server.' },
+  'sftp.drop.item': { ja: '{name}  →  {dir}', en: '{name}  →  {dir}' },
+  'sftp.browser.title': { ja: 'リモートファイル (SFTP)', en: 'Remote files (SFTP)' },
+  'sftp.browser.up': { ja: '↑ 上へ', en: '↑ Up' },
+  'sftp.browser.upload': { ja: 'ここにアップロード', en: 'Upload here' },
+  'sftp.browser.loading': { ja: '読み込み中…', en: 'Loading…' },
+  'sftp.browser.empty': { ja: '(空のディレクトリ)', en: '(empty directory)' },
+  'sftp.browser.count': { ja: '{n} 件 — ディレクトリをクリックで移動、ファイルをクリックでダウンロード', en: '{n} items — click a directory to enter it, a file to download it' },
+  'common.close': { ja: '閉じる', en: 'Close' },
+  'path.copy': { ja: 'パスをコピー', en: 'Copy path' },
+  'path.copied': { ja: 'パスをコピーしました', en: 'Path copied' },
+  'path.reveal': { ja: 'フォルダーで表示', en: 'Show in file manager' },
+  'path.remoteNote': { ja: 'リモートのパスです — この PC では開けません', en: 'Remote path — cannot be opened on this machine' },
   'menu.workflowsEmpty': { ja: 'ワークフローが未登録です', en: 'No workflows registered' },
   'menu.manageWorkflows': { ja: '⚙ ワークフローを管理…', en: '⚙ Manage workflows…' },
   'menu.registerWorkflow': { ja: '＋ ワークフローを登録…', en: '+ Add workflow…' },
@@ -299,6 +497,11 @@ const STRINGS = {
   'palette.foot.insert': { ja: '挿入', en: 'Insert' },
   'palette.foot.close': { ja: '閉じる', en: 'Close' },
   'palette.foot.filters': { ja: '履歴の絞り込み: @ホスト  !failed / !ok  #ssh / #local', en: 'History filters: @host  !failed / !ok  #ssh / #local' },
+  'palette.foot.save': { ja: 'ワークフローに保存', en: 'Save as workflow' },
+  'block.save.title': { ja: 'このコマンドをワークフローとして保存', en: 'Save this command as a workflow' },
+  'ctx.saveWorkflow': { ja: 'ワークフローとして保存: {cmd}', en: 'Save as workflow: {cmd}' },
+  'wf.param.remember': { ja: '入力した値を記憶する (次回の既定値になります)', en: 'Remember these values (used as next time\'s defaults)' },
+  'wf.param.remember.hint': { ja: '値はこの PC の設定ディレクトリに保存され、設定の書き出しには含まれません。チェックを外して実行すると記憶を消します。', en: 'Stored in this machine\'s config directory and left out of settings export. Run with the box unticked to forget them.' },
   'palette.newLocalThread': { ja: '新しいローカルスレッド', en: 'New local thread' },
   'palette.splitPane': { ja: 'ペインを上下分割', en: 'Split pane vertically' },
   'palette.splitPaneH': { ja: 'ペインを左右分割', en: 'Split pane horizontally' },
@@ -328,6 +531,14 @@ const STRINGS = {
   'update.openManager.ok': { ja: '開く', en: 'Open' },
   'settings.autoUpdate.managed': { ja: 'このビルドのアップデートは {owner} が管理するため、アプリ内での自動アップデートは行いません。', en: 'Updates for this build are managed by {owner}, so the app does not update itself.' },
   'settings.autoUpdate': { ja: '起動時にアップデートを確認', en: 'Check for updates on startup' },
+  'settings.group.sessionLog': { ja: 'セッションログ', en: 'Session logs' },
+  'settings.sessionLog.hint': { ja: 'ターミナルに流れた内容をファイルに残します (作業のエビデンス用)。SSH はホスト編集画面で「セッションを記録する」をオンにしたホストだけが対象です。日付ごとのフォルダに「ホスト名_時刻.log」として保存します。', en: 'Keeps what went through the terminal in a file, as a record of the work. SSH hosts are logged only when "Log sessions" is on in the host editor. Files go into a folder per day as "<host>_<time>.log".' },
+  'settings.sessionLogDir': { ja: '保存先フォルダ (空欄 = 既定)', en: 'Folder (blank = default)' },
+  'settings.sessionLog.open': { ja: 'フォルダを開く', en: 'Open folder' },
+  'settings.sessionLog.openFailed': { ja: 'フォルダを開けませんでした: {e}', en: 'Could not open the folder: {e}' },
+  'settings.sessionLogPlain': { ja: 'エスケープシーケンスを除き、読めるテキストとして保存', en: 'Strip escape sequences and save readable text' },
+  'settings.sessionLogPlain.hint': { ja: 'オフにすると色や画面制御を含む生のバイト列をそのまま保存します (cat で端末に流すと再現できます)。', en: 'Off keeps the raw byte stream, colors and cursor control included (cat it to a terminal to replay).' },
+  'settings.sessionLogLocal': { ja: 'ローカルシェルも記録する', en: 'Log local shells too' },
   'settings.autoUpdate.hint': { ja: 'GitHub Releases の署名付きアップデートを起動時に確認します。新しいバージョンがある時だけ通知します(適用するかは毎回確認)。', en: 'Checks GitHub Releases for a signed update at startup. Notifies only when a new version exists; installing always asks first.' },
   'ai.modal.title': { ja: 'AI コマンド支援', en: 'AI command assist' },
   'ai.privacyNote': { ja: '送信されるのはこの質問と OS/シェル名のみです。ターミナルの内容・履歴は送信されません。', en: 'Only this question and your OS/shell name are sent. Terminal contents and history are never sent.' },
@@ -345,6 +556,18 @@ const STRINGS = {
   'ai.result.insertNote': { ja: '挿入では実行されません。ターミナルで内容を確認して Enter で実行してください。', en: 'Insert does not run the command. Review it in the terminal and press Enter to run.' },
   'settings.group.ai': { ja: 'AI コマンド支援', en: 'AI command assist' },
   'settings.aiApiKey': { ja: 'Anthropic API キー(空欄 = 無効)', en: 'Anthropic API key (empty = disabled)' },
+  'settings.group.backup': { ja: '設定の書き出し / 取り込み', en: 'Export / import settings' },
+  'settings.export': { ja: '書き出し', en: 'Export' },
+  'settings.import': { ja: '取り込み', en: 'Import' },
+  'settings.backup.hint': { ja: '設定・ワークフロー・SSH ホスト・端末プロファイル・起動セット・サーバー設定を 1 つの JSON にまとめます。別のマシンへ移すとき用です。取り込みは id 単位の上書きなので、同じファイルを 2 回取り込んでも増えません。', en: 'Bundles settings, workflows, SSH hosts, terminal profiles, launch sets and server presets into one JSON file, for moving to another machine. Import upserts by id, so importing the same file twice adds nothing.' },
+  'settings.backup.secrets': { ja: 'API キーと SSH の保存済みパスワード / パスフレーズは書き出しに含まれません。移行先では入力し直しになりますが、そのぶん書き出したファイルを共有・バックアップしても資格情報は漏れません。', en: 'The API key and any saved SSH passwords / passphrases are left out. You re-enter them on the other machine — and in exchange the exported file can be shared or backed up without carrying credentials.' },
+  'settings.export.done': { ja: '設定を書き出しました', en: 'Settings exported' },
+  'settings.export.failed': { ja: '設定を書き出せませんでした: {e}', en: 'Could not export settings: {e}' },
+  'settings.import.confirm': { ja: 'このファイルを取り込みますか?', en: 'Import this file?' },
+  'settings.import.summary': { ja: 'ワークフロー {workflows} / SSH ホスト {sshHosts} / プロファイル {profiles} / 起動セット {launchSets} / サーバー設定 {devServers}', en: 'Workflows {workflows} · SSH hosts {sshHosts} · profiles {profiles} · launch sets {launchSets} · server presets {devServers}' },
+  'settings.import.settingsToo': { ja: 'アプリ設定(外観・ターミナルなど)も上書きされます。', en: 'App settings (appearance, terminal, …) will be overwritten too.' },
+  'settings.import.done': { ja: '設定を取り込みました', en: 'Settings imported' },
+  'settings.import.failed': { ja: '設定を取り込めませんでした: {e}', en: 'Could not import settings: {e}' },
   'settings.aiApiKey.hint': { ja: 'あなた自身の API キーで Anthropic API を直接呼び出します。送信されるのは入力した質問と OS/シェル名のみで、ターミナルの内容や履歴は送信されません。キーはローカルの設定ファイルに保存されます。', en: 'Calls the Anthropic API directly with your own key. Only your typed question and OS/shell name are sent — never terminal contents or history. The key is stored in the local settings file.' },
   'settings.aiModel': { ja: 'モデル(空欄 = claude-opus-5)', en: 'Model (empty = claude-opus-5)' },
   'palette.registerWorkflow': { ja: 'ワークフローを登録', en: 'Add workflow' },
@@ -409,12 +632,6 @@ const STRINGS = {
   'settings.gpuRendering.hint': { ja: '描画を GPU で高速化します。表示が乱れる環境ではオフにしてください(変更は開いているスレッドにも即時適用)。', en: 'Accelerates rendering with the GPU. Turn it off if the display glitches on your machine (applies immediately to open threads).' },
   'settings.shellIntegration': { ja: 'シェル統合を自動で有効化(コマンドブロック用)', en: 'Auto-enable shell integration (for command blocks)' },
   'settings.shellIntegration.hint': { ja: 'bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。', en: 'Injects OSC 133 prompt hooks into bash / zsh / fish at launch. Your rc files are not modified.' },
-  'settings.group.startup': { ja: '起動', en: 'Startup' },
-  'settings.defaultProfile': { ja: '既定のターミナルプロファイル', en: 'Default terminal profile' },
-  'settings.save': { ja: '保存', en: 'Save' },
-  'settings.dataHint': { ja: '設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。', en: 'Settings and saved data are stored as JSON files in the app config directory.' },
-  'settings.loadFailed': { ja: '設定の読み込みに失敗、既定値を使用します: {e}', en: 'Failed to load settings; using defaults: {e}' },
-  'settings.saved': { ja: '設定を保存しました', en: 'Settings saved' },
   'settings.notifyLong': { ja: '長時間コマンドの完了をデスクトップ通知', en: 'Desktop notification when a long command finishes' },
   'settings.notifyLong.hint': { ja: '非表示のスレッド、またはウィンドウが非アクティブな時にコマンドが終わると OS の通知を出します(要シェル統合)。表示中のスレッドを見ている時は通知しません。', en: 'Sends an OS notification when a command finishes in a hidden thread or while the window is unfocused (needs shell integration). Watching the thread in the foreground never notifies.' },
   'settings.notifyThreshold': { ja: '通知する最短実行時間(秒)', en: 'Minimum duration to notify (seconds)' },
@@ -422,34 +639,17 @@ const STRINGS = {
   'notify.done.err': { ja: '✗ コマンド失敗 (exit {exit}) — {thread}', en: '✗ Command failed (exit {exit}) — {thread}' },
   'notify.done.body': { ja: '{command}\n所要時間 {elapsed}', en: '{command}\nTook {elapsed}' },
   'notify.command.unknown': { ja: '(コマンド)', en: '(command)' },
+  'settings.group.startup': { ja: '起動', en: 'Startup' },
+  'settings.defaultProfile': { ja: '既定のターミナルプロファイル', en: 'Default terminal profile' },
+  'settings.save': { ja: '保存', en: 'Save' },
+  'settings.dataHint': { ja: '設定・登録データは JSON ファイルとしてアプリ設定ディレクトリに保存されます。', en: 'Settings and saved data are stored as JSON files in the app config directory.' },
+  'settings.loadFailed': { ja: '設定の読み込みに失敗、既定値を使用します: {e}', en: 'Failed to load settings; using defaults: {e}' },
+  'settings.saved': { ja: '設定を保存しました', en: 'Settings saved' },
 
   // Clipboard / quit / paste confirmations
   'confirm.sessionsRunning': { ja: '{count} 個のセッションが実行中です。終了しますか?', en: '{count} sessions are running. Quit?' },
   'confirm.quit': { ja: '終了', en: 'Quit' },
   'toast.noActiveTerm': { ja: 'アクティブなターミナルがありません', en: 'No active terminal' },
-  'menu.transfer': { ja: 'ファイル転送 (SFTP)', en: 'File transfer (SFTP)' },
-  'menu.upload': { ja: 'ファイルをアップロード…', en: 'Upload files…' },
-  'menu.download': { ja: 'ファイルをダウンロード…', en: 'Download a file…' },
-  'sftp.upload.title': { ja: 'アップロード先', en: 'Upload destination' },
-  'sftp.upload.ok': { ja: 'アップロード', en: 'Upload' },
-  'sftp.upload.dir': { ja: 'リモートのディレクトリ', en: 'Remote directory' },
-  'sftp.upload.files': { ja: '{n} 件を転送します: {list}', en: 'Transferring {n} item(s): {list}' },
-  'sftp.upload.hint': { ja: 'フォルダはその名前でリモートに再作成されます。同名のファイルは上書きされます。', en: 'Folders are recreated under their own name. Files with the same name are overwritten.' },
-  'sftp.upload.done': { ja: 'アップロード完了: {name}', en: 'Uploaded: {name}' },
-  'sftp.download.done': { ja: 'ダウンロード完了: {name}', en: 'Downloaded: {name}' },
-  'sftp.cancelled': { ja: 'キャンセルしました(途中まで書き込まれたファイルが残る場合があります)', en: 'Cancelled (a partially written file may remain)' },
-  'sftp.failed': { ja: '転送に失敗しました: {e}', en: 'Transfer failed: {e}' },
-  'sftp.notSsh': { ja: 'ファイル転送は SSH スレッドでのみ使えます', en: 'File transfer is only available on SSH threads' },
-  'sftp.browser.title': { ja: 'リモートのファイルをダウンロード', en: 'Download a remote file' },
-  'sftp.browser.up': { ja: '親ディレクトリへ', en: 'Parent directory' },
-  'sftp.browser.go': { ja: '移動', en: 'Go' },
-  'sftp.browser.download': { ja: 'ダウンロード…', en: 'Download…' },
-  'sftp.browser.loading': { ja: '読み込み中…', en: 'Loading…' },
-  'sftp.browser.empty': { ja: '(空のディレクトリ)', en: '(empty directory)' },
-  'sftp.browser.count': { ja: '{dirs} フォルダ / {files} ファイル — ダブルクリックで開く / ダウンロード', en: '{dirs} folders / {files} files — double-click to open / download' },
-  'xfer.cancel': { ja: 'キャンセル', en: 'Cancel' },
-  'xfer.running': { ja: '{done} / {total}', en: '{done} / {total}' },
-  'xfer.done': { ja: '完了', en: 'Done' },
   'toast.copied': { ja: 'コピーしました', en: 'Copied' },
   'toast.copyFailed': { ja: 'コピーに失敗: {e}', en: 'Failed to copy: {e}' },
   'toast.pasteFailed': { ja: '貼り付けに失敗: {e}', en: 'Failed to paste: {e}' },
@@ -529,6 +729,8 @@ function applyLanguage() {
   renderHosts();
   renderProfiles();
   renderLaunchSets();
+  renderTasks();
+  renderServers();
   renderProfileSettingOptions();
   applyAutoUpdateAvailability();
   // Terminal color scheme controls carry translated labels; rebuild them
@@ -813,7 +1015,19 @@ function parseHostKeyError(msg) {
 async function newSshThread(host) {
   const chain = resolveChainHosts(host);
   if (chain.error) { toast(chain.error, true); return; }
-  const secretsByHost = await promptChainSecrets(chain.hosts);
+  // Hops that already have saved credentials are not asked for. Only the
+  // *existence* of each is reported here — the backend fills the secrets in
+  // itself, so a saved password never enters this page.
+  let saved = {};
+  const optedIn = chain.hosts.filter((h) => h.save_credentials).map((h) => h.id);
+  if (optedIn.length) {
+    try {
+      saved = await invoke('ssh_saved_credentials', { hostIds: optedIn });
+    } catch (e) {
+      saved = {}; // if we cannot tell, ask — the same as having none saved
+    }
+  }
+  const secretsByHost = await promptChainSecrets(chain.hosts, saved);
   if (secretsByHost === null) return; // cancelled
   const { cols, rows } = measureCells();
   await connectSsh(host, chain.hosts, secretsByHost, cols, rows, {});
@@ -850,9 +1064,25 @@ async function connectSsh(target, chainHosts, secretsByHost, cols, rows, fingerp
   } catch (e) {
     const err = parseHostKeyError(String(e));
     if (err && (err.tag === 'FINGERPRINT_MISMATCH' || err.tag === 'HOST_KEY_MISMATCH')) {
-      // Fail closed: do NOT retry.
+      // Fail closed: no automatic retry. A HOST_KEY_MISMATCH names the
+      // known_hosts line it clashed with, so the one recovery that is
+      // legitimate — the server's key really did change — is offered as an
+      // explicit, explained step: remove that record, then reconnect as a
+      // first contact (which runs the TOFU prompt with the new fingerprint).
       const hop = chainHosts.find((h) => h.id === err.hostId);
       const label = (hop && (hop.name || hop.host)) || err.host;
+      if (err.tag === 'HOST_KEY_MISMATCH' && /^\d+$/.test(err.line)
+          && await confirmRemoveHostKey(label, err)) {
+        try {
+          await invoke('remove_known_hosts', { lines: [parseInt(err.line, 10)] });
+        } catch (e2) {
+          toast(String(e2), true);
+          return;
+        }
+        // Fresh fingerprints map: nothing from the failed attempt carries over.
+        await connectSsh(target, chainHosts, secretsByHost, cols, rows, {});
+        return;
+      }
       toast(tr('ssh.mitmAborted', { host: label }), true);
       return;
     }
@@ -870,6 +1100,20 @@ async function connectSsh(target, chainHosts, secretsByHost, cols, rows, fingerp
     }
     toast(tr('toast.sshFailed', { msg: String(e) }), true);
   }
+}
+
+/** Asks whether to drop the known_hosts record a connection just clashed
+ * with. Cancel is the safe answer and the wording says why. */
+function confirmRemoveHostKey(host, err) {
+  return new Promise((resolve) => {
+    openModal({
+      title: tr('ssh.mismatch.title', { host }),
+      okLabel: tr('ssh.mismatch.remove'),
+      body: [fieldNote(tr('ssh.mismatch.body', { line: err.line, keyType: err.keyType, fingerprint: err.fingerprint }))],
+      onOk: () => resolve(true),
+      onCancel: () => resolve(false),
+    });
+  });
 }
 
 /** TOFU prompt shown the first time we connect to a host whose key isn't yet
@@ -901,6 +1145,9 @@ function shortenExeTitle(title) {
 }
 
 function createThread(info, paneIdx, origin = {}) {
+  // Logging was asked for but the file could not be opened: the session is
+  // fine, the record is not, and that is worth one line.
+  if (info.log_error) toast(tr('toast.logFailed', { e: info.log_error }), true);
   const hostEl = document.createElement('div');
   hostEl.className = 'term-host';
   $('#thread-parking').appendChild(hostEl);
@@ -922,6 +1169,9 @@ function createThread(info, paneIdx, origin = {}) {
   term.loadAddon(new WebLinksAddon.WebLinksAddon((_ev, uri) => {
     if (/^https?:\/\//i.test(uri)) invoke('open_external', { url: uri }).catch(() => {});
   }));
+  // Absolute filesystem paths get their own links, whose click opens a menu
+  // (copy / reveal) instead of acting — see `registerPathLinks`.
+  registerPathLinks(term, info.kind === 'ssh');
   const search = new SearchAddon.SearchAddon();
   term.loadAddon(search);
   // App-level shortcuts must win over the shell (Ctrl+K etc. stay usable
@@ -973,7 +1223,8 @@ function createThread(info, paneIdx, origin = {}) {
       const b = openBlock();
       if (b) {
         b.sawOutput = true;
-        // Wall-clock start of the command, for the completion notification.
+        // Wall-clock start of the command, for the completion notification
+        // and the history's duration.
         if (!b.startedAt) b.startedAt = Date.now();
         // First byte of output/command-echo: the fold boundary (command line
         // itself stays visible; only what follows is ever collapsed).
@@ -988,25 +1239,36 @@ function createThread(info, paneIdx, origin = {}) {
         if (b.sawOutput && !b.marker.isDisposed) {
           const exit = arg !== undefined ? parseInt(arg, 10) : NaN;
           renderBlockToolbar(term, blocks, b, exit);
-          recordBlockCommand(term, b, thread, exit);
-          maybeNotifyBlockDone(info.id, term, b, exit);
+          // The thread object is built after the handlers (see the OSC 7
+          // note below), so a prompt replayed during setup has none yet —
+          // the command is still recorded, just without a host label.
+          recordBlockCommand(term, b, threadById(sessionId), info.kind, exit);
+          maybeNotifyBlockDone(sessionId, term, b, exit);
         }
       }
     }
     return true;
   });
 
-  // Declared ahead of the OSC 7 handler below, which closes over it; assigned
-  // once the terminal is wired up (xterm parses asynchronously, and the
-  // handler guards against a not-yet-built thread anyway).
-  let thread;
-  // OSC 7 (`\e]7;file://host/path\a`) — shells that emit it (many zsh/fish
-  // setups, or a manual PROMPT_COMMAND) tell us the working directory. On
-  // SSH threads it becomes the default upload destination for dropped files.
-  term.parser.registerOscHandler(7, (data) => {
-    const m = /^file:\/\/[^/]*(\/.*)$/.exec(data);
-    if (m && thread) {
-      try { thread.remoteCwd = decodeURIComponent(m[1]); } catch { thread.remoteCwd = m[1]; }
+  // OSC 7 (`\e]7;file://host/path\a`) is how the shell reports its working
+  // directory after every prompt. The task panel needs it to know which
+  // manifests to scan. Registered here rather than reading the raw PTY chunks
+  // because xterm's parser reassembles sequences split across reads.
+  //
+  // `cwd` is a plain local instead of a `thread.cwd` write because the thread
+  // object is built below, *after* drainPreCreate() — a replayed prompt would
+  // otherwise hit the temporal dead zone. The final value is folded into the
+  // literal, and later reports go through threadById().
+  let cwd = '';
+  term.parser.registerOscHandler(7, (payload) => {
+    const dir = parseOsc7(payload);
+    if (dir && dir !== cwd) {
+      cwd = dir;
+      const t = threadById(sessionId);
+      if (t) {
+        t.cwd = dir;
+        scheduleTaskRefresh();
+      }
     }
     return true;
   });
@@ -1020,26 +1282,41 @@ function createThread(info, paneIdx, origin = {}) {
   // It only applies to input typed in a *visible* pane — background threads
   // keep their input private — and panes never show the same thread twice
   // (assignThread swaps), so the Set is just belt-and-braces dedupe.
+  // The backend session behind this terminal. A `let`, because an SSH thread
+  // that reconnects keeps its terminal and gets a *new* session: everything
+  // below that names the session goes through this binding, not info.id, so
+  // keystrokes and resizes follow the reconnect instead of going to a session
+  // that no longer exists.
+  let sessionId = info.id;
   term.onData((data) => {
+    // Between a drop and the reconnect there is nothing to type into.
+    if (threadById(sessionId)?.reconnect) return;
     if (state.broadcast && state.panes.length >= 2
-        && state.panes.some((p) => p.threadId === info.id)) {
+        && state.panes.some((p) => p.threadId === sessionId)) {
       for (const id of new Set(state.panes.map((p) => p.threadId).filter(Boolean))) {
         invoke('session_write', { id, data }).catch(() => {});
       }
     } else {
-      invoke('session_write', { id: info.id, data }).catch(() => {});
+      invoke('session_write', { id: sessionId, data }).catch(() => {});
     }
   });
   term.onResize(({ cols, rows }) =>
-    invoke('session_resize', { id: info.id, cols, rows }).catch(() => {}));
+    invoke('session_resize', { id: sessionId, cols, rows }).catch(() => {}));
 
-  thread = {
+  const thread = {
     id: info.id, title: info.title, kind: info.kind, pinned: false,
     term, fit, hostEl, search, customTitle: false, activity: false, blocks,
-    remoteCwd: '', // last OSC 7 working directory (SSH upload default)
     gl: null, // WebGL addon handle when GPU rendering is active
+    // Last directory reported over OSC 7 (local shells with integration on).
+    // Empty means "unknown" — the task panel says so rather than guessing.
+    cwd,
     // What this thread was launched from, for the session snapshot.
     profileId: origin.profileId || '', sshHostId: origin.sshHostId || '',
+    logPath: info.log_path || '',
+    // Points this terminal at a new backend session (see sessionId above).
+    rebind(newId) { sessionId = newId; this.id = newId; },
+    // In-progress automatic reconnect, or null (see scheduleReconnect).
+    reconnect: null,
   };
   // OSC-2 title changes (`\e]0;...\a`) rename the thread automatically,
   // unless the user gave it a custom name (task 2).
@@ -1050,9 +1327,9 @@ function createThread(info, paneIdx, origin = {}) {
   });
   state.threads.push(thread);
   assignThread(paneIdx, info.id);
-  // GPU rendering, loaded after assignThread() has attached the host to a
+  // GPU rendering, applied after assignThread() has attached the host to a
   // visible pane (see loadWebgl for why the timing and fallbacks matter).
-  if (state.settings.gpu_rendering !== false) loadWebgl(thread);
+  applyGpuRendering();
   persistSessionSnapshot();
   // A new thread implies wanting to use it — surface the shell view (a tool
   // panel may be covering the terminal).
@@ -1073,6 +1350,10 @@ async function closeThread(id, { kill = true } = {}) {
     if (!(await confirmModal(tr('thread.confirmClosePinned', { title: state.threads[idx].title })))) return;
   }
   const [thread] = state.threads.splice(idx, 1);
+  if (thread.reconnect) {
+    clearTimeout(thread.reconnect.timer);
+    thread.reconnect = null;
+  }
   if (kill) invoke('session_kill', { id }).catch(() => {});
   thread.term.dispose();
   thread.hostEl.remove();
@@ -1132,10 +1413,23 @@ function unloadWebgl(thread) {
   thread.gl = null;
 }
 
-/** Applies the gpu_rendering setting to every open thread immediately. */
+/** Gives the WebGL renderer to the threads a pane is actually showing, and
+ * takes it away from every other thread.
+ *
+ * Browsers cap how many WebGL contexts may be live at once (Chromium: 16,
+ * measured by `node scripts/term_bench.mjs --contexts`) and drop the OLDEST
+ * one past the cap. Loading the addon per thread therefore meant that opening
+ * enough threads silently knocked GPU rendering off the ones opened first —
+ * and the thread you were looking at could be one of them. Parked threads
+ * gain nothing from a renderer anyway: their host element is detached from
+ * the pane, so they paint nothing until they are shown again.
+ *
+ * Also the entry point for the gpu_rendering setting. */
 function applyGpuRendering() {
+  const visible = new Set(state.panes.map((p) => p.threadId).filter(Boolean));
+  const enabled = state.settings.gpu_rendering !== false;
   for (const t of state.threads) {
-    if (state.settings.gpu_rendering !== false) loadWebgl(t);
+    if (enabled && visible.has(t.id)) loadWebgl(t);
     else unloadWebgl(t);
   }
 }
@@ -1306,6 +1600,7 @@ function setPaneThread(paneIdx, threadId) {
     empty.appendChild(btn);
     pane.body.appendChild(empty);
   }
+  applyGpuRendering(); // the set of visible threads just changed
   renderThreads();
 }
 
@@ -1319,6 +1614,7 @@ function assignThread(paneIdx, threadId) {
     if (otherIdx >= 0) setPaneThread(otherIdx, pane.threadId);
   }
   setPaneThread(paneIdx, threadId);
+  scheduleTaskRefresh();
 }
 
 function focusPane(idx) {
@@ -1327,6 +1623,7 @@ function focusPane(idx) {
   state.panes.forEach((p, i) => p.root.classList.toggle('focused', i === idx));
   threadById(state.panes[idx].threadId)?.term.focus();
   renderThreads();
+  scheduleTaskRefresh();
 }
 
 function addPane() {
@@ -1363,6 +1660,7 @@ function removePane(idx) {
   state.panes[0].root.style.flex = '';
   if (state.panes.length < 2 && state.broadcast) setBroadcast(false, { silent: true });
   focusPane(Math.min(state.focusedPane, state.panes.length - 1));
+  applyGpuRendering(); // the closed pane's thread is parked; release its context
   updateSplitUi();
   renderThreads();
 }
@@ -1378,6 +1676,11 @@ function setSplitDir(dir) {
 /** Toggle for one direction: not split → split that way; split the same
  * way → unsplit; split the other way → just re-orient. */
 function toggleSplitDir(dir) {
+  // Reachable from the shortcut and the palette while a tool panel is up,
+  // where the panes are hidden — splitting something the user cannot see is
+  // not what they asked for. The buttons themselves only exist in the shell
+  // view (see #shell-tools), so this is a no-op when one was clicked.
+  if (currentView !== 'shell') setView('shell');
   if (state.panes.length < 2) {
     state.splitDir = dir;
     addPane();
@@ -1396,6 +1699,7 @@ function setBroadcast(on, opts = {}) {
 }
 
 function toggleBroadcast() {
+  if (currentView !== 'shell') setView('shell'); // see toggleSplitDir
   if (!state.broadcast && state.panes.length < 2) {
     toast(tr('toast.broadcastNeedsSplit'), true);
     return;
@@ -1477,7 +1781,9 @@ const ICONS = {
   chevronUp: '<polyline points="18 15 12 9 6 15"/>',
   chevronRight: '<polyline points="9 18 15 12 9 6"/>',
   folder: '<path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>',
-  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/>',
+  // Sits next to `folder` in the remote browser, so it is drawn at the same
+  // weight — a document sheet with its corner turned.
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
   grip: '<circle cx="9" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="18" r="1"/>',
   download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
   upload: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>',
@@ -1657,17 +1963,28 @@ function renderThreads() {
     const isFocused = paneIdx === state.focusedPane && paneIdx >= 0;
     li.className = `thread-item ${t.kind}${paneIdx >= 0 ? ' shown' : ''}${isFocused ? ' focused' : ''}${t.pinned ? ' pinned' : ''}${t.activity ? ' activity' : ''}`;
     li.dataset.id = t.id;
+    const color = threadColor(t);
+    if (color) li.dataset.color = color;
     li.setAttribute('role', 'option');
     li.setAttribute('aria-selected', String(paneIdx >= 0));
     li.tabIndex = rowIdx === rovingIdx ? 0 : -1;
     li.innerHTML = `
       <span class="kind">${t.kind === 'ssh' ? 'SSH' : '❯'}</span>
       <span class="activity-dot" title="${tr('thread.activity.title')}"></span>
+      ${t.logPath ? '<span class="rec">●</span>' : ''}
+      ${t.reconnect ? '<span class="reconnecting">⟳</span>' : ''}
       <span class="title"></span>
       <span class="pane-mark">${paneIdx >= 0 && state.panes.length > 1 ? PANE_MARK[paneIdx] : ''}</span>
       <button class="pin" title="${t.pinned ? tr('thread.unpin') : tr('thread.pin')}">${pinIcon(t.pinned)}</button>
       <button class="close" title="${tr('thread.close.title')}">${icon('x')}</button>`;
     li.querySelector('.title').textContent = t.title;
+    // Set as a property, not interpolated into the markup: the path is
+    // user-controlled text (host names, the configured folder).
+    li.querySelector('.rec')?.setAttribute('title', tr('thread.logging.title', { path: t.logPath }));
+    if (t.reconnect) {
+      li.classList.add('reconnecting');
+      li.querySelector('.reconnecting').title = tr('reconnect.badge.title', { n: t.reconnect.attempt + 1, max: RECONNECT_BACKOFF.length });
+    }
     li.querySelector('.pin').addEventListener('click', (ev) => {
       ev.stopPropagation();
       togglePin(t.id);
@@ -1704,6 +2021,12 @@ function renderThreads() {
     pane.ddIcon.innerHTML = t && t.pinned ? pinIcon(true) : '';
     pane.ddLabel.textContent = t ? t.title : (state.threads.length ? '' : tr('thread.none'));
     pane.kindEl.textContent = t ? (t.kind === 'ssh' ? 'SSH' : tr('kind.local')) : '';
+    // The host's label color frames the whole pane while its session is on
+    // screen (see .pane[data-color]) — the one place the color has to be
+    // unmissable, since it is there to be seen before a command is typed.
+    const paneColor = threadColor(t);
+    if (paneColor) pane.root.dataset.color = paneColor;
+    else delete pane.root.dataset.color;
     if (!pane.ddMenu.classList.contains('hidden')) buildPaneMenu(pane);
   });
 }
@@ -1722,9 +2045,15 @@ function sendToActive(text, run) {
     toast(tr('toast.noActiveTerm'), true);
     return;
   }
+  sendToThread(thread, text, run);
+  thread.term.focus();
+}
+
+/** The write itself, for one thread. Split out of sendToActive so a command
+ * can go to a thread that is not focused (run-on-all over a host group). */
+function sendToThread(thread, text, run) {
   const data = run ? text.replace(/\r\n|\r|\n/g, '\r') + '\r' : text;
   invoke('session_write', { id: thread.id, data }).catch((e) => toast(String(e), true));
-  thread.term.focus();
 }
 
 /* ---------------- workflows ---------------- */
@@ -1845,9 +2174,9 @@ function normalizeGroup(s) {
 
 /** Distinct existing group paths (plus every ancestor prefix) for the editor's
  * autocomplete, so users can nest under an existing group without retyping. */
-function existingGroups() {
+function existingGroups(items = state.workflows) {
   const set = new Set();
-  for (const w of state.workflows) {
+  for (const w of items) {
     const parts = groupParts(w);
     for (let i = 1; i <= parts.length; i++) set.add(parts.slice(0, i).join('/'));
   }
@@ -2165,6 +2494,19 @@ function renderWorkflows() {
   renderWorkflowNode(list, buildWorkflowTree(state.workflows), 0);
 }
 
+/** Opens the workflow editor prefilled with a command that was run — from the
+ * history, a finished block, or the right-click menu — so turning "that thing
+ * I typed" into a reusable template is one step instead of a retype. The
+ * name defaults to the command's first words; the editor is where it gets a
+ * real one. */
+function saveAsWorkflow(command) {
+  const cmd = (command || '').trim();
+  if (!cmd) return;
+  if (currentView !== 'workflows') setView('workflows');
+  const name = cmd.split(/\s+/).slice(0, 3).join(' ').slice(0, 40);
+  editWorkflow({ id: '', name, description: '', command: cmd, tags: [], group: '', shortcut: '', show_button: false });
+}
+
 /** Fills placeholders (prompting the user when the template has any) and
  * sends the command to the focused pane's thread. */
 async function runWorkflow(w, run) {
@@ -2174,12 +2516,57 @@ async function runWorkflow(w, run) {
     values = await promptPlaceholders(w, placeholders);
     if (values === null) return; // cancelled
   }
+  // Built-ins are resolved here, not in the backend: the answers live in the
+  // UI (the focused thread, its host, the clock, the clipboard). Only the
+  // ones the template names are computed, so a template that never mentions
+  // {{$clipboard}} never reads the clipboard.
+  const builtins = await invoke('workflow_builtins', { command: w.command });
+  if (builtins.length) values = { ...(await builtinValues(builtins)), ...values };
   const filled = await invoke('fill_workflow', { command: w.command, values });
   sendToActive(filled, run);
 }
 
+/** Values for the `$`-variables in `names`, from the focused thread and the
+ * clock. Anything unknown (no thread, a local thread asked for {{$host}}, a
+ * clipboard that refuses) is '' — the template's own default then applies. */
+async function builtinValues(names) {
+  const thread = focusedThread();
+  const host = thread && thread.kind === 'ssh' ? hostById(thread.sshHostId) : null;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const date = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const time = `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+  const out = {};
+  for (const name of names) {
+    let v = '';
+    switch (name) {
+      case '$cwd': v = thread?.cwd || ''; break;
+      case '$host': v = host?.host || ''; break;
+      case '$user': v = host?.username || ''; break;
+      case '$port': v = host ? String(host.port) : ''; break;
+      case '$thread': v = thread?.title || ''; break;
+      case '$date': v = date; break;
+      case '$time': v = time; break;
+      // Filesystem-safe: for log and backup names.
+      case '$datetime': v = `${date}_${time.replace(/:/g, '-')}`; break;
+      case '$timestamp': v = String(Math.floor(now.getTime() / 1000)); break;
+      case '$selection': v = thread?.term?.getSelection?.() || ''; break;
+      case '$clipboard':
+        try { v = await navigator.clipboard.readText(); } catch { v = ''; }
+        break;
+      default: v = '';
+    }
+    // Nothing known: leave the key out rather than send '', so the template's
+    // own default ({{$cwd:~}}) still applies — a present empty value would
+    // win over it.
+    if (v !== '') out[name] = v;
+  }
+  return out;
+}
+
 function editWorkflow(w) {
-  const isNew = !w;
+  // A draft from "save as workflow" has fields but no id: still a new one.
+  const isNew = !w || !w.id;
   openModal({
     title: isNew ? tr('wf.editTitle.new') : tr('wf.editTitle.edit'),
     okLabel: tr('common.save'),
@@ -2192,6 +2579,7 @@ function editWorkflow(w) {
       field(tr('wf.field.tags'), 'tags', (w?.tags || []).join(', ')),
       fieldSection(tr('wf.section.command')),
       fieldTextarea(tr('wf.field.template'), 'command', w?.command || '', { required: true }),
+      fieldNote(tr('wf.builtins.hint')),
       fieldSection(tr('wf.section.launch')),
       fieldShortcut(tr('wf.field.shortcut'), 'shortcut', w?.shortcut || '', { excludeId: w?.id || '' }),
       fieldCheckbox(tr('wf.field.showButton'), 'show_button', !!w?.show_button),
@@ -2235,6 +2623,67 @@ async function exportWorkflows() {
  * already added and start unchecked), and each picked one is saved through
  * the normal save_workflow path with a fresh id. Conflicting shortcuts are
  * dropped so an import can never steal an existing binding. */
+/** Writes the whole configuration to a file the user picks. Credentials are
+ * stripped by the backend, which is what makes this file safe to share. */
+async function exportSettings() {
+  try {
+    const path = await window.__TAURI__.dialog.save({
+      defaultPath: 'senju-settings.json',
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (!path) return; // cancelled
+    await invoke('export_settings', { path });
+    toast(tr('settings.export.done'));
+  } catch (e) {
+    toast(tr('settings.export.failed', { e }), true);
+  }
+}
+
+/** Imports a settings file, showing what it holds before applying any of it.
+ * Reading and applying are separate calls so the confirmation describes the
+ * real file rather than what the user hoped was in it. */
+async function importSettings() {
+  let path;
+  let preview;
+  try {
+    path = await window.__TAURI__.dialog.open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    if (!path) return; // cancelled
+    preview = await invoke('read_settings_file', { path: String(path) });
+  } catch (e) {
+    toast(tr('settings.import.failed', { e }), true);
+    return;
+  }
+  const body = [{ tag: 'note', label: tr('settings.import.summary', preview) }];
+  if (preview.settings) body.push({ tag: 'note', label: tr('settings.import.settingsToo') });
+  body.push({ tag: 'note', label: tr('settings.backup.secrets') });
+  openModal({
+    title: tr('settings.import.confirm'),
+    okLabel: tr('settings.import'),
+    body,
+    onOk: async () => {
+      try {
+        await invoke('import_settings', { path: String(path) });
+      } catch (e) {
+        toast(tr('settings.import.failed', { e }), true);
+        return;
+      }
+      // Everything the import touched is cached in `state`, so re-read rather
+      // than patching each list by hand.
+      await Promise.all([
+        loadSettings(), refreshWorkflows(), refreshHosts(),
+        refreshProfiles(), refreshLaunchSets(), refreshServers(),
+      ]);
+      applyTheme();
+      applyLanguage();
+      toast(tr('settings.import.done'));
+    },
+  });
+}
+
 async function importWorkflows() {
   let candidates;
   try {
@@ -2279,25 +2728,45 @@ async function importWorkflows() {
   });
 }
 
-/** Run-time parameter dialog. A `{{name|a,b,c}}` placeholder renders as a
- * dropdown limited to its options (default = the explicit `:default` if it
- * is one of them, else the first); everything else is a text field. */
-function promptPlaceholders(w, placeholders) {
+async function promptPlaceholders(w, placeholders) {
+  // What was typed last time, as this time's defaults. A template default
+  // still applies to anything not remembered. Only saved workflows have an
+  // id to remember under; an ad-hoc run just gets the template's defaults.
+  let remembered = {};
+  if (w.id) {
+    try {
+      remembered = (await invoke('get_workflow_inputs', { id: w.id })) || {};
+    } catch {
+      remembered = {};
+    }
+  }
   return new Promise((resolve) => {
+    // A `{{name|a,b,c}}` placeholder renders as a dropdown limited to its
+    // options. Preselected: what was remembered, then the explicit
+    // `:default`, then the first option — each only if it is one of them.
+    const body = placeholders.map((p) => {
+      const opts = Array.isArray(p.options) ? p.options : [];
+      if (opts.length) {
+        const pick = [remembered[p.name], p.default].find((v) => opts.includes(v)) ?? opts[0];
+        return fieldSelect(p.name, `ph_${p.name}`, pick, opts.map((o) => [o, o]));
+      }
+      return field(p.name, `ph_${p.name}`, remembered[p.name] ?? p.default ?? '');
+    });
+    if (w.id) {
+      body.push(fieldCheckbox(tr('wf.param.remember'), 'remember', true));
+      body.push(fieldNote(tr('wf.param.remember.hint')));
+    }
     openModal({
       title: tr('wf.paramTitle', { name: w.name }),
       okLabel: tr('common.run'),
-      body: placeholders.map((p) => {
-        const opts = Array.isArray(p.options) ? p.options : [];
-        if (opts.length) {
-          const initial = p.default && opts.includes(p.default) ? p.default : opts[0];
-          return fieldSelect(p.name, `ph_${p.name}`, initial, opts.map((o) => [o, o]));
-        }
-        return field(p.name, `ph_${p.name}`, p.default ?? '');
-      }),
+      body,
       onOk: (values) => {
         const out = {};
         for (const p of placeholders) out[p.name] = values[`ph_${p.name}`];
+        if (w.id) {
+          // Unticked = forget (an empty map clears the record).
+          invoke('save_workflow_inputs', { id: w.id, values: values.remember ? out : {} }).catch(() => {});
+        }
         resolve(out);
       },
       onCancel: () => resolve(null),
@@ -2314,6 +2783,26 @@ async function refreshHosts() {
     toast(tr('host.loadFailed', { e }), true);
   }
   renderHosts();
+  // A host's color is painted on its open threads and panes, so an edit here
+  // has to reach the thread list as well.
+  renderThreads();
+}
+
+const HOST_COLORS = ['red', 'orange', 'yellow', 'green', 'blue', 'purple'];
+
+function hostById(id) {
+  return state.hosts.find((h) => h.id === id);
+}
+
+/** Label color of the host a thread is connected to; '' for local threads
+ * and for hosts without one. */
+function threadColor(t) {
+  return (t && t.kind === 'ssh' && hostById(t.sshHostId)?.color) || '';
+}
+
+/** The open SSH thread for a host, if any (the first, when there are several). */
+function openThreadFor(hostId) {
+  return state.threads.find((t) => t.kind === 'ssh' && t.sshHostId === hostId);
 }
 
 const AUTH_LABEL_KEY = { password: 'auth.password', key: 'auth.key', agent: 'auth.agent', keypassword: 'auth.keypassword' };
@@ -2323,40 +2812,292 @@ function renderHosts() {
   const q = $('#host-search').value.trim().toLowerCase();
   const list = $('#host-list');
   list.innerHTML = '';
-  const items = state.hosts.filter((h) =>
-    !q || [h.name, h.host, h.username].join(' ').toLowerCase().includes(q));
-  if (!items.length) {
-    list.appendChild(q
-      ? emptyState('search', tr('host.searchNoMatchTitle'), tr('host.searchNoMatch', { q }))
-      : emptyState('server', tr('host.emptyTitle'),
-          tr('host.emptyHint'),
-          { label: tr('host.emptyCta'), onClick: () => editHost(null) }));
+  if (!state.hosts.length) {
+    list.appendChild(emptyState('server', tr('host.emptyTitle'),
+      tr('host.emptyHint'),
+      { label: tr('host.emptyCta'), onClick: () => editHost(null) }));
     return;
   }
-  for (const h of items) {
-    const li = document.createElement('li');
-    li.className = 'card';
-    li.innerHTML = `
-      <h4></h4>
+  // Searching flattens across groups and shows each match's group as a badge,
+  // the same as the workflows panel.
+  if (q) {
+    const items = state.hosts.filter((h) =>
+      [h.name, h.host, h.username, h.group, (h.tags || []).join(' ')]
+        .join(' ').toLowerCase().includes(q));
+    if (!items.length) {
+      list.appendChild(emptyState('search', tr('host.searchNoMatchTitle'),
+        tr('host.searchNoMatch', { q })));
+      return;
+    }
+    for (const h of items) list.appendChild(hostCard(h, { showGroup: true }));
+    return;
+  }
+  // buildWorkflowTree only reads `.group`, so hosts fit it as they are.
+  renderHostNode(list, buildWorkflowTree(state.hosts), 0);
+}
+
+/** Hosts directly under a node, then each child group under its own heading.
+ * A heading carries the two things a group is for — opening every host in
+ * it, and sending one command to all of them — because those act on the
+ * group as a unit, and the group is the only place that unit is visible. */
+function renderHostNode(list, node, depth) {
+  for (const h of node.workflows) list.appendChild(hostCard(h));
+  for (const [, child] of node.groups) {
+    const head = document.createElement('li');
+    head.className = 'wf-group-head host-group-head';
+    head.style.setProperty('--depth', depth);
+    head.innerHTML = `${icon('folder')}<span class="wf-group-name"></span><span class="wf-group-count"></span>
+      <span class="hg-actions">
+        <button class="ghost-btn hg-connect">${icon('login')}<span></span></button>
+        <button class="ghost-btn hg-run">${icon('play')}<span></span></button>
+      </span>`;
+    head.querySelector('.wf-group-name').textContent = child.name;
+    head.querySelector('.wf-group-count').textContent = countWorkflows(child);
+    const hosts = hostsUnder(child);
+    const connect = head.querySelector('.hg-connect');
+    connect.querySelector('span').textContent = tr('host.group.connectAll');
+    connect.title = tr('host.group.connectAll.title');
+    connect.addEventListener('click', () => connectHosts(child.path, hosts));
+    const run = head.querySelector('.hg-run');
+    run.querySelector('span').textContent = tr('host.group.runAll');
+    run.title = tr('host.group.runAll.title');
+    run.addEventListener('click', () => runOnHosts(child.path, hosts));
+    list.appendChild(head);
+    renderHostNode(list, child, depth + 1);
+  }
+}
+
+/** Every host in a group node and its subgroups — what "all" means for the
+ * group's connect-all and run-on-all. */
+function hostsUnder(node) {
+  const out = [...node.workflows];
+  for (const [, c] of node.groups) out.push(...hostsUnder(c));
+  return out;
+}
+
+function hostCard(h, opts = {}) {
+  const li = document.createElement('li');
+  li.className = 'card';
+  if (h.color) li.dataset.color = h.color;
+  li.innerHTML = `
+      <h4><span class="host-dot"></span><span class="host-name"></span></h4>
       <div class="host-conn"></div>
       <div class="host-badges"><span class="auth-badge">${icon('lock')}<span class="auth-label"></span></span></div>
       <div class="row">
         <button class="accent-btn connect">${icon('login')}${tr('common.connect')}</button>
+        <button class="ghost-btn install">${icon('lock')}${tr('host.install')}</button>
         <button class="ghost-btn edit">${icon('edit')}${tr('common.edit')}</button>
         <button class="danger-btn del">${icon('trash')}${tr('common.delete')}</button>
       </div>`;
-    li.querySelector('h4').textContent = h.name || `${h.username}@${h.host}`;
-    li.querySelector('.host-conn').textContent = `${h.username}@${h.host}:${h.port}`;
-    li.querySelector('.auth-label').textContent = authLabel(h.auth_method);
-    li.querySelector('.connect').addEventListener('click', () => newSshThread(h));
-    li.querySelector('.edit').addEventListener('click', () => editHost(h));
-    li.querySelector('.del').addEventListener('click', async () => {
-      if (!(await confirmModal(tr('confirm.delete', { name: h.name || h.host })))) return;
-      await invoke('delete_ssh_host', { id: h.id });
-      refreshHosts();
-    });
-    list.appendChild(li);
+  li.querySelector('.host-name').textContent = h.name || `${h.username}@${h.host}`;
+  li.querySelector('.install').addEventListener('click', () => installPublicKey(h));
+  if (!h.color) li.querySelector('.host-dot').remove();
+  li.querySelector('.host-conn').textContent = `${h.username}@${h.host}:${h.port}`;
+  li.querySelector('.auth-label').textContent = authLabel(h.auth_method);
+  const badges = li.querySelector('.host-badges');
+  if (opts.showGroup && groupParts(h).length) {
+    const g = document.createElement('span');
+    g.className = 'wf-badge wf-group-badge';
+    g.innerHTML = `${icon('folder')}<span></span>`;
+    g.querySelector('span').textContent = groupParts(h).join(' / ');
+    badges.appendChild(g);
   }
+  for (const tag of h.tags || []) {
+    const t = document.createElement('span');
+    t.className = 'tag';
+    t.textContent = tag;
+    badges.appendChild(t);
+  }
+  li.querySelector('.connect').addEventListener('click', () => newSshThread(h));
+  li.querySelector('.edit').addEventListener('click', () => editHost(h));
+  li.querySelector('.del').addEventListener('click', async () => {
+    if (!(await confirmModal(tr('confirm.delete', { name: h.name || h.host })))) return;
+    await invoke('delete_ssh_host', { id: h.id });
+    refreshHosts();
+  });
+  return li;
+}
+
+/** The known_hosts file as a checklist, for pruning stale entries. The only
+ * action is removal: adding is what connecting does, and editing a line by
+ * hand is how people end up trusting the wrong key. */
+async function openKnownHosts() {
+  let entries;
+  try {
+    entries = await invoke('list_known_hosts');
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  const body = [fieldNote(tr('host.knownHosts.hint'))];
+  if (!entries.length) body.push(fieldNote(tr('host.knownHosts.empty')));
+  for (const e of entries) {
+    const host = e.hashed ? tr('host.knownHosts.hashed') : e.hosts;
+    const key = e.fingerprint || tr('host.knownHosts.unparsed');
+    const label = `${tr('host.knownHosts.line', { line: e.line })} · ${e.marker ? `${e.marker} ` : ''}${host} · ${e.key_type} ${key}`;
+    body.push(fieldCheckbox(label, `kh_${e.line}`, false));
+  }
+  openModal({
+    title: tr('host.knownHosts.title'),
+    okLabel: tr('host.knownHosts.ok'),
+    body,
+    onOk: async (values) => {
+      const lines = entries.filter((e) => values[`kh_${e.line}`]).map((e) => e.line);
+      if (!lines.length) throw tr('host.knownHosts.none');
+      const n = await invoke('remove_known_hosts', { lines });
+      toast(tr('host.knownHosts.removed', { n }));
+    },
+  });
+}
+
+function openKeygen() {
+  openModal({
+    title: tr('host.keygen.title'),
+    okLabel: tr('host.keygen.ok'),
+    body: [
+      field(tr('host.keygen.name'), 'name', 'id_ed25519', { required: true }),
+      field(tr('host.keygen.comment'), 'comment', 'senju-term'),
+      field(tr('host.keygen.passphrase'), 'passphrase', '', { type: 'password' }),
+      field(tr('host.keygen.passphrase2'), 'passphrase2', '', { type: 'password' }),
+      fieldNote(tr('host.keygen.hint')),
+    ],
+    onOk: async (v) => {
+      if ((v.passphrase || '') !== (v.passphrase2 || '')) throw tr('host.keygen.mismatch');
+      const g = await invoke('generate_ssh_key', {
+        name: v.name.trim(), comment: v.comment.trim(), passphrase: v.passphrase || null,
+      });
+      // Shown after this modal closes (submitModal clears the body).
+      setTimeout(() => showGeneratedKey(g), 0);
+    },
+  });
+}
+
+function showGeneratedKey(g) {
+  openModal({
+    title: tr('host.keygen.done.title'),
+    okLabel: tr('common.close'),
+    hideCancel: true,
+    body: [
+      fieldNote(tr('host.keygen.done.paths', { priv: g.private_path, pub: g.public_path })),
+      fieldNote(tr('host.keygen.done.fp', { fp: g.fingerprint })),
+      fieldTextarea(tr('host.keygen.done.pub'), 'pub', g.public_key),
+      fieldNote(tr('host.keygen.done.next')),
+    ],
+    extraActions: [{
+      label: tr('host.keygen.done.copy'),
+      className: 'ghost-btn',
+      onClick: async ({ setStatus }) => {
+        try {
+          await navigator.clipboard.writeText(g.public_key);
+          setStatus(tr('host.keygen.copied'), 'ok');
+        } catch (e) {
+          setStatus(String(e), 'err');
+        }
+      },
+    }],
+    onOk: () => {},
+  });
+}
+
+/** ssh-copy-id over the open session's SFTP: pick a local .pub, append it to
+ * the remote authorized_keys, and optionally switch the host to key auth so
+ * the password that got us in is the last one typed. */
+async function installPublicKey(h) {
+  const thread = openThreadFor(h.id);
+  if (!thread) {
+    toast(tr('host.install.needSession'), true);
+    return;
+  }
+  let keys;
+  try {
+    keys = await invoke('list_public_keys');
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!keys.length) {
+    toast(tr('host.install.noKeys'), true);
+    return;
+  }
+  const base = (p) => p.split(/[\\/]/).pop();
+  const options = keys.map((k) => [k.path, `${base(k.path)} · ${k.key_type} ${k.fingerprint}${k.comment ? ` · ${k.comment}` : ''}`]);
+  // Default to the key the host is already configured with, if it has one.
+  const preferred = keys.find((k) => h.key_path && k.path === `${h.key_path}.pub`)?.path || keys[0].path;
+  const host = h.name || h.host;
+  openModal({
+    title: tr('host.install.title', { host }),
+    okLabel: tr('host.install.ok'),
+    body: [
+      fieldNote(tr('host.install.hint')),
+      fieldSelect(tr('host.install.key'), 'pub', preferred, options),
+      fieldCheckbox(tr('host.install.switch'), 'switch', h.auth_method !== 'key' && h.auth_method !== 'keypassword'),
+    ],
+    onOk: async (v) => {
+      const added = await invoke('install_public_key', { sessionId: thread.id, pubPath: v.pub });
+      toast(tr(added ? 'host.install.added' : 'host.install.present', { host }));
+      if (v.switch) {
+        const keyPath = v.pub.replace(/\.pub$/, '');
+        // Blank password/passphrase mean "keep what is saved" (see
+        // save_ssh_host), so spreading the redacted host is safe.
+        await invoke('save_ssh_host', { host: { ...h, auth_method: 'key', key_path: keyPath } });
+        await refreshHosts();
+        toast(tr('host.install.switched', { path: keyPath }));
+      }
+    },
+  });
+}
+
+/** Opens a session to every host in `hosts` that has none yet, one after
+ * another: a connect may prompt (secrets, an unknown host key), and starting
+ * them all at once would stack those prompts on top of each other. Hosts that
+ * are already open are skipped — "connect all" means "make sure they are all
+ * up", not "open a second session to each". */
+async function connectHosts(group, hosts) {
+  const pending = hosts.filter((h) => !openThreadFor(h.id));
+  const skipped = hosts.length - pending.length;
+  if (!pending.length) {
+    toast(tr('host.connectAll.allOpen', { group }));
+    return;
+  }
+  if (skipped) toast(tr('host.connectAll.skipped', { n: skipped }));
+  if (currentView !== 'shell') setView('shell');
+  for (const h of pending) await newSshThread(h);
+}
+
+/** One command to every connected host of a group. Hosts without an open
+ * session are shown but cannot be targets: connecting for them here would
+ * mean a prompt per host in the middle of what was meant as one action, and
+ * a command typed into a shell that has not finished logging in goes nowhere
+ * useful. The target list is a checklist so one box can be left out of a
+ * group-wide command without leaving the group. */
+function runOnHosts(group, hosts) {
+  const targets = hosts.map((h) => ({ h, thread: openThreadFor(h.id) }));
+  if (!targets.some((x) => x.thread)) {
+    toast(tr('host.run.none', { group }), true);
+    return;
+  }
+  const body = [
+    fieldTextarea(tr('host.run.command'), 'command', '', { required: true }),
+    fieldSection(tr('host.run.targets')),
+  ];
+  for (const { h, thread } of targets) {
+    const label = h.name || `${h.username}@${h.host}`;
+    if (thread) body.push(fieldCheckbox(label, `t_${h.id}`, true));
+    else body.push(fieldNote(`${label} — ${tr('host.run.notConnected')}`));
+  }
+  openModal({
+    title: tr('host.run.title', { group }),
+    okLabel: tr('host.run.ok'),
+    body,
+    onOk: (values) => {
+      const chosen = targets.filter((x) => x.thread && values[`t_${x.h.id}`]);
+      // A string, not an Error: the modal shows String(e) inline.
+      if (!chosen.length) throw tr('host.run.noneChecked');
+      for (const { thread } of chosen) sendToThread(thread, values.command, true);
+      toast(tr('host.run.sent', { n: chosen.length }));
+      if (currentView !== 'shell') setView('shell');
+    },
+  });
 }
 
 function editHost(h) {
@@ -2374,11 +3115,17 @@ function editHost(h) {
     username: values.username.trim(),
     auth_method: values.auth_method,
     key_path: values.key_path.trim(),
+    save_credentials: !!values.save_credentials,
     forwards: (values.forwards || '')
       .split('\n')
       .map((l) => l.trim())
       .filter(Boolean),
     jump_hosts: values.jump_hosts || [],
+    group: normalizeGroup(values.group),
+    tags: (values.tags || '').split(',').map((t) => t.trim()).filter(Boolean),
+    color: values.color || '',
+    log_sessions: !!values.log_sessions,
+    auto_reconnect: !!values.auto_reconnect,
   });
   openModal({
     title: isNew ? tr('host.editTitle.new') : tr('host.editTitle.edit'),
@@ -2395,14 +3142,29 @@ function editHost(h) {
         ['keypassword', tr('auth.keypassword2')],
       ]),
       field(tr('host.field.keyPath'), 'key_path', h?.key_path || '', { placeholder: '~/.ssh/id_ed25519' }),
+      fieldCheckbox(tr('host.field.saveCreds'), 'save_credentials', !!h?.save_credentials),
+      fieldNote(tr('host.field.saveCreds.hint')),
       fieldSection(tr('host.section.forwards')),
       fieldTextarea(tr('host.field.forwards'), 'forwards', (h?.forwards || []).join('\n'), {
-        placeholder: '8080:localhost:80\n5433:db.internal:5432',
+        placeholder: '8080:localhost:80\n-R 9000:localhost:3000\n-D 1080',
       }),
       fieldNote(tr('host.field.forwards.hint')),
       fieldSection(tr('host.section.jump')),
       { tag: 'jumplist', name: 'jump_hosts', label: tr('host.field.jump'), items: h?.jump_hosts || [], selfId: h?.id || '' },
       fieldNote(tr('host.field.jump.hint')),
+      fieldSection(tr('host.section.label')),
+      field(tr('host.field.group'), 'group', h?.group || '',
+        { list: existingGroups(state.hosts), placeholder: tr('host.group.ph') }),
+      field(tr('host.field.tags'), 'tags', (h?.tags || []).join(', ')),
+      fieldSelect(tr('host.field.color'), 'color', h?.color || '',
+        [['', tr('host.color.none')], ...HOST_COLORS.map((c) => [c, tr(`host.color.${c}`)])]),
+      fieldNote(tr('host.field.color.hint')),
+      fieldSection(tr('host.section.log')),
+      fieldCheckbox(tr('host.field.logSessions'), 'log_sessions', !!h?.log_sessions),
+      fieldNote(tr('host.field.logSessions.hint')),
+      fieldSection(tr('host.section.reconnect')),
+      fieldCheckbox(tr('host.field.autoReconnect'), 'auto_reconnect', !!h?.auto_reconnect),
+      fieldNote(tr('host.field.autoReconnect.hint')),
       fieldSection(tr('host.section.test')),
       field(tr('host.field.testPassword'), 'test_password', '', { type: 'password' }),
       field(tr('host.field.testPassphrase'), 'test_passphrase', '', { type: 'password' }),
@@ -2522,8 +3284,12 @@ function sshKindLabel(host) {
  * if every hop uses the agent the modal is skipped entirely. Secrets are used
  * for the one connection only and never persisted. Field names are namespaced
  * by hop index so multiple hops' fields don't collide. */
-function promptChainSecrets(chainHosts) {
-  const needing = chainHosts.filter((h) => h.auth_method !== 'agent');
+function promptChainSecrets(chainHosts, saved = {}) {
+  // A hop is not asked when it authenticates by agent, or when its
+  // credentials are already saved — in the second case the backend supplies
+  // them, so this side sends nothing for that hop at all.
+  const asks = (h) => h.auth_method !== 'agent' && !saved[h.id];
+  const needing = chainHosts.filter(asks);
   if (needing.length === 0) return Promise.resolve({});
   const multi = chainHosts.length > 1;
   const lastIdx = chainHosts.length - 1;
@@ -2531,7 +3297,7 @@ function promptChainSecrets(chainHosts) {
     const body = [];
     const meta = [];
     chainHosts.forEach((host, idx) => {
-      if (host.auth_method === 'agent') return;
+      if (!asks(host)) return;
       const isKey = host.auth_method === 'key';
       const isCombined = host.auth_method === 'keypassword';
       if (multi) {
@@ -3030,6 +3796,7 @@ async function loadSettings() {
   f.language.value = state.settings.language === 'en' ? 'en' : 'ja';
   renderTermThemeOptions();
   f.term_theme.value = termThemeSelectValue(state.settings.term_theme);
+  f.term_theme.dataset.prev = f.term_theme.value;
   renderTermColorEditor(state.settings.term_colors || {});
   updateTermColorEditorVisibility();
   f.restore_session.checked = state.settings.restore_session !== false;
@@ -3038,9 +3805,22 @@ async function loadSettings() {
   f.notify_long_commands.checked = state.settings.notify_long_commands !== false;
   f.notify_threshold_secs.value = Number.isFinite(Number(state.settings.notify_threshold_secs))
     ? state.settings.notify_threshold_secs : 10;
-  f.ai_api_key.value = state.settings.ai_api_key || '';
+  // The backend blanks the key before it crosses into the page, so there is
+  // nothing to fill in — only whether one is stored, which the placeholder
+  // and the delete row report.
+  f.ai_api_key.value = '';
+  const keySaved = !!state.settings.aiApiKeySaved;
+  f.ai_api_key.placeholder = keySaved ? tr('settings.aiApiKey.savedPlaceholder') : 'sk-ant-...';
+  $('#ai-key-clear-row').hidden = !keySaved;
+  if (f.clear_ai_api_key) f.clear_ai_api_key.checked = false;
   f.ai_model.value = state.settings.ai_model || '';
   f.auto_update_check.checked = state.settings.auto_update_check !== false;
+  f.session_log_dir.value = state.settings.session_log_dir || '';
+  f.session_log_plain.checked = state.settings.session_log_plain !== false;
+  f.session_log_local.checked = !!state.settings.session_log_local;
+  // The resolved default as the placeholder, so a blank field says where
+  // logs actually go rather than nothing.
+  invoke('session_log_dir').then((d) => { f.session_log_dir.placeholder = d; }).catch(() => {});
   applyTheme();
   applyLanguage();
 }
@@ -3155,13 +3935,15 @@ $('#settings-form').elements.term_theme.addEventListener('change', () => {
   const f = $('#settings-form').elements;
   if (f.term_theme.value === 'custom') {
     // First switch to custom with nothing saved: start from whatever the
-    // user was just looking at, rather than a blank UI-theme palette.
+    // user was just looking at (the preset selected a moment ago, saved or
+    // not), rather than a blank UI-theme palette.
     const saved = state.settings.term_colors || {};
     if (!Object.keys(saved).length) {
-      const prevId = state.settings.term_theme;
+      const prevId = f.term_theme.dataset.prev ?? state.settings.term_theme;
       renderTermColorEditor(TERM_PRESETS[prevId] ? TERM_PRESETS[prevId].colors : {});
     }
   }
+  f.term_theme.dataset.prev = f.term_theme.value;
   updateTermColorEditorVisibility();
   previewTermTheme();
 });
@@ -3186,6 +3968,14 @@ function applyAutoUpdateAvailability() {
   }
 }
 
+$('#session-log-open').addEventListener('click', async () => {
+  try {
+    await invoke('reveal_path', { path: await invoke('session_log_dir') });
+  } catch (e) {
+    toast(tr('settings.sessionLog.openFailed', { e }), true);
+  }
+});
+
 $('#settings-form').addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const f = ev.target;
@@ -3205,11 +3995,23 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     shell_integration: f.elements.shell_integration.checked,
     notify_long_commands: f.elements.notify_long_commands.checked,
     notify_threshold_secs: Math.max(0, parseInt(f.elements.notify_threshold_secs.value, 10) || 0),
+    // Blank = leave the stored key alone. The field never held it, so
+    // treating empty as "delete" would drop the key on every unrelated save.
     ai_api_key: f.elements.ai_api_key.value.trim(),
     ai_model: f.elements.ai_model.value.trim(),
     auto_update_check: f.elements.auto_update_check.checked,
+    session_log_dir: f.elements.session_log_dir.value.trim(),
+    session_log_plain: f.elements.session_log_plain.checked,
+    session_log_local: f.elements.session_log_local.checked,
   };
-  await invoke('save_settings', { settings: state.settings });
+  const clearKey = !!(f.elements.clear_ai_api_key && f.elements.clear_ai_api_key.checked);
+  await invoke('save_settings', {
+    settings: state.settings,
+    clearAiApiKey: clearKey,
+  });
+  state.settings.aiApiKeySaved =
+    !clearKey && (state.settings.aiApiKeySaved || !!state.settings.ai_api_key);
+  state.settings.ai_api_key = '';
   applyTheme();
   applyLanguage();
   applyGpuRendering();
@@ -3324,7 +4126,7 @@ async function checkForUpdates(manual = false) {
 let aiBusy = false;
 
 function openAiAssist() {
-  if (!(state.settings.ai_api_key || '').trim()) {
+  if (!state.settings.aiApiKeySaved) {
     toast(tr('ai.noKey'), true);
     setView('settings');
     return;
@@ -3386,6 +4188,517 @@ function openAiResult(s) {
   });
 }
 
+/* ---------------- built-in dev server ---------------- */
+
+/* The backend owns the sockets; this mirrors what it reports. Nothing here
+ * decides whether a server is running — `list_dev_servers` does, and every
+ * mutation is followed by a re-read, so a start that failed can never leave a
+ * card claiming to serve something. */
+
+/** Requests kept for the log. Past this the oldest are dropped: the panel is a
+ * live view, not a record, and an unbounded array behind a page load loop grows
+ * without end. */
+const SERVER_LOG_MAX = 300;
+
+async function refreshServers() {
+  try {
+    const [running, presets] = await Promise.all([
+      invoke('list_dev_servers'),
+      invoke('list_dev_server_presets'),
+    ]);
+    state.servers.running = running;
+    state.servers.presets = presets;
+  } catch (e) {
+    toast(String(e), true);
+  }
+  renderServers();
+}
+
+/** Starts a server and, if asked, opens it. `opts` comes either from the start
+ * form or from a saved preset; both produce the same call. */
+async function startServer(opts) {
+  const root = (opts.root || '').trim();
+  if (!root) {
+    toast(tr('srv.noRoot'), true);
+    return null;
+  }
+  let info;
+  try {
+    info = await invoke('start_dev_server', {
+      root,
+      port: Number(opts.port) || 0,
+      spa: !!opts.spa,
+      hotReload: opts.hotReload !== false,
+    });
+  } catch (e) {
+    toast(String(e), true);
+    return null;
+  }
+  toast(tr('srv.started', { url: info.url }));
+  if (opts.openBrowser) openServer(info);
+  await refreshServers();
+  return info;
+}
+
+async function stopServer(id) {
+  try {
+    await invoke('stop_dev_server', { id });
+    toast(tr('srv.stopped'));
+  } catch (e) {
+    toast(String(e), true);
+  }
+  await refreshServers();
+}
+
+function openServer(info) {
+  invoke('open_external', { url: info.url }).catch((e) => toast(String(e), true));
+}
+
+/** Seconds since `startedAt` as a compact h/m/s string. Not localized beyond
+ * the unit letters: it is read at a glance next to a URL, and "2h 05m" says the
+ * same thing in both languages the app ships. */
+function uptime(startedAt) {
+  const secs = Math.max(0, Math.floor(Date.now() / 1000) - startedAt);
+  if (secs < 60) return `${secs}s`;
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+}
+
+/** Keeps the uptime badges honest while the panel is open. Only the running
+ * list is redrawn, and only while it is on screen — a timer that re-rendered
+ * the whole panel (or ran with the panel closed) would be pure churn. */
+let serverUptimeTimer = 0;
+
+function syncUptimeTicker() {
+  const wanted = currentView === 'servers' && state.servers.running.length > 0;
+  if (wanted && !serverUptimeTimer) {
+    serverUptimeTimer = setInterval(() => {
+      if (currentView === 'servers') renderRunningServers();
+      else syncUptimeTicker();
+    }, 30000);
+  } else if (!wanted && serverUptimeTimer) {
+    clearInterval(serverUptimeTimer);
+    serverUptimeTimer = 0;
+  }
+}
+
+function renderServers() {
+  renderRunningServers();
+  renderServerPresets();
+  renderServerLog();
+  syncUptimeTicker();
+}
+
+function renderRunningServers() {
+  const list = $('#srv-running');
+  list.innerHTML = '';
+  if (!state.servers.running.length) {
+    list.appendChild(emptyState('server', tr('srv.empty.running'), tr('srv.empty.running.hint')));
+    return;
+  }
+  for (const info of state.servers.running) list.appendChild(runningServerCard(info));
+}
+
+function runningServerCard(info) {
+  const li = document.createElement('li');
+  li.className = 'card srv-card';
+  li.innerHTML = `
+    <h4><button type="button" class="srv-url"></button></h4>
+    <div class="srv-root"></div>
+    <div class="wf-badges"></div>
+    <div class="row">
+      <button class="accent-btn srv-open">${icon('login')}${tr('srv.open')}</button>
+      <button class="ghost-btn srv-copy">${icon('copy')}${tr('srv.copy')}</button>
+      <button class="danger-btn srv-stop">${icon('x')}${tr('srv.stop')}</button>
+    </div>`;
+  // Deliberately a button, not an <a>: a real link in the webview can navigate
+  // the app itself to the served site (a ctrl-click, a middle-click) and
+  // replace the terminal with the page being previewed. This can only ever
+  // hand the URL to the OS browser.
+  const link = li.querySelector('.srv-url');
+  link.textContent = info.url;
+  link.addEventListener('click', () => openServer(info));
+  li.querySelector('.srv-root').textContent = info.root;
+
+  const badges = li.querySelector('.wf-badges');
+  const badge = (text, cls) => {
+    const el = document.createElement('span');
+    el.className = cls || 'wf-badge';
+    el.textContent = text;
+    badges.appendChild(el);
+  };
+  if (info.hotReload) badge(tr('srv.badge.hot'));
+  if (info.spa) badge(tr('srv.badge.spa'), 'tag');
+  badge(tr('srv.uptime', { t: uptime(info.startedAt) }), 'wf-badge wf-group-badge');
+
+  li.querySelector('.srv-open').addEventListener('click', () => openServer(info));
+  li.querySelector('.srv-copy').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(info.url);
+      toast(tr('srv.copied'));
+    } catch (e) {
+      toast(String(e), true);
+    }
+  });
+  li.querySelector('.srv-stop').addEventListener('click', () => stopServer(info.id));
+  return li;
+}
+
+function renderServerPresets() {
+  const list = $('#srv-presets');
+  list.innerHTML = '';
+  if (!state.servers.presets.length) {
+    list.appendChild(emptyState('star', tr('srv.empty.presets'), tr('srv.empty.presets.hint')));
+    return;
+  }
+  for (const preset of state.servers.presets) list.appendChild(presetCard(preset));
+}
+
+function presetCard(preset) {
+  const li = document.createElement('li');
+  li.className = 'card srv-card';
+  li.innerHTML = `
+    <h4></h4>
+    <div class="srv-root"></div>
+    <div class="wf-badges"></div>
+    <div class="row">
+      <button class="accent-btn run">${icon('play')}${tr('srv.start')}</button>
+      <button class="ghost-btn edit">${icon('edit')}${tr('common.edit')}</button>
+      <button class="danger-btn del">${icon('trash')}${tr('common.delete')}</button>
+    </div>`;
+  li.querySelector('h4').textContent = preset.name;
+  li.querySelector('.srv-root').textContent = preset.root;
+  const badges = li.querySelector('.wf-badges');
+  const badge = (text, cls) => {
+    const el = document.createElement('span');
+    el.className = cls || 'wf-badge';
+    el.textContent = text;
+    badges.appendChild(el);
+  };
+  badge(preset.port ? `:${preset.port}` : tr('srv.autoPort'), 'wf-badge wf-group-badge');
+  if (preset.hot_reload !== false) badge(tr('srv.badge.hot'));
+  if (preset.spa) badge(tr('srv.badge.spa'), 'tag');
+
+  li.querySelector('.run').addEventListener('click', () => startServer({
+    root: preset.root,
+    port: preset.port,
+    spa: preset.spa,
+    hotReload: preset.hot_reload !== false,
+    openBrowser: preset.open_browser,
+  }));
+  li.querySelector('.edit').addEventListener('click', () => editServerPreset(preset));
+  li.querySelector('.del').addEventListener('click', () => {
+    openModal({
+      title: tr('srv.preset.deleteConfirm', { name: preset.name }),
+      okLabel: tr('common.delete'),
+      body: [],
+      onOk: async () => {
+        await invoke('delete_dev_server_preset', { id: preset.id });
+        await refreshServers();
+      },
+    });
+  });
+  return li;
+}
+
+/** Editor for a saved setup. `seed` may be an existing preset (edit) or the
+ * current form contents (the "save this setup" button), which is why it takes
+ * a plain object rather than an id. */
+function editServerPreset(seed) {
+  const isNew = !seed || !seed.id;
+  openModal({
+    title: isNew ? tr('srv.preset.editTitle.new') : tr('srv.preset.editTitle.edit'),
+    okLabel: tr('common.save'),
+    body: [
+      field(tr('srv.preset.name'), 'name', seed?.name || '', { required: true }),
+      field(tr('srv.field.root'), 'root', seed?.root || '', { required: true }),
+      field(tr('srv.field.port'), 'port', String(seed?.port ?? 0)),
+      fieldNote(tr('srv.portHint')),
+      fieldCheckbox(tr('srv.field.hotReload'), 'hot_reload', seed?.hot_reload !== false),
+      fieldCheckbox(tr('srv.field.spa'), 'spa', !!seed?.spa),
+      fieldCheckbox(tr('srv.field.openBrowser'), 'open_browser', !!seed?.open_browser),
+    ],
+    onOk: async (values) => {
+      await invoke('save_dev_server_preset', {
+        preset: {
+          id: seed?.id || '',
+          name: values.name.trim(),
+          root: values.root.trim(),
+          // A blank or non-numeric port means "any free port", the same as 0 —
+          // the alternative is NaN reaching the backend as a u16.
+          port: Math.max(0, Math.min(65535, parseInt(values.port, 10) || 0)),
+          spa: values.spa,
+          hot_reload: values.hot_reload,
+          open_browser: values.open_browser,
+        },
+      });
+      await refreshServers();
+    },
+  });
+}
+
+function renderServerLog() {
+  const list = $('#srv-log');
+  list.innerHTML = '';
+  if (!state.servers.log.length) {
+    const li = document.createElement('li');
+    li.className = 'srv-log-empty';
+    li.textContent = tr('srv.empty.log');
+    list.appendChild(li);
+    return;
+  }
+  // Newest first: the request you just made is the one you are looking for.
+  for (const entry of state.servers.log.slice().reverse()) {
+    const li = document.createElement('li');
+    li.className = 'srv-log-row';
+    // 2xx is unremarkable; 4xx/5xx is the reason anyone opens this list.
+    li.classList.add(entry.status >= 400 ? 'bad' : 'ok');
+    li.innerHTML = '<span class="lg-status"></span><span class="lg-method"></span><span class="lg-path"></span><span class="lg-port"></span>';
+    li.querySelector('.lg-status').textContent = entry.status;
+    li.querySelector('.lg-method').textContent = entry.method;
+    li.querySelector('.lg-path').textContent = entry.path;
+    const port = state.servers.running.find((s) => s.id === entry.serverId)?.port;
+    li.querySelector('.lg-port').textContent = port ? `:${port}` : '';
+    list.appendChild(li);
+  }
+}
+
+listen('devserver:access', (ev) => {
+  state.servers.log.push(ev.payload);
+  if (state.servers.log.length > SERVER_LOG_MAX) {
+    state.servers.log.splice(0, state.servers.log.length - SERVER_LOG_MAX);
+  }
+  // Requests arrive in bursts (one page = many assets); only redraw the list
+  // that is actually on screen.
+  if (currentView === 'servers') renderServerLog();
+});
+
+listen('devserver:reloaded', (ev) => {
+  const [, path] = ev.payload;
+  if (currentView === 'servers') toast(tr('srv.reloaded', { path }));
+});
+
+listen('devserver:watch-failed', (ev) => {
+  const [, message] = ev.payload;
+  toast(tr('srv.watchFailed', { e: message }), true);
+});
+
+// Not an error: most of the tree still reloads. Said plainly so the few files
+// that quietly will not do not look like the server being broken.
+listen('devserver:watch-limited', (ev) => {
+  const [, watched] = ev.payload;
+  toast(tr('srv.watchLimited', { n: watched }));
+});
+
+/* ---------------- task runners (package.json / Cargo.toml / ...) ---------------- */
+
+/** Turns an OSC 7 payload into a plain filesystem path.
+ *
+ * The payload is normally `file://<host>/<path>`, percent-encoded. The host is
+ * whatever the shell thinks its hostname is; it is dropped rather than checked,
+ * because OSC 7 only reaches us from local shells today (SSH sessions get no
+ * shell integration) and a mismatched hostname is not evidence of anything.
+ * Returns '' for anything that doesn't look like an absolute path — a garbled
+ * report should leave the panel saying "unknown", not scan the wrong tree. */
+function parseOsc7(payload) {
+  let raw = payload || '';
+  if (raw.startsWith('file://')) {
+    const slash = raw.indexOf('/', 'file://'.length);
+    raw = slash >= 0 ? raw.slice(slash) : '';
+  }
+  if (!raw.startsWith('/')) return '';
+  let path;
+  try {
+    path = decodeURIComponent(raw);
+  } catch {
+    // A stray '%' the shell failed to escape. The undecoded form is still
+    // closer to the truth than nothing, and the backend simply won't find it.
+    path = raw;
+  }
+  // `file:///C:/Users/x`: the leading slash belongs to the URL, not the path.
+  if (/^\/[A-Za-z]:[\\/]/.test(path)) path = path.slice(1);
+  return path;
+}
+
+// OSC 7 arrives at every prompt, so a `cd` in a loop would otherwise fire a
+// scan per iteration. Coalesce into one scan shortly after things settle.
+let taskRefreshTimer = 0;
+// Scans are async and the directory can change while one is in flight; only
+// the newest scan is allowed to write its result.
+let taskScanToken = 0;
+
+function scheduleTaskRefresh() {
+  clearTimeout(taskRefreshTimer);
+  taskRefreshTimer = setTimeout(() => refreshTasks(), 150);
+}
+
+/** Shows or hides the task list beside the terminal.
+ *
+ * It is a pane rather than a tool view because pressing a task means "run this
+ * and watch it": the list and the shell it types into have to be visible at
+ * the same time, or every run costs a round trip through the tabs. Opening it
+ * narrows the panes, so the terminals are refitted afterwards. */
+function setTaskPane(open) {
+  // Reachable from the command palette while a tool panel is up, where the
+  // panes — and so the pane this sits beside — are hidden.
+  if (open && currentView !== 'shell') setView('shell');
+  state.taskPane = !!open;
+  $('#taskpane').classList.toggle('hidden', !state.taskPane);
+  $('#taskpane-grip').classList.toggle('hidden', !state.taskPane);
+  $('#task-toggle').classList.toggle('active', state.taskPane);
+  applyTaskPaneWidth();
+  // The directory is live, so the list is re-scanned every time the pane
+  // opens rather than trusting whatever the last OSC 7 report left behind.
+  if (state.taskPane) refreshTasks(true);
+  requestAnimationFrame(() => {
+    for (const pane of state.panes) threadById(pane.threadId)?.fit.fit();
+    if (!state.taskPane) focusedThread()?.term.focus();
+  });
+}
+
+// Below this the cards clip too badly to read; above it the pane is just
+// taking room the terminal could use. TERM_MIN is what the terminal keeps
+// whatever the pane asks for — a squeezed terminal is the failure mode that
+// matters, since the whole point of the pane is to watch a command run.
+const TASKPANE_MIN = 200;
+const TASKPANE_MAX = 640;
+const TERM_MIN = 280;
+
+/** What the layout can actually give the pane right now. Measured against the
+ * space beside the terminal rather than the window, because the thread bar
+ * takes its own column and may or may not be showing. */
+function maxTaskPaneWidth() {
+  const width = (sel) => $(sel).getBoundingClientRect().width;
+  const threadbar = $('#threadbar').classList.contains('hidden') ? 0 : width('#threadbar');
+  const avail = width('#body') - threadbar - width('#taskpane-grip');
+  return Math.max(TASKPANE_MIN, Math.min(TASKPANE_MAX, avail - TERM_MIN));
+}
+
+/** Records the width the user dragged to. Kept separate from what is actually
+ * applied: a narrow window clamps the pane, but forgetting the asked-for width
+ * would mean a single resize silently throws the user's sizing away, never to
+ * return when the room does. */
+function setTaskPaneWidth(px) {
+  state.taskPaneWidth = Math.min(TASKPANE_MAX, Math.max(TASKPANE_MIN, px));
+  applyTaskPaneWidth();
+}
+
+/** Puts the wanted width on the pane, clamped to what the layout allows now.
+ * Re-run whenever that changes (window resize, thread bar toggle), so the pane
+ * gives way when room is short and grows back when it returns. */
+function applyTaskPaneWidth() {
+  if (!state.taskPane) return;
+  $('#taskpane').style.width = `${Math.min(maxTaskPaneWidth(), state.taskPaneWidth)}px`;
+}
+
+/** Re-scans the focused thread's working directory. Skips the backend call
+ * when neither the thread nor its directory has changed, unless `force` (the
+ * refresh button — the files themselves may have been edited). */
+async function refreshTasks(force = false) {
+  const thread = focusedThread();
+  const threadId = thread ? thread.id : '';
+  // SSH threads never report a directory (no remote shell integration), so
+  // they are treated as "no cwd" and get their own explanatory empty state.
+  const cwd = thread && thread.kind !== 'ssh' ? (thread.cwd || '') : '';
+  if (!force && threadId === state.tasks.thread && cwd === state.tasks.cwd) {
+    renderTasks();
+    return;
+  }
+  const token = ++taskScanToken;
+  state.tasks.thread = threadId;
+  state.tasks.cwd = cwd;
+  state.tasks.groups = [];
+  renderTasks();
+  if (!cwd) return;
+  let groups = [];
+  try {
+    groups = await invoke('scan_tasks', { dir: cwd });
+  } catch {
+    // A directory that was removed between the report and the scan is ordinary
+    // (the shell may already have moved on). An empty list says the same thing
+    // the user needs to know, without a toast for something they didn't do.
+    groups = [];
+  }
+  if (token !== taskScanToken) return; // a newer scan won
+  state.tasks.groups = groups;
+  renderTasks();
+}
+
+function renderTasks() {
+  const body = $('#task-body');
+  body.innerHTML = '';
+  $('#task-cwd').textContent =
+    state.tasks.cwd ? tr('tasks.cwd', { dir: state.tasks.cwd }) : '';
+  const list = document.createElement('ul');
+  list.className = 'card-list';
+  body.appendChild(list);
+  const thread = focusedThread();
+  if (!thread) {
+    list.appendChild(emptyState('terminal', tr('tasks.empty.noThread.title'),
+      tr('tasks.empty.noThread')));
+  } else if (thread.kind === 'ssh') {
+    list.appendChild(emptyState('server', tr('tasks.empty.ssh.title'),
+      tr('tasks.empty.ssh')));
+  } else if (!state.tasks.cwd) {
+    list.appendChild(emptyState('info', tr('tasks.empty.noCwd.title'),
+      tr('tasks.empty.noCwd')));
+  } else if (!state.tasks.groups.length) {
+    list.appendChild(emptyState('file', tr('tasks.empty.none.title'),
+      tr('tasks.empty.none')));
+  } else {
+    for (const g of state.tasks.groups) list.appendChild(taskGroupCard(g));
+  }
+}
+
+/** One card per manifest, so it stays obvious which file a command came from:
+ * a repo with both a package.json and a Makefile can declare the same name
+ * twice, meaning two different things. */
+function taskGroupCard(g) {
+  const li = document.createElement('li');
+  li.className = 'card task-card';
+  li.innerHTML = `<h4><span class="task-file"></span><span class="task-runner"></span></h4>
+    <ul class="task-list"></ul>`;
+  li.querySelector('.task-file').textContent = g.file;
+  li.querySelector('.task-runner').textContent = g.runner;
+  const ul = li.querySelector('.task-list');
+  for (const t of g.tasks) ul.appendChild(taskRow(t));
+  return li;
+}
+
+function taskRow(t) {
+  const row = document.createElement('li');
+  row.className = 'task-row';
+  row.innerHTML = `
+    <div class="task-text"><span class="task-name"></span><span class="task-detail"></span></div>
+    <code class="task-cmd"></code>
+    <button class="accent-btn task-run">${icon('play')}<span></span></button>`;
+  row.querySelector('.task-name').textContent = t.name;
+  const detail = row.querySelector('.task-detail');
+  if (t.detail) detail.textContent = t.detail; else detail.remove();
+  row.querySelector('.task-cmd').textContent = t.command;
+  const btn = row.querySelector('.task-run');
+  btn.title = tr('tasks.hint');
+  btn.querySelector('span').textContent = tr('tasks.run');
+  // Shift-click inserts without submitting, the same as the command palette
+  // and the workflow buttons — a task you want a flag added to shouldn't have
+  // to be retyped.
+  btn.addEventListener('click', (ev) => runTask(t, !ev.shiftKey));
+  return row;
+}
+
+/** Sends a task to the focused pane. Watching it run is the reason the button
+ * was pressed, so a tool panel is dismissed first — that only happens when the
+ * task came from the command palette, since the pane's own buttons are next to
+ * the terminal and only exist in the shell view. Nothing is executed here or
+ * in the backend: the command is typed into the shell exactly as if the user
+ * had, so their aliases, environment and confirmation prompts all still
+ * apply. */
+function runTask(t, run) {
+  sendToActive(t.command, run);
+  if (currentView !== 'shell') setView('shell');
+}
+
 /* ---------------- command palette ---------------- */
 
 const palette = {
@@ -3411,6 +4724,12 @@ function paletteEntries() {
       detail: 'Ctrl+Shift+E',
       run: () => toggleSplitDir('h'),
     },
+    {
+      kind: 'action',
+      label: tr(state.taskPane ? 'palette.tasksClose' : 'palette.tasksOpen'),
+      detail: '',
+      run: () => setTaskPane(!state.taskPane),
+    },
     { kind: 'action', label: tr('palette.aiAssist'), detail: 'AI', run: openAiAssist },
     { kind: 'action', label: tr('palette.checkUpdate'), detail: '', run: () => checkForUpdates(true) },
     { kind: 'action', label: tr('palette.registerWorkflow'), detail: '', run: () => editWorkflow(null) },
@@ -3418,6 +4737,15 @@ function paletteEntries() {
     { kind: 'action', label: tr('palette.registerSet'), detail: '', run: () => editLaunchSet(null) },
     { kind: 'action', label: tr('palette.shortcutsList'), detail: 'Ctrl+Shift+/', run: openShortcuts },
   ];
+  // Transfers ride the focused thread's SSH connection, so they are only
+  // offered when there is one to ride.
+  if (focusedThread()?.kind === 'ssh') {
+    entries.push(
+      { kind: 'action', label: tr('sftp.browser.title'), detail: 'SFTP', run: () => openRemoteBrowser() },
+      { kind: 'action', label: tr('sftp.upload.title'), detail: 'SFTP', run: sftpUpload },
+      { kind: 'action', label: tr('sftp.download.title'), detail: 'SFTP', run: sftpDownload },
+    );
+  }
   if (state.panes.length >= 2) {
     entries.push({
       kind: 'action',
@@ -3459,6 +4787,39 @@ function paletteEntries() {
       insert: () => runWorkflow(w, false),
     });
   }
+  for (const g of state.tasks.groups) {
+    for (const t of g.tasks) {
+      entries.push({
+        kind: 'task',
+        label: tr('palette.task', { name: t.name }),
+        detail: `${g.file} · ${t.command}`,
+        run: () => runTask(t, true),
+        insert: () => runTask(t, false),
+      });
+    }
+  }
+  for (const preset of state.servers.presets) {
+    entries.push({
+      kind: 'server',
+      label: tr('palette.startServer', { name: preset.name }),
+      detail: `${preset.root}${preset.port ? ` :${preset.port}` : ''}`,
+      run: () => startServer({
+        root: preset.root,
+        port: preset.port,
+        spa: preset.spa,
+        hotReload: preset.hot_reload !== false,
+        openBrowser: preset.open_browser,
+      }),
+    });
+  }
+  for (const info of state.servers.running) {
+    entries.push({
+      kind: 'server',
+      label: tr('palette.stopServer', { url: info.url }),
+      detail: info.root,
+      run: () => stopServer(info.id),
+    });
+  }
   for (const set of state.launchSets) {
     entries.push({
       kind: 'set',
@@ -3485,6 +4846,7 @@ function paletteEntries() {
       hist: h,
       run: () => sendToActive(h.command, true),
       insert: () => sendToActive(h.command, false),
+      save: () => saveAsWorkflow(h.command),
     });
   }
   return entries;
@@ -3610,7 +4972,8 @@ $('#palette-input').addEventListener('keydown', (ev) => {
     const item = palette.items[palette.selected];
     if (item) {
       closePalette();
-      if (ev.shiftKey && item.insert) item.insert();
+      if ((ev.ctrlKey || ev.metaKey) && item.save) item.save();
+      else if (ev.shiftKey && item.insert) item.insert();
       else item.run();
     }
     ev.preventDefault();
@@ -3694,9 +5057,13 @@ function autoGrowTextarea(el) {
   requestAnimationFrame(grow);
 }
 
-function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
+/** `hideCancel` is for modals where the two footer buttons would mean the
+ * same thing — a running transfer has nothing to confirm, so "Cancel" next to
+ * "Abort" is two ways to say stop. */
+function openModal({ title, okLabel, body, onOk, onCancel, extraActions, hideCancel }) {
   $('#modal-title').textContent = title;
   $('#modal-ok').textContent = okLabel || 'OK';
+  $('#modal-cancel').hidden = !!hideCancel;
   const box = $('#modal-body');
   box.innerHTML = '';
   for (const f of body) {
@@ -3705,6 +5072,33 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions }) {
       sec.className = 'modal-section';
       sec.textContent = f.label;
       box.appendChild(sec);
+      continue;
+    }
+    if (f.tag === 'browser') {
+      const wrap = document.createElement('div');
+      wrap.className = 'rb';
+      wrap.innerHTML = `
+        <div class="rb-head">
+          <button type="button" class="ghost-btn rb-up"></button>
+          <code class="rb-path"></code>
+          <button type="button" class="accent-btn rb-upload"></button>
+        </div>
+        <ul class="rb-list"></ul>
+        <p class="rb-status"></p>`;
+      wrap.querySelector('.rb-up').textContent = tr('sftp.browser.up');
+      wrap.querySelector('.rb-upload').textContent = tr('sftp.browser.upload');
+      wrap.querySelector('.rb-up').addEventListener('click', () => {
+        if (browserState && browserState.parent != null) browserGo(browserState.parent);
+      });
+      wrap.querySelector('.rb-upload').addEventListener('click', browserUploadHere);
+      box.appendChild(wrap);
+      continue;
+    }
+    if (f.tag === 'progress') {
+      const wrap = document.createElement('div');
+      wrap.className = 'xfer';
+      wrap.innerHTML = '<progress class="xfer-bar" max="100"></progress><span class="xfer-text"></span>';
+      box.appendChild(wrap);
       continue;
     }
     if (f.tag === 'note') {
@@ -3922,324 +5316,6 @@ function toast(message, isError = false) {
   toastTimer = setTimeout(() => el.classList.add('hidden'), isError ? 5000 : 2500);
 }
 
-/* ---------------- SFTP file transfer (drag & drop / context menu) ---------------- */
-
-/** Quotes a local path for pasting into a shell prompt: bare when it is
- * plain, otherwise single-quoted (POSIX) or double-quoted (Windows). */
-function shellQuotePath(p) {
-  if (/^[A-Za-z0-9_\-.\/:\\~+=@%]+$/.test(p)) return p;
-  return navigator.userAgent.includes('Windows')
-    ? `"${p.replace(/"/g, '""')}"`
-    : `'${p.replace(/'/g, `'\\''`)}'`;
-}
-
-function formatBytes(n) {
-  if (!Number.isFinite(n)) return '?';
-  if (n < 1024) return `${n} B`;
-  const u = ['KB', 'MB', 'GB', 'TB'];
-  let v = n / 1024; let i = 0;
-  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
-  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${u[i]}`;
-}
-
-function baseName(p) {
-  const s = p.replace(/[\\/]+$/, '');
-  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
-  return i >= 0 ? s.slice(i + 1) : s;
-}
-
-/** The pane body under a physical-pixel window position (drag-drop events
- * report physical coordinates), or null. */
-function paneBodyAtPhysical(pos) {
-  if (!pos) return null;
-  const scale = window.devicePixelRatio || 1;
-  const el = document.elementFromPoint(pos.x / scale, pos.y / scale);
-  return el ? el.closest('.pane-body') : null;
-}
-
-function clearDropTargets() {
-  document.querySelectorAll('.pane-body.drop-target').forEach((el) => el.classList.remove('drop-target'));
-}
-
-/** OS file drops (Tauri delivers them as window events rather than DOM drop
- * events). A drop on an SSH pane uploads via SFTP; on a local pane it pastes
- * the quoted path(s) at the prompt, like most terminals do. */
-appWindow.onDragDropEvent((ev) => {
-  const pl = ev.payload;
-  if (pl.type === 'enter' || pl.type === 'over') {
-    const body = paneBodyAtPhysical(pl.position);
-    clearDropTargets();
-    if (body) body.classList.add('drop-target');
-    return;
-  }
-  clearDropTargets();
-  if (pl.type !== 'drop' || !pl.paths?.length) return;
-  const body = paneBodyAtPhysical(pl.position);
-  const idx = body ? state.panes.findIndex((p) => p.body === body) : state.focusedPane;
-  if (idx < 0) return;
-  if (idx !== state.focusedPane) focusPane(idx);
-  const thread = threadById(state.panes[idx].threadId);
-  if (!thread) return;
-  if (thread.kind === 'ssh') {
-    uploadPathsToThread(thread, pl.paths);
-  } else {
-    const text = pl.paths.map(shellQuotePath).join(' ');
-    invoke('session_write', { id: thread.id, data: text }).catch((e) => toast(String(e), true));
-    thread.term.focus();
-  }
-}).catch(() => {});
-
-/** Context-menu "Upload…": native multi-file picker, then the same flow as
- * a drop. */
-async function pickAndUpload(thread) {
-  let paths;
-  try {
-    paths = await window.__TAURI__.dialog.open({ multiple: true, directory: false });
-  } catch (e) {
-    toast(String(e), true);
-    return;
-  }
-  if (!paths) return;
-  uploadPathsToThread(thread, Array.isArray(paths) ? paths : [paths]);
-}
-
-/** Confirms the remote destination (OSC 7 cwd when known, else the SFTP
- * login directory), then uploads each path one after another. */
-async function uploadPathsToThread(thread, paths) {
-  if (thread.kind !== 'ssh') {
-    toast(tr('sftp.notSsh'), true);
-    return;
-  }
-  let dir = thread.remoteCwd || '';
-  if (!dir) {
-    try {
-      dir = (await invoke('sftp_list_dir', { id: thread.id, path: '' })).path;
-    } catch (e) {
-      toast(tr('sftp.failed', { e }), true);
-      return;
-    }
-  }
-  const names = paths.map(baseName);
-  const list = names.length > 4 ? `${names.slice(0, 4).join(', ')} …` : names.join(', ');
-  openModal({
-    title: tr('sftp.upload.title'),
-    okLabel: tr('sftp.upload.ok'),
-    body: [
-      { tag: 'note', label: tr('sftp.upload.files', { n: paths.length, list }) },
-      field(tr('sftp.upload.dir'), 'dir', dir, { required: true }),
-      { tag: 'note', label: tr('sftp.upload.hint') },
-    ],
-    onOk: async (v) => {
-      const remoteDir = v.dir.trim();
-      // Sequential on purpose: one SFTP pipeline saturates the link, and it
-      // keeps progress rows readable.
-      (async () => {
-        for (const p of paths) {
-          // eslint-disable-next-line no-await-in-loop
-          const ok = await runTransfer({
-            thread, kind: 'upload', name: baseName(p),
-            invoke: (transferId) => invoke('sftp_upload', {
-              id: thread.id, transferId, localPath: p, remoteDir,
-            }),
-          });
-          if (!ok) break;
-        }
-      })();
-    },
-  });
-}
-
-/* Transfer panel: one row per in-flight copy, progress from
- * `transfer:progress`, cancel button aborts the backend task. */
-const transfers = new Map();
-
-function renderTransfersVisibility() {
-  $('#transfers').classList.toggle('hidden', transfers.size === 0);
-}
-
-function transferRow(id, kind, name) {
-  const el = document.createElement('div');
-  el.className = 'xfer indeterminate';
-  el.innerHTML = `
-    <div class="xfer-name">${icon(kind)}<span></span></div>
-    <button class="xfer-cancel icon-btn" title="${tr('xfer.cancel')}">${icon('x')}</button>
-    <div class="xfer-meta"></div>
-    <div class="xfer-bar"><i></i></div>`;
-  el.querySelector('.xfer-name span').textContent = name;
-  el.querySelector('.xfer-cancel').addEventListener('click', () => {
-    invoke('cancel_transfer', { transferId: id }).catch(() => {});
-  });
-  $('#transfers').appendChild(el);
-  return el;
-}
-
-/** Runs one upload/download to completion with a progress row; resolves
- * true on success, false on cancel/error (already reported). */
-async function runTransfer({ thread, kind, name, invoke: start }) {
-  const id = (crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`);
-  const el = transferRow(id, kind, name);
-  transfers.set(id, { el, kind, name });
-  renderTransfersVisibility();
-  const finish = (ok, msg) => {
-    el.classList.remove('indeterminate');
-    el.classList.add(ok ? 'done' : 'error');
-    el.querySelector('.xfer-meta').textContent = msg;
-    el.querySelector('.xfer-cancel').disabled = true;
-    setTimeout(() => {
-      el.remove();
-      transfers.delete(id);
-      renderTransfersVisibility();
-    }, ok ? 2500 : 8000);
-  };
-  try {
-    await start(id);
-    finish(true, tr('xfer.done'));
-    toast(tr(kind === 'upload' ? 'sftp.upload.done' : 'sftp.download.done', { name }));
-    return true;
-  } catch (e) {
-    const msg = String(e);
-    if (msg.includes('TRANSFER_CANCELLED')) {
-      finish(false, tr('sftp.cancelled'));
-    } else {
-      finish(false, tr('sftp.failed', { e: msg }));
-      toast(tr('sftp.failed', { e: msg }), true);
-    }
-    return false;
-  } finally {
-    thread.term?.focus();
-  }
-}
-
-listen('transfer:progress', (ev) => {
-  const { id, done, total } = ev.payload;
-  const t = transfers.get(id);
-  if (!t) return;
-  if (total > 0) {
-    t.el.classList.remove('indeterminate');
-    t.el.querySelector('.xfer-bar > i').style.width = `${Math.min(100, (done / total) * 100).toFixed(1)}%`;
-    t.el.querySelector('.xfer-meta').textContent = tr('xfer.running', {
-      done: formatBytes(done), total: formatBytes(total),
-    });
-  } else {
-    t.el.querySelector('.xfer-meta').textContent = formatBytes(done);
-  }
-});
-
-/* Remote browser: navigate the SSH host's file system over SFTP and pick a
- * file to download. Directories open on double-click (or ↑ / path bar). */
-const rb = { thread: null, path: '', selected: null, entries: [] };
-
-function rbStatus(text) {
-  $('#rb-status').textContent = text;
-}
-
-async function rbLoad(path) {
-  if (!rb.thread) return;
-  rbStatus(tr('sftp.browser.loading'));
-  $('#rb-download').disabled = true;
-  rb.selected = null;
-  let listing;
-  try {
-    listing = await invoke('sftp_list_dir', { id: rb.thread.id, path });
-  } catch (e) {
-    rbStatus(tr('sftp.failed', { e }));
-    return;
-  }
-  rb.path = listing.path;
-  rb.entries = listing.entries;
-  $('#rb-path').value = listing.path;
-  const list = $('#rb-list');
-  list.innerHTML = '';
-  if (!listing.entries.length) {
-    const empty = document.createElement('div');
-    empty.className = 'rb-empty';
-    empty.textContent = tr('sftp.browser.empty');
-    list.appendChild(empty);
-  }
-  for (const e of listing.entries) {
-    const row = document.createElement('div');
-    row.className = `rb-row${e.is_dir ? ' dir' : ''}`;
-    row.setAttribute('role', 'option');
-    row.innerHTML = `<span class="rb-ico">${icon(e.is_dir ? 'folder' : 'file')}</span>
-      <span class="rb-name"></span><span class="rb-size"></span><span class="rb-date"></span>`;
-    row.querySelector('.rb-name').textContent = e.name + (e.is_symlink ? ' →' : '');
-    row.querySelector('.rb-size').textContent = formatBytes(e.size);
-    row.querySelector('.rb-date').textContent = e.modified
-      ? new Date(e.modified * 1000).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '';
-    row.addEventListener('click', () => rbSelect(e, row));
-    row.addEventListener('dblclick', () => (e.is_dir ? rbLoad(e.path) : rbDownload(e)));
-    list.appendChild(row);
-  }
-  const dirs = listing.entries.filter((e) => e.is_dir).length;
-  rbStatus(tr('sftp.browser.count', { dirs, files: listing.entries.length - dirs }));
-}
-
-function rbSelect(entry, row) {
-  $('#rb-list').querySelectorAll('.rb-row.selected').forEach((el) => el.classList.remove('selected'));
-  row.classList.add('selected');
-  rb.selected = entry;
-  $('#rb-download').disabled = entry.is_dir;
-}
-
-function rbParent() {
-  if (!rb.path || rb.path === '/') return;
-  const trimmed = rb.path.replace(/\/+$/, '');
-  const i = trimmed.lastIndexOf('/');
-  rbLoad(i <= 0 ? '/' : trimmed.slice(0, i));
-}
-
-async function rbDownload(entry) {
-  const thread = rb.thread;
-  if (!thread || !entry || entry.is_dir) return;
-  let dest;
-  try {
-    dest = await window.__TAURI__.dialog.save({ defaultPath: entry.name });
-  } catch (e) {
-    toast(String(e), true);
-    return;
-  }
-  if (!dest) return;
-  closeRemoteBrowser();
-  runTransfer({
-    thread, kind: 'download', name: entry.name,
-    invoke: (transferId) => invoke('sftp_download', {
-      id: thread.id, transferId, remotePath: entry.path, localPath: dest,
-    }),
-  });
-}
-
-function openRemoteBrowser(thread) {
-  if (!thread || thread.kind !== 'ssh') {
-    toast(tr('sftp.notSsh'), true);
-    return;
-  }
-  rb.thread = thread;
-  $('#remote-browser').classList.remove('hidden');
-  rbLoad(thread.remoteCwd || '');
-}
-
-function closeRemoteBrowser() {
-  $('#remote-browser').classList.add('hidden');
-  $('#rb-list').innerHTML = '';
-  rb.thread = null;
-  rb.selected = null;
-  focusedThread()?.term.focus();
-}
-
-$('#rb-cancel').addEventListener('click', closeRemoteBrowser);
-$('#rb-up').addEventListener('click', rbParent);
-$('#rb-go').addEventListener('click', () => rbLoad($('#rb-path').value.trim()));
-$('#rb-path').addEventListener('keydown', (ev) => {
-  if (ev.key === 'Enter') { ev.preventDefault(); rbLoad($('#rb-path').value.trim()); }
-});
-$('#rb-download').addEventListener('click', () => rbDownload(rb.selected));
-$('#remote-browser').addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') { ev.preventDefault(); closeRemoteBrowser(); }
-});
-$('#remote-browser').addEventListener('mousedown', (ev) => {
-  if (ev.target === ev.currentTarget) closeRemoteBrowser();
-});
-
 /* ---------------- sidebars & shortcuts ---------------- */
 
 /** Header views. "シェル" shows the terminal workspace (thread list + panes);
@@ -4248,6 +5324,21 @@ $('#remote-browser').addEventListener('mousedown', (ev) => {
  * view is shown at a time. */
 let currentView = 'shell';
 
+/** In a narrow window the header tabs scroll sideways rather than squeeze the
+ * titlebar (see #header-tabs CSS). Marks the edges that have tabs hidden past
+ * them so CSS can fade them, and, with `reveal`, brings the active tab into
+ * view. */
+function updateHeaderTabsOverflow(reveal = false) {
+  const nav = $('#header-tabs');
+  if (reveal) {
+    const active = nav.querySelector('.hdr-tab.active');
+    if (active) active.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }
+  const max = nav.scrollWidth - nav.clientWidth;
+  nav.classList.toggle('more-start', nav.scrollLeft > 1);
+  nav.classList.toggle('more-end', nav.scrollLeft < max - 1);
+}
+
 function setView(name) {
   currentView = name;
   const isShell = name === 'shell';
@@ -4255,12 +5346,20 @@ function setView(name) {
   // and the panel container fills the window.
   $('#body').classList.toggle('tool-view', !isShell);
   $('#sidebar').classList.toggle('hidden', isShell);
+  // The shell's own controls go with it: in a tool panel there are no panes to
+  // split and no thread list to toggle, so leaving them up would offer buttons
+  // that quietly do nothing.
+  $('#shell-tools').classList.toggle('hidden', !isShell);
   if (!isShell) {
     document.querySelectorAll('.panel').forEach((p) =>
       p.classList.toggle('active', p.id === `panel-${name}`));
   }
   document.querySelectorAll('.hdr-tab').forEach((b) =>
     b.classList.toggle('active', b.dataset.panel === name));
+  updateHeaderTabsOverflow(true);
+  // Uptime and the running list are only correct as of the last read, and the
+  // backend can outlive a panel that was never opened.
+  if (name === 'servers') refreshServers();
   if (isShell) {
     // Terminals were display:none while the tool view was up — refit/refocus
     // now that they are visible again.
@@ -4285,6 +5384,7 @@ for (const btn of document.querySelectorAll('.hdr-tab')) {
 
 $('#toggle-threadbar').addEventListener('click', () => {
   $('#threadbar').classList.toggle('hidden');
+  applyTaskPaneWidth();
 });
 
 $('#new-thread').addEventListener('click', () => newLocalThread());
@@ -4296,9 +5396,79 @@ $('#split-toggle').addEventListener('click', () => toggleSplitDir('v'));
 $('#split-h-toggle').addEventListener('click', () => toggleSplitDir('h'));
 $('#broadcast-toggle').addEventListener('click', toggleBroadcast);
 $('#palette-btn').addEventListener('click', openPalette);
+$('#host-known').addEventListener('click', openKnownHosts);
+$('#host-keygen').addEventListener('click', openKeygen);
+$('#task-toggle').addEventListener('click', () => setTaskPane(!state.taskPane));
+$('#task-close').addEventListener('click', () => setTaskPane(false));
+$('#task-refresh').addEventListener('click', () => refreshTasks(true));
+// Dragging the grip resizes the pane, the same as the splitter between panes.
+// The terminals need no refit here: each pane's ResizeObserver already refits
+// its terminal as the pane's box changes.
+$('#taskpane-grip').addEventListener('mousedown', (ev) => {
+  ev.preventDefault();
+  // Reuses the splitter's guard, which also stops the terminals under the
+  // pointer from swallowing the drag (see body.col-resizing).
+  document.body.classList.add('col-resizing');
+  // The pane is flush with the window's right edge, so the width the pointer
+  // asks for is simply what is left of the window from it.
+  const move = (e) => setTaskPaneWidth(window.innerWidth - e.clientX);
+  const up = () => {
+    document.body.classList.remove('col-resizing');
+    window.removeEventListener('mousemove', move);
+    window.removeEventListener('mouseup', up);
+  };
+  window.addEventListener('mousemove', move);
+  window.addEventListener('mouseup', up);
+});
+
+$('#srv-start').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  startServer(serverFormValues());
+});
+$('#srv-browse').addEventListener('click', async () => {
+  const dir = await window.__TAURI__.dialog.open({ directory: true, multiple: false });
+  if (dir) $('#srv-root').value = dir;
+});
+// The shell already knows where it is (OSC 7), so the common case — "serve the
+// directory I am standing in" — needs no typing and no file dialog.
+$('#srv-use-cwd').addEventListener('click', () => {
+  const cwd = focusedThread()?.cwd;
+  if (!cwd) {
+    toast(tr('srv.useCwd.none'), true);
+    return;
+  }
+  $('#srv-root').value = cwd;
+});
+$('#srv-save-preset').addEventListener('click', () => {
+  const values = serverFormValues();
+  editServerPreset({
+    name: values.root.split(/[\\/]/).filter(Boolean).pop() || '',
+    root: values.root,
+    port: values.port,
+    spa: values.spa,
+    hot_reload: values.hotReload,
+    open_browser: values.openBrowser,
+  });
+});
+$('#srv-log-clear').addEventListener('click', () => {
+  state.servers.log = [];
+  renderServerLog();
+});
+
+function serverFormValues() {
+  return {
+    root: $('#srv-root').value.trim(),
+    port: Math.max(0, Math.min(65535, parseInt($('#srv-port').value, 10) || 0)),
+    spa: $('#srv-spa').checked,
+    hotReload: $('#srv-hot').checked,
+    openBrowser: $('#srv-open').checked,
+  };
+}
 $('#wf-add').addEventListener('click', () => editWorkflow(null));
 $('#wf-export').addEventListener('click', exportWorkflows);
 $('#wf-import').addEventListener('click', importWorkflows);
+$('#settings-export').addEventListener('click', exportSettings);
+$('#settings-import').addEventListener('click', importSettings);
 $('#host-add').addEventListener('click', () => editHost(null));
 $('#host-import').addEventListener('click', importSshConfig);
 $('#profile-add').addEventListener('click', () => editProfile(null));
@@ -4339,7 +5509,14 @@ function toggleProfileMenu(anchor) {
       item.className = 'popup-item';
       item.innerHTML = `<span class="pi-name"></span><span class="pi-cmd"></span>`;
       item.querySelector('.pi-name').textContent = `⇄ ${h.name || h.host}`;
-      item.querySelector('.pi-cmd').textContent = `${h.username}@${h.host}:${h.port}`;
+      if (h.color) {
+        const dot = document.createElement('span');
+        dot.className = 'host-dot';
+        dot.dataset.color = h.color;
+        item.querySelector('.pi-name').prepend(dot);
+      }
+      item.querySelector('.pi-cmd').textContent =
+        (groupParts(h).length ? `${groupParts(h).join(' / ')} · ` : '') + `${h.username}@${h.host}:${h.port}`;
       item.addEventListener('click', () => {
         closeProfileMenu();
         newSshThread(h);
@@ -4411,14 +5588,751 @@ let ctxMenuStack = [];
  * Workflows are grouped: each group is a submenu you hover/arrow into, mirroring
  * the panel's hierarchy. Click runs the workflow in that pane; Shift+click only
  * inserts the filled command without executing it (same as the palette). */
-function openTermContextMenu(x, y) {
+function openTermContextMenu(x, y, path, remote, blockCommand = '') {
   closeTermContextMenu();
   const menu = $('#term-context-menu');
   ctxMenuStack = [menu];
   fillWorkflowMenu(menu, buildWorkflowTree(state.workflows), 0, true);
-  const t = focusedThread();
-  if (t && t.kind === 'ssh') prependTransferMenu(menu, t);
+  // SFTP upload / download, above the workflows, for SSH threads. Prepended
+  // first so the path and block sections below land above it: they are the
+  // more specific things the user pointed at.
+  const focused = focusedThread();
+  if (remote && focused && focused.kind === 'ssh') {
+    const sep = document.createElement('div');
+    sep.className = 'popup-sep';
+    menu.prepend(sep);
+    menu.prepend(transferSection(focused));
+  }
+  // Above the workflows, and only when a path is actually under the cursor or
+  // selected: it is the more specific thing the user pointed at, and a row
+  // that is always present but usually does nothing trains people to skip it.
+  // The same goes for "save as workflow": offered only over a finished block
+  // whose command line could be read.
+  if (blockCommand) {
+    const sep = document.createElement('div');
+    sep.className = 'popup-sep';
+    menu.prepend(sep);
+    menu.prepend(saveWorkflowItem(blockCommand));
+  }
+  if (path) {
+    const sep = document.createElement('div');
+    sep.className = 'popup-sep';
+    menu.prepend(sep);
+    menu.prepend(pathSection(path, remote));
+  }
+  showRootMenu(menu, x, y);
+}
 
+/** The "save as workflow" row of the right-click menu, naming the command
+ * so it is clear which one — the pointer may sit several lines into a block's
+ * output, far from the prompt it belongs to. */
+function saveWorkflowItem(command) {
+  const item = document.createElement('button');
+  item.type = 'button';
+  item.className = 'popup-item ctx-save-workflow';
+  item.setAttribute('role', 'menuitem');
+  item.innerHTML = `<span class="pi-line">${icon('zap')}<span class="pi-name"></span></span>`;
+  const short = command.length > 48 ? `${command.slice(0, 48)}…` : command;
+  item.querySelector('.pi-name').textContent = tr('ctx.saveWorkflow', { cmd: short });
+  item.addEventListener('click', () => {
+    closeTermContextMenu();
+    saveAsWorkflow(command);
+  });
+  return item;
+}
+
+/** The finished command block under a point in a thread's terminal, or null.
+ * Row math as in pathAtPoint; the block is the one whose range (prompt line
+ * through the line before the next prompt) contains that buffer line. */
+function blockAtPoint(thread, x, y) {
+  const screen = thread.hostEl.querySelector('.xterm-screen');
+  if (!screen || !thread.blocks?.length) return null;
+  const rect = screen.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) return null;
+  const row = Math.floor((y - rect.top) / (rect.height / thread.term.rows));
+  const line = thread.term.buffer.active.viewportY + row;
+  return thread.blocks.find((b) => {
+    if (!b.done || !b.sawOutput || b.marker.isDisposed) return false;
+    const { start, end } = blockRange(thread.term, thread.blocks, b);
+    return line >= start && line <= end;
+  }) || null;
+}
+
+/* ---------------- SFTP file transfer ---------------- */
+
+/** Human-readable byte count. Transfers are the one place in this app where
+ * the raw number is useless — nobody reads 1073741824. */
+function humanBytes(n) {
+  if (!Number.isFinite(n) || n < 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let v = n;
+  let u = 0;
+  while (v >= 1024 && u < units.length - 1) { v /= 1024; u++; }
+  return `${u === 0 ? v : v.toFixed(1)} ${units[u]}`;
+}
+
+let xferSeq = 0;
+
+/** Runs one transfer behind a progress modal.
+ *
+ * `invokeTransfer` is given the generated transfer id and returns the backend
+ * promise. The modal's only button cancels: a transfer is not something you
+ * "OK", and the backend stops between chunks, so the partial file is the
+ * user's to deal with rather than something we silently leave looking whole
+ * (the backend reports the cancel as an error for exactly that reason). */
+async function runTransfer(title, subtitle, invokeTransfer) {
+  const transferId = `xfer-${++xferSeq}-${Date.now()}`;
+  let settled = false;
+  openModal({
+    title,
+    okLabel: tr('sftp.cancel'),
+    hideCancel: true,
+    body: [{ tag: 'note', label: subtitle }, { tag: 'progress' }],
+    onOk: () => { invoke('sftp_cancel', { transferId }).catch(() => {}); },
+    onCancel: () => { invoke('sftp_cancel', { transferId }).catch(() => {}); },
+  });
+
+  const unlisten = await window.__TAURI__.event.listen('sftp:progress', (ev) => {
+    const p = ev.payload;
+    if (!p || p.transferId !== transferId || settled) return;
+    const bar = $('#modal-body .xfer-bar');
+    const text = $('#modal-body .xfer-text');
+    if (!bar || !text) return;
+    if (p.total > 0) {
+      bar.value = Math.min(100, (p.transferred / p.total) * 100);
+      text.textContent = `${humanBytes(p.transferred)} / ${humanBytes(p.total)}`;
+    } else {
+      // Size unknown: leave the bar indeterminate rather than inventing a
+      // denominator, and show what has moved.
+      bar.removeAttribute('value');
+      text.textContent = humanBytes(p.transferred);
+    }
+  });
+
+  try {
+    const done = await invokeTransfer(transferId);
+    settled = true;
+    closeModal(false);
+    toast(tr('sftp.done', { bytes: humanBytes(done.bytes), path: done.remotePath }));
+    return true;
+  } catch (e) {
+    settled = true;
+    closeModal(false);
+    toast(String(e), true);
+    return false;
+  } finally {
+    unlisten();
+  }
+}
+
+/* ---- drag & drop / context-menu upload ---- */
+
+/** Quotes a local path for pasting at a shell prompt: bare when it is plain,
+ * otherwise single-quoted (POSIX) or double-quoted (Windows). */
+function shellQuotePath(p) {
+  if (/^[A-Za-z0-9_\-.\/:\\~+=@%]+$/.test(p)) return p;
+  return navigator.userAgent.includes('Windows')
+    ? `"${p.replace(/"/g, '""')}"`
+    : `'${p.replace(/'/g, `'\\''`)}'`;
+}
+
+function baseName(p) {
+  const s = String(p).replace(/[\\/]+$/, '');
+  const i = Math.max(s.lastIndexOf('/'), s.lastIndexOf('\\'));
+  return i >= 0 ? s.slice(i + 1) : s;
+}
+
+/** The pane body under a physical-pixel window position (Tauri's drag-drop
+ * events report physical coordinates), or null. */
+function paneBodyAtPhysical(pos) {
+  if (!pos) return null;
+  const scale = window.devicePixelRatio || 1;
+  const el = document.elementFromPoint(pos.x / scale, pos.y / scale);
+  return el ? el.closest('.pane-body') : null;
+}
+
+function clearDropTargets() {
+  document.querySelectorAll('.pane-body.drop-target').forEach((el) => el.classList.remove('drop-target'));
+}
+
+/** OS file drops. Tauri delivers them as window events rather than DOM drop
+ * events (the webview never sees the files). A drop on an SSH pane uploads
+ * over that thread's SFTP; on a local pane it pastes the quoted path(s) at
+ * the prompt, like most terminals do. */
+appWindow.onDragDropEvent((ev) => {
+  const pl = ev.payload;
+  if (pl.type === 'enter' || pl.type === 'over') {
+    const body = paneBodyAtPhysical(pl.position);
+    clearDropTargets();
+    if (body) body.classList.add('drop-target');
+    return;
+  }
+  clearDropTargets();
+  if (pl.type !== 'drop' || !pl.paths?.length) return;
+  const body = paneBodyAtPhysical(pl.position);
+  const idx = body ? state.panes.findIndex((p) => p.body === body) : state.focusedPane;
+  if (idx < 0) return;
+  if (idx !== state.focusedPane) focusPane(idx);
+  const thread = threadById(state.panes[idx].threadId);
+  if (!thread) return;
+  if (thread.kind === 'ssh') {
+    uploadPathsToThread(thread, pl.paths);
+  } else {
+    const text = pl.paths.map(shellQuotePath).join(' ');
+    invoke('session_write', { id: thread.id, data: text }).catch((e) => toast(String(e), true));
+    thread.term.focus();
+  }
+}).catch(() => {});
+
+/** Context-menu "Upload…": native picker (files, or one folder), then the
+ * same flow as a drop. */
+async function pickAndUpload(thread, directory = false) {
+  let paths;
+  try {
+    paths = await window.__TAURI__.dialog.open({ multiple: !directory, directory });
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!paths) return;
+  uploadPathsToThread(thread, Array.isArray(paths) ? paths : [paths]);
+}
+
+/** Confirms the remote destination (the shell's OSC 7 working directory when
+ * known, else the SFTP login directory), then uploads each path one after
+ * another through the existing progress modal. Sequential on purpose: one
+ * SFTP pipeline saturates the link, and a failure stops the rest rather than
+ * leaving a half-landed batch to untangle. */
+async function uploadPathsToThread(thread, paths) {
+  if (thread.kind !== 'ssh') {
+    toast(tr('sftp.needSsh'), true);
+    return;
+  }
+  let dir = thread.cwd || '';
+  if (!dir) {
+    try {
+      dir = (await invoke('sftp_list', { sessionId: thread.id, path: '.' })).path;
+    } catch (e) {
+      toast(String(e), true);
+      return;
+    }
+  }
+  const names = paths.map(baseName);
+  const list = names.length > 4 ? `${names.slice(0, 4).join(', ')} …` : names.join(', ');
+  openModal({
+    title: tr('sftp.drop.title'),
+    okLabel: tr('common.ok'),
+    body: [
+      fieldNote(tr('sftp.drop.files', { n: paths.length, list })),
+      field(tr('sftp.drop.dir'), 'dir', dir, { required: true }),
+      fieldNote(tr('sftp.drop.hint')),
+    ],
+    onOk: (v) => {
+      const remoteDir = (v.dir || '').trim();
+      const sessionId = thread.id;
+      // Deferred a turn: submitModal empties #modal-body after onOk, and the
+      // progress modal must not be opened underneath that.
+      setTimeout(async () => {
+        for (const p of paths) {
+          // eslint-disable-next-line no-await-in-loop
+          const ok = await runTransfer(
+            tr('sftp.upload.title'),
+            tr('sftp.drop.item', { name: baseName(p), dir: remoteDir }),
+            (transferId) => invoke('sftp_upload_into', {
+              sessionId, localPath: String(p), remoteDir, transferId,
+            }),
+          );
+          if (!ok) break;
+        }
+        thread.term?.focus();
+      }, 0);
+    },
+  });
+}
+
+/** SFTP rows for the terminal's right-click menu (SSH threads only — a
+ * local shell has nothing to transfer to). */
+function transferSection(thread) {
+  const frag = document.createDocumentFragment();
+  const label = document.createElement('div');
+  label.className = 'popup-label';
+  label.textContent = tr('menu.transfer');
+  frag.appendChild(label);
+  const mk = (ico, text, onClick) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'popup-item';
+    item.setAttribute('role', 'menuitem');
+    item.innerHTML = `<span class="pi-line">${icon(ico)}<span class="pi-name"></span></span>`;
+    item.querySelector('.pi-name').textContent = text;
+    item.addEventListener('click', () => { closeTermContextMenu(); onClick(); });
+    return item;
+  };
+  frag.appendChild(mk('upload', tr('menu.upload'), () => pickAndUpload(thread, false)));
+  frag.appendChild(mk('folder', tr('menu.uploadDir'), () => pickAndUpload(thread, true)));
+  frag.appendChild(mk('download', tr('menu.download'), () => openRemoteBrowser(thread.cwd || undefined)));
+  return frag;
+}
+
+/** The SSH thread a transfer would run on, or null with a toast explaining
+ * why not. Transfers ride the focused thread's existing connection, so there
+ * has to be one and it has to be SSH. */
+function transferThread() {
+  const t = focusedThread();
+  if (!t || t.kind !== 'ssh') {
+    toast(tr('sftp.needSsh'), true);
+    return null;
+  }
+  return t;
+}
+
+/** Upload: pick the local file first (that is the one the OS can offer a
+ * picker for), then ask where it goes on the server. */
+async function sftpUpload() {
+  const thread = transferThread();
+  if (!thread) return;
+  let localPath;
+  try {
+    localPath = await window.__TAURI__.dialog.open({ multiple: false, directory: false });
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!localPath) return; // cancelled
+  const name = String(localPath).split(/[\\/]/).pop();
+  const remotePath = await promptText(tr('sftp.upload.title'), tr('sftp.remotePath'), `./${name}`,
+    tr('sftp.remotePath.hint'));
+  if (remotePath === null) return;
+  await runTransfer(
+    tr('sftp.upload.title'),
+    `${localPath}  →  ${remotePath}`,
+    (transferId) => invoke('sftp_upload', {
+      sessionId: thread.id, localPath: String(localPath), remotePath, transferId,
+    }),
+  );
+}
+
+/** Download: ask for the remote path, then let the OS pick where to put it. */
+async function sftpDownload() {
+  const thread = transferThread();
+  if (!thread) return;
+  const remotePath = await promptText(tr('sftp.download.title'), tr('sftp.remotePath'), '',
+    tr('sftp.remotePath.hint'));
+  if (remotePath === null || !remotePath.trim()) return;
+  const suggested = remotePath.split('/').pop() || 'download';
+  let localPath;
+  try {
+    localPath = await window.__TAURI__.dialog.save({ defaultPath: suggested });
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!localPath) return; // cancelled
+  await runTransfer(
+    tr('sftp.download.title'),
+    `${remotePath}  →  ${localPath}`,
+    (transferId) => invoke('sftp_download', {
+      sessionId: thread.id, remotePath, localPath: String(localPath), transferId,
+    }),
+  );
+}
+
+/** Remote file browser: navigate the server's filesystem over the SFTP
+ * channel of the focused SSH thread, and transfer from where you are.
+ *
+ * Typing a path from memory was the only way to reach a file, which is fine
+ * when you already know it and useless when you do not — the case a browser
+ * exists for. Navigation goes by the path the *server* resolved, so `~` and
+ * `..` never accumulate in what is displayed.
+ *
+ * It is deliberately read-only apart from transferring: no delete, rename or
+ * mkdir. Those are destructive operations on someone's server and want their
+ * own confirmation design; a browser that can lose files is worse than one
+ * that cannot yet create a directory. */
+let browserState = null;
+
+async function openRemoteBrowser(startPath) {
+  const thread = transferThread();
+  if (!thread) return;
+  browserState = { sessionId: thread.id, path: startPath || '.', parent: null, entries: [], busy: false };
+  openModal({
+    title: tr('sftp.browser.title'),
+    okLabel: tr('common.close'),
+    hideCancel: true,
+    body: [{ tag: 'browser' }],
+    onOk: () => { browserState = null; },
+    onCancel: () => { browserState = null; },
+  });
+  await browserGo(browserState.path);
+}
+
+/** Loads one directory and repaints. Failures leave the previous listing on
+ * screen — losing your place because one directory was unreadable is worse
+ * than the error. */
+async function browserGo(path) {
+  if (!browserState || browserState.busy) return;
+  browserState.busy = true;
+  browserSetStatus(tr('sftp.browser.loading'));
+  try {
+    const res = await invoke('sftp_list', { sessionId: browserState.sessionId, path });
+    browserState.path = res.path;
+    browserState.parent = res.parent;
+    browserState.entries = res.entries;
+    renderBrowser();
+  } catch (e) {
+    browserSetStatus(String(e), true);
+  } finally {
+    browserState.busy = false;
+  }
+}
+
+function browserSetStatus(text, isError) {
+  const el = $('#modal-body .rb-status');
+  if (!el) return;
+  el.textContent = text;
+  el.classList.toggle('err', !!isError);
+}
+
+/** Unix mtime (seconds) as a compact local date. */
+function browserDate(mtime) {
+  if (!mtime) return '';
+  const d = new Date(mtime * 1000);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+function renderBrowser() {
+  const root = $('#modal-body .rb');
+  if (!root || !browserState) return;
+  const { path, parent, entries } = browserState;
+  $('#modal-body .rb-path').textContent = path;
+  $('#modal-body .rb-path').title = path;
+
+  const list = $('#modal-body .rb-list');
+  list.innerHTML = '';
+
+  if (parent !== null && parent !== undefined) {
+    list.appendChild(browserRow({ name: '..', path: parent, isDir: true }, true));
+  }
+  for (const e of entries) list.appendChild(browserRow(e, false));
+  if (!entries.length) {
+    const empty = document.createElement('li');
+    empty.className = 'rb-empty';
+    empty.textContent = tr('sftp.browser.empty');
+    list.appendChild(empty);
+  }
+  browserSetStatus(tr('sftp.browser.count', { n: entries.length }));
+}
+
+/** One row. Directories navigate; files download. A row is a button so the
+ * keyboard reaches it the same way the mouse does. */
+function browserRow(entry, isUp) {
+  const li = document.createElement('li');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = `rb-row${entry.isDir ? ' dir' : ''}`;
+  btn.innerHTML = `
+    <span class="rb-ico">${icon(entry.isDir ? 'folder' : 'file')}</span>
+    <span class="rb-name"></span>
+    <span class="rb-size"></span>
+    <span class="rb-date"></span>`;
+  btn.querySelector('.rb-name').textContent =
+    entry.name + (entry.isSymlink ? ' →' : '');
+  btn.querySelector('.rb-size').textContent =
+    entry.isDir || entry.size == null ? '' : humanBytes(entry.size);
+  btn.querySelector('.rb-date').textContent = isUp ? '' : browserDate(entry.mtime);
+  btn.title = entry.path;
+  btn.addEventListener('click', () => {
+    if (entry.isDir) browserGo(entry.path);
+    else browserDownloadEntry(entry);
+  });
+  li.appendChild(btn);
+  return li;
+}
+
+/** Downloads the clicked file: the OS picks where, the name is suggested. */
+async function browserDownloadEntry(entry) {
+  const state0 = browserState;
+  let localPath;
+  try {
+    localPath = await window.__TAURI__.dialog.save({ defaultPath: entry.name });
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!localPath) return; // cancelled
+  const sessionId = state0.sessionId;
+  // The transfer takes over the modal, so the browser is closed first and
+  // reopened afterwards at the same directory — stacking two modals on the
+  // one #modal element would leave the browser half-erased. If the browser
+  // was dismissed while the OS dialog was up, it stays dismissed: reopening
+  // a window the user just closed is not a courtesy.
+  const back = browserState ? state0.path : null;
+  closeModal(false);
+  browserState = null;
+  await runTransfer(
+    tr('sftp.download.title'),
+    `${entry.path}  →  ${localPath}`,
+    (transferId) => invoke('sftp_download', {
+      sessionId, remotePath: entry.path, localPath: String(localPath), transferId,
+    }),
+  );
+  if (back !== null) await openRemoteBrowser(back);
+}
+
+/** Uploads into the directory currently shown. */
+async function browserUploadHere() {
+  const state0 = browserState;
+  if (!state0) return;
+  let localPath;
+  try {
+    localPath = await window.__TAURI__.dialog.open({ multiple: false, directory: false });
+  } catch (e) {
+    toast(String(e), true);
+    return;
+  }
+  if (!localPath) return;
+  const name = String(localPath).split(/[\\/]/).pop();
+  const remotePath = `${state0.path.replace(/\/+$/, '')}/${name}`;
+  const sessionId = state0.sessionId;
+  const back = browserState ? state0.path : null;
+  closeModal(false);
+  browserState = null;
+  await runTransfer(
+    tr('sftp.upload.title'),
+    `${localPath}  →  ${remotePath}`,
+    (transferId) => invoke('sftp_upload', {
+      sessionId, localPath: String(localPath), remotePath, transferId,
+    }),
+  );
+  if (back !== null) await openRemoteBrowser(back);
+}
+
+/** One-field text prompt. Resolves to the trimmed value, or null on cancel.
+ *
+ * The resolve is deferred by a turn on purpose. `submitModal` awaits `onOk`
+ * and *then* empties `#modal-body`; a caller that opens its own modal the
+ * moment this resolves would have that body wiped out from under it. Handing
+ * the result back on a macrotask puts the caller strictly after the close. */
+function promptText(title, label, value, hint) {
+  return new Promise((resolve) => {
+    const body = [field(label, 'value', value, { required: true })];
+    if (hint) body.push(fieldNote(hint));
+    const later = (v) => setTimeout(() => resolve(v), 0);
+    openModal({
+      title,
+      okLabel: tr('common.ok'),
+      body,
+      onOk: (values) => later((values.value || '').trim()),
+      onCancel: () => later(null),
+    });
+  });
+}
+
+/* ---------------- filesystem paths in terminal output ---------------- */
+
+/* Absolute paths only. A relative path (`src/lib.rs`) has to be resolved
+ * against the shell's working directory. `thread.cwd` now carries that (OSC 7,
+ * see createThread), but only for local shells with integration enabled — for
+ * an SSH thread, or one whose shell reports nothing, it is empty, and
+ * resolving against the app's own cwd would silently open a different file.
+ * Widening this to relative paths therefore means handling the unknown-cwd
+ * case first, which is why it still stops at absolute ones. */
+const PATH_PATTERNS = [
+  // POSIX absolute, and `~` / `~/…` (expanded by the backend, which is the
+  // side that knows this machine's home).
+  /(?:^|[\s"'`([{<>=,])((?:~|\/)[^\s"'`)\]}<>|]*)/g,
+  // Windows drive-absolute (C:\… and C:/…) and UNC (\\server\share).
+  /(?:^|[\s"'`([{<>=,])([A-Za-z]:[\\/][^\s"'`)\]}<>|]*|\\\\[^\s"'`)\]}<>|]+)/g,
+];
+
+/* Trailing characters that end a sentence rather than a path. Stripped from
+ * the right, repeatedly, because build output produces things like
+ * `(/usr/lib/libfoo.so).` — the dot and paren are punctuation, not filename. */
+const PATH_TRAILING_JUNK = /[.,:;!?)\]}'"`]+$/;
+
+/* Compiler and grep output pin a location as `path:line` or `path:line:col`.
+ * The digits are not part of the filename, and leaving them attached makes
+ * every such path fail to resolve. */
+const PATH_LINE_SUFFIX = /:\d+(?::\d+)?$/;
+
+/** Trims a raw match down to the path itself, or returns '' if nothing
+ * usable is left. */
+function cleanPathMatch(raw) {
+    let p = raw.replace(PATH_TRAILING_JUNK, '');
+    p = p.replace(PATH_LINE_SUFFIX, '');
+    p = p.replace(PATH_TRAILING_JUNK, '');
+    // A bare `/` or `~` is not worth linking, and neither is a scheme's
+    // slashes (`//host` out of `https://host`).
+    if (p.length < 2 || p === '~/' || p.startsWith('//')) return '';
+    return p;
+}
+
+/** Finds absolute paths in one line of terminal text, as `{ text, start, end }`
+ * with 0-based, end-exclusive column offsets.
+ *
+ * URLs are blanked out first: `https://host/a/b` contains `/a/b`, and linking
+ * that as a path would put a second, wrong link on top of the one
+ * WebLinksAddon already owns. */
+function findPathsInLine(line) {
+  const masked = line.replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, (m) => ' '.repeat(m.length));
+  const out = [];
+  for (const re of PATH_PATTERNS) {
+    re.lastIndex = 0;
+    let m;
+    while ((m = re.exec(masked)) !== null) {
+      const start = m.index + m[0].length - m[1].length;
+      const text = cleanPathMatch(m[1]);
+      if (!text) continue;
+      // Overlapping hits (a Windows path also matching the POSIX pattern
+      // after its drive letter) keep the first, longest one.
+      if (out.some((o) => start < o.end && start + text.length > o.start)) continue;
+      out.push({ text, start, end: start + text.length });
+    }
+  }
+  return out;
+}
+
+/** Menu rows for one path: show it in the OS file manager, or copy it.
+ *
+ * Built as a fragment because two menus need exactly these rows — the popup a
+ * linked path opens on click, and the top of the terminal's right-click menu —
+ * and two copies of them would drift apart.
+ *
+ * `remote` paths (an SSH thread's output) only offer the copy: the path names
+ * a file on the server, and revealing it locally would open an unrelated file
+ * that happens to share the name, or nothing at all. Saying why beats a
+ * button that quietly fails. */
+function pathSection(path, remote) {
+  const frag = document.createDocumentFragment();
+  const label = document.createElement('div');
+  label.className = 'popup-label';
+  label.textContent = path;
+  label.title = path;
+  frag.appendChild(label);
+
+  const add = (text, iconName, onClick) => {
+    const item = document.createElement('button');
+    item.className = 'popup-item';
+    item.setAttribute('role', 'menuitem');
+    item.innerHTML = `<span class="pi-line">${icon(iconName)}<span class="pi-name"></span></span>`;
+    item.querySelector('.pi-name').textContent = text;
+    // Dismiss any open workflow flyout on hover, the same as the workflow rows
+    // this sits above in the right-click menu.
+    item.addEventListener('mouseenter', () => closeSubmenusFrom(1));
+    item.addEventListener('click', () => {
+      closeTermContextMenu();
+      onClick();
+    });
+    frag.appendChild(item);
+  };
+
+  if (remote) {
+    const note = document.createElement('div');
+    note.className = 'popup-label';
+    note.textContent = tr('path.remoteNote');
+    frag.appendChild(note);
+  } else {
+    add(tr('path.reveal'), 'folder', async () => {
+      try {
+        await invoke('reveal_path', { path });
+      } catch (e) {
+        toast(String(e), true);
+      }
+    });
+  }
+
+  add(tr('path.copy'), 'copy', async () => {
+    try {
+      await navigator.clipboard.writeText(path);
+      toast(tr('path.copied'));
+    } catch (e) {
+      toast(tr('toast.copyFailed', { e }), true);
+    }
+  });
+  return frag;
+}
+
+function openPathMenu(x, y, path, remote) {
+  closeTermContextMenu();
+  const menu = $('#term-context-menu');
+  ctxMenuStack = [menu];
+  menu.innerHTML = '';
+  menu.appendChild(pathSection(path, remote));
+  showRootMenu(menu, x, y);
+}
+
+/** The path under a pixel position, or ''.
+ *
+ * xterm publishes no hit-test, but its grid is uniform, so the screen
+ * element's box divided by the terminal's own `cols`/`rows` gives the cell.
+ * Measuring the element rather than the font is what keeps this in step with
+ * whatever the renderer actually laid out — zoom, fractional DPI, or a
+ * fallback font being used for that row. */
+function pathAtPoint(thread, x, y) {
+  const screen = thread.hostEl.querySelector('.xterm-screen');
+  if (!screen) return '';
+  const rect = screen.getBoundingClientRect();
+  if (!rect.width || !rect.height) return '';
+  if (x < rect.left || x >= rect.right || y < rect.top || y >= rect.bottom) return '';
+  const col = Math.floor((x - rect.left) / (rect.width / thread.term.cols));
+  const buffer = thread.term.buffer.active;
+  const row = Math.floor((y - rect.top) / (rect.height / thread.term.rows));
+  const line = buffer.getLine(buffer.viewportY + row);
+  if (!line) return '';
+  const hit = findPathsInLine(line.translateToString(true))
+    .find((h) => col >= h.start && col < h.end);
+  return hit ? hit.text : '';
+}
+
+/** A path the user selected, or ''.
+ *
+ * Only a selection that is *entirely* one path counts. Revealing something
+ * found inside a selected sentence would act on a path the user never pointed
+ * at, which is worse than offering nothing. */
+function pathFromSelection(term) {
+  const selected = (term.getSelection() || '').trim();
+  if (!selected || /\s/.test(selected)) return '';
+  const hits = findPathsInLine(selected);
+  return hits.length === 1 && hits[0].text === selected ? selected : '';
+}
+
+/** Registers the path link provider on one terminal. Clicking a path opens
+ * the menu above rather than acting immediately: "copy" and "reveal" are both
+ * plausible intents, and picking one for the user gets it wrong half the
+ * time. */
+function registerPathLinks(term, remote) {
+  term.registerLinkProvider({
+    provideLinks(bufferLineNumber, callback) {
+      const line = term.buffer.active.getLine(bufferLineNumber - 1);
+      if (!line) return callback(undefined);
+      // Wrapped lines are scanned as-is: joining them would need the whole
+      // logical row, and a path split across a wrap is rare enough that
+      // half-linking it is worse than not linking it.
+      const text = line.translateToString(true);
+      const hits = findPathsInLine(text);
+      if (!hits.length) return callback(undefined);
+      callback(hits.map((h) => ({
+        // xterm ranges are 1-based and inclusive on both ends.
+        range: {
+          start: { x: h.start + 1, y: bufferLineNumber },
+          end: { x: h.end, y: bufferLineNumber },
+        },
+        text: h.text,
+        activate: (ev) => {
+          ev.preventDefault();
+          openPathMenu(ev.clientX, ev.clientY, h.text, remote);
+        },
+      })));
+    },
+  });
+}
+
+/** Reveals the shared root menu at the cursor and arms its dismissal. Shared
+ * by every menu that uses `#term-context-menu`, so they all get the same
+ * clamping, focus handling and outside-click behaviour. */
+function showRootMenu(menu, x, y) {
   // Position at the cursor, clamped inside the window (unhide first so the
   // menu has measurable dimensions).
   menu.classList.remove('hidden');
@@ -4464,32 +6378,6 @@ function fillWorkflowMenu(menuEl, node, level, isRoot) {
     });
     menuEl.appendChild(manage);
   }
-}
-
-/** SFTP upload/download rows at the top of the context menu (SSH threads
- * only — a local shell has nothing to transfer to). */
-function prependTransferMenu(menuEl, thread) {
-  const frag = document.createDocumentFragment();
-  const label = document.createElement('div');
-  label.className = 'popup-label';
-  label.textContent = tr('menu.transfer');
-  frag.appendChild(label);
-  const mk = (ico, text, onClick) => {
-    const item = document.createElement('button');
-    item.className = 'popup-item';
-    item.setAttribute('role', 'menuitem');
-    item.innerHTML = `<span class="pi-line">${icon(ico)}<span class="pi-name"></span></span>`;
-    item.querySelector('.pi-name').textContent = text;
-    item.addEventListener('mouseenter', () => closeSubmenusFrom(1));
-    item.addEventListener('click', () => { closeTermContextMenu(); onClick(); });
-    return item;
-  };
-  frag.appendChild(mk('upload', tr('menu.upload'), () => pickAndUpload(thread)));
-  frag.appendChild(mk('download', tr('menu.download'), () => openRemoteBrowser(thread)));
-  const sep = document.createElement('div');
-  sep.className = 'popup-sep';
-  frag.appendChild(sep);
-  menuEl.insertBefore(frag, menuEl.firstChild);
 }
 
 /** A leaf (runnable) workflow row. Hovering it collapses any deeper submenu. */
@@ -4596,7 +6484,16 @@ $('#terminals').addEventListener('contextmenu', (ev) => {
   // Run in the pane that was right-clicked, not whichever had focus.
   const idx = state.panes.findIndex((p) => p.body === body);
   if (idx >= 0 && idx !== state.focusedPane) focusPane(idx);
-  openTermContextMenu(ev.clientX, ev.clientY);
+  // A selection wins over whatever the pointer happens to be over: selecting a
+  // path and then right-clicking it is a deliberate aim, and it also covers the
+  // paths the link detector does not recognize.
+  const thread = idx >= 0 ? threadById(state.panes[idx].threadId) : null;
+  const path = thread
+    ? pathFromSelection(thread.term) || pathAtPoint(thread, ev.clientX, ev.clientY)
+    : '';
+  const block = thread ? blockAtPoint(thread, ev.clientX, ev.clientY) : null;
+  const blockCommand = block ? blockCommandText(thread.term, block) : '';
+  openTermContextMenu(ev.clientX, ev.clientY, path, thread?.kind === 'ssh', blockCommand);
 });
 
 // Global fallback: suppress the webview's native context menu (Reload /
@@ -4648,6 +6545,24 @@ $('#term-context-menu').addEventListener('keydown', termMenuKeydown);
 
 // A stale menu position makes no sense after a resize — just close it.
 window.addEventListener('resize', closeTermContextMenu);
+window.addEventListener('resize', applyTaskPaneWidth);
+// Watch the strip and every tab rather than the window: the room also changes
+// when #shell-tools hides or the platform inset applies, and the tabs' own
+// widths change with the UI language.
+{
+  const ro = new ResizeObserver(() => updateHeaderTabsOverflow(true));
+  ro.observe($('#header-tabs'));
+  document.querySelectorAll('.hdr-tab').forEach((t) => ro.observe(t));
+}
+$('#header-tabs').addEventListener('scroll', () => updateHeaderTabsOverflow());
+// A mouse wheel only scrolls vertically; turn it sideways over the tab strip so
+// clipped tabs are reachable without a trackpad.
+$('#header-tabs').addEventListener('wheel', (e) => {
+  const nav = e.currentTarget;
+  if (nav.scrollWidth <= nav.clientWidth || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+  e.preventDefault();
+  nav.scrollLeft += e.deltaY;
+}, { passive: false });
 
 /* ---------------- window controls (custom titlebar) ---------------- */
 
@@ -5012,18 +6927,18 @@ function blockCommandText(term, block) {
 function threadHostLabel(thread) {
   if (!thread) return '';
   if (thread.kind === 'ssh') {
-    return state.hosts.find((h) => h.id === thread.sshHostId)?.name || thread.title || '';
+    return hostById(thread.sshHostId)?.name || thread.title || '';
   }
-  return state.profiles?.find?.((p) => p.id === thread.profileId)?.name || '';
+  return state.profiles.find((p) => p.id === thread.profileId)?.name || '';
 }
 
 /** Persists a finished block's command into the cross-session history (and
  * the in-memory mirror the palette searches), with where it ran, its exit
- * status and how long it took. Fire-and-forget. */
-function recordBlockCommand(term, block, thread, exit) {
+ * status and how long it took. `thread` may be missing for a prompt replayed
+ * while the thread was still being built. Fire-and-forget. */
+function recordBlockCommand(term, block, thread, kind, exit) {
   const command = blockCommandText(term, block);
-  if (!command || !thread) return;
-  const kind = thread.kind;
+  if (!command) return;
   const meta = {
     host: threadHostLabel(thread),
     exit: Number.isNaN(exit) ? null : exit,
@@ -5061,7 +6976,7 @@ function maybeNotifyBlockDone(threadId, term, block, exit) {
   invoke('notify', { title, body }).catch(() => {});
 }
 
-/** "1m 05s" / "12s" style duration for the notification body. */
+/** "1m 05s" / "12s" style duration for notifications and the history. */
 function formatElapsed(ms) {
   const total = Math.round(ms / 1000);
   const h = Math.floor(total / 3600);
@@ -5078,7 +6993,7 @@ function renderBlockToolbar(term, blocks, block, exit) {
   // Wide enough (in cells) for copy + fold + chip side by side — xterm's
   // decoration box defaults to 1 cell, which would force our flex row to
   // wrap. `layer: 'top'` keeps the buttons clickable above the text canvas.
-  const deco = term.registerDecoration({ marker: block.marker, width: 10, layer: 'top' });
+  const deco = term.registerDecoration({ marker: block.marker, width: 13, layer: 'top' });
   if (!deco) return;
   deco.onRender((el) => {
     // xterm resets style.left on every re-render (scroll/resize) — reassert
@@ -5091,6 +7006,7 @@ function renderBlockToolbar(term, blocks, block, exit) {
     const ok = exit === 0;
     el.innerHTML = `
       <button type="button" class="term-block-btn copy" title="${tr('block.copy.title')}">${icon('copy')}</button>
+      <button type="button" class="term-block-btn save" title="${tr('block.save.title')}">${icon('zap')}</button>
       <button type="button" class="term-block-btn fold" title="${tr('block.fold.title')}">${icon('chevronDown')}</button>
       <span class="term-block-chip ${ok ? 'ok' : 'err'}" title="${ok ? tr('block.chip.ok') : tr('block.chip.err', { exit })}">${ok ? '✓' : `✗ ${Number.isNaN(exit) ? '?' : exit}`}</span>`;
     el.querySelector('.copy').addEventListener('click', async (ev) => {
@@ -5101,6 +7017,10 @@ function renderBlockToolbar(term, blocks, block, exit) {
       } catch (e) {
         toast(tr('toast.copyFailed', { e }), true);
       }
+    });
+    el.querySelector('.save').addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      saveAsWorkflow(blockCommandText(term, block));
     });
     const foldBtn = el.querySelector('.fold');
     if (!block.bodyMarker) {
@@ -5238,42 +7158,27 @@ $('#shortcuts').addEventListener('keydown', (ev) => {
 
 /* ---------------- backend events & boot ---------------- */
 
-listen('session:data', (ev) => {
-  const { id, data } = ev.payload;
+function onSessionData(id, bytes) {
   const thread = threadById(id);
   if (!thread) {
     // Output for a session whose thread hasn't been built yet — hold it.
     const e = preCreateEntry(id);
-    const bytes = b64ToBytes(data);
     if (e.size + bytes.length <= PRE_CREATE_LIMIT) {
       e.chunks.push(bytes);
       e.size += bytes.length;
     }
     return;
   }
-  thread.term.write(b64ToBytes(data));
+  thread.term.write(bytes);
   // Flag activity only for threads not currently shown in any pane; avoid a
   // re-render on every single chunk once the flag is already set.
   if (!thread.activity && !state.panes.some((p) => p.threadId === id)) {
     thread.activity = true;
     renderThreads();
   }
-});
-
-/** Announces an exit and tears the thread down. Shared by the live event and
- * the replay of an exit that landed before the thread existed. */
-function handleSessionExit(thread, code) {
-  // A vanishing SSH thread can look like data loss, so surface it — a dropped
-  // connection (code -1 from the backend) is flagged as an error.
-  if (thread.kind === 'ssh') {
-    if (code === -1) toast(tr('thread.disconnected', { title: thread.title }), true);
-    else toast(tr('thread.exited', { title: thread.title, code }));
-  }
-  closeThread(thread.id, { kill: false });
 }
 
-listen('session:exit', (ev) => {
-  const { id, code } = ev.payload;
+function onSessionExit(id, code) {
   const thread = threadById(id);
   if (!thread) {
     // The session died before its thread was built (a shell that fails to
@@ -5283,7 +7188,143 @@ listen('session:exit', (ev) => {
     return;
   }
   handleSessionExit(thread, code);
-});
+}
+
+/* Terminal output arrives over one binary channel — see TauriSink in
+ * src-tauri/src/lib.rs for the frame layout. Tauri hands anything past 1KB to
+ * the webview as a real ArrayBuffer, so a 64KB batch crosses as 64KB of bytes
+ * instead of 87KB of base64 that this thread would then decode a byte at a
+ * time. Data and exit share the channel so an exit can never overtake the
+ * output that preceded it. */
+const FRAME_DATA = 0;
+const FRAME_EXIT = 1;
+const frameDecoder = new TextDecoder();
+
+const outputChannel = new Channel();
+outputChannel.onmessage = (msg) => {
+  const buf = msg instanceof ArrayBuffer ? msg : (ArrayBuffer.isView(msg) ? msg.buffer : null);
+  if (!buf || buf.byteLength < 2) return;
+  const view = new Uint8Array(buf);
+  const idLen = view[1];
+  const body = 2 + idLen;
+  if (view.length < body) return;
+  const id = frameDecoder.decode(view.subarray(2, body));
+  if (view[0] === FRAME_DATA) onSessionData(id, view.subarray(body));
+  else if (view[0] === FRAME_EXIT && view.length >= body + 4) {
+    onSessionExit(id, new DataView(buf, view.byteOffset + body, 4).getInt32(0, true));
+  }
+};
+// Registered before boot() so a restored session's first bytes already have
+// somewhere to go; the events below cover the gap until this lands.
+invoke('subscribe_output', { channel: outputChannel }).catch(() => {});
+
+/* Fallback transport: what the backend emits until the channel above is
+ * registered. Same handlers, one base64 decode in front. */
+listen('session:data', (ev) => onSessionData(ev.payload.id, b64ToBytes(ev.payload.data)));
+
+/** Announces an exit and tears the thread down. Shared by the live event and
+ * the replay of an exit that landed before the thread existed. */
+function handleSessionExit(thread, code) {
+  // A vanishing SSH thread can look like data loss, so surface it — a dropped
+  // connection (code -1 from the backend) is flagged as an error.
+  if (thread.kind === 'ssh') {
+    // A drop (not a clean exit) on a host that asked for it: keep the thread
+    // and bring the session back under it.
+    if (code === -1 && hostById(thread.sshHostId)?.auto_reconnect) {
+      scheduleReconnect(thread);
+      return;
+    }
+    if (code === -1) toast(tr('thread.disconnected', { title: thread.title }), true);
+    else toast(tr('thread.exited', { title: thread.title, code }));
+  }
+  closeThread(thread.id, { kill: false });
+}
+
+/* ---------------- SSH auto-reconnect ---------------- */
+
+// Seconds before each retry. Short first, so a blip costs little; capped,
+// so a server that is really down is not hammered.
+const RECONNECT_BACKOFF = [2, 4, 8, 16, 30];
+
+function reconnectBanner(thread, text, color = '33') {
+  thread.term.writeln(`\r\n\x1b[${color}m${text}\x1b[0m`);
+}
+
+/** Starts the retry cycle for a thread whose session just dropped. The
+ * terminal stays as it is — scrollback, pane, color — and gets the new
+ * session when one comes up. Closing the thread cancels. */
+function scheduleReconnect(thread) {
+  if (thread.reconnect) return;
+  const r = { attempt: 0, timer: 0, secrets: {}, prompted: false };
+  thread.reconnect = r;
+  const sec = RECONNECT_BACKOFF[0];
+  reconnectBanner(thread, tr('reconnect.start', { sec, n: 1, max: RECONNECT_BACKOFF.length }));
+  renderThreads();
+  r.timer = setTimeout(() => attemptReconnect(thread), sec * 1000);
+}
+
+function reconnectGiveUp(thread, reason) {
+  reconnectBanner(thread, tr('reconnect.gaveUp', { reason }), '31');
+  toast(tr('toast.reconnectGaveUp', { title: thread.title, reason }), true);
+  thread.reconnect = null;
+  closeThread(thread.id, { kill: false });
+}
+
+async function attemptReconnect(thread) {
+  const r = thread.reconnect;
+  if (!r || !threadById(thread.id)) return; // closed meanwhile
+  const host = hostById(thread.sshHostId);
+  if (!host) { reconnectGiveUp(thread, tr('reconnect.reason.hostGone')); return; }
+  const chain = resolveChainHosts(host);
+  if (chain.error) { reconnectGiveUp(thread, chain.error); return; }
+  try {
+    // Empty secrets: the backend fills in whatever the hops have saved. No
+    // approved fingerprints: the keys were verified when this thread first
+    // connected, so anything but a match is a reason to stop, not to trust.
+    const info = await invoke('create_ssh_session', {
+      hostId: host.id, secrets: r.secrets, fingerprints: {},
+      cols: thread.term.cols, rows: thread.term.rows,
+    });
+    const oldId = thread.id;
+    thread.rebind(info.id);
+    for (const p of state.panes) if (p.threadId === oldId) p.threadId = info.id;
+    thread.logPath = info.log_path || '';
+    if (info.log_error) toast(tr('toast.logFailed', { e: info.log_error }), true);
+    // Output that arrived before the rebind. If the new session already died,
+    // that is one more failed attempt, not a fresh cycle.
+    const { exited } = drainPreCreate(info.id, thread.term);
+    if (exited !== null) throw new Error(tr('thread.disconnected', { title: thread.title }));
+    thread.reconnect = null;
+    reconnectBanner(thread, tr('reconnect.ok'), '32');
+    toast(tr('toast.reconnected', { title: thread.title }));
+    renderThreads();
+    persistSessionSnapshot();
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if (parseHostKeyError(msg)) { reconnectGiveUp(thread, tr('reconnect.reason.hostKey')); return; }
+    // Authentication failed and nothing saved could be used: ask once. A
+    // cancel here is the user saying stop.
+    if (!r.prompted && /auth/i.test(msg)) {
+      r.prompted = true;
+      const secrets = await promptChainSecrets(chain.hosts, {});
+      if (secrets === null) { reconnectGiveUp(thread, tr('reconnect.reason.cancelled')); return; }
+      r.secrets = secrets;
+      attemptReconnect(thread);
+      return;
+    }
+    r.attempt++;
+    if (r.attempt >= RECONNECT_BACKOFF.length) {
+      reconnectGiveUp(thread, tr('reconnect.reason.max', { max: RECONNECT_BACKOFF.length }));
+      return;
+    }
+    const sec = RECONNECT_BACKOFF[r.attempt];
+    reconnectBanner(thread, tr('reconnect.retry', { msg: msg.slice(0, 80), sec, n: r.attempt + 1, max: RECONNECT_BACKOFF.length }));
+    renderThreads();
+    r.timer = setTimeout(() => attemptReconnect(thread), sec * 1000);
+  }
+}
+
+listen('session:exit', (ev) => onSessionExit(ev.payload.id, ev.payload.code));
 
 (async function boot() {
   // Paint every static [data-icon] placeholder in the chrome first.
@@ -5296,7 +7337,8 @@ listen('session:exit', (ev) => {
   await loadDistInfo();
   applyAutoUpdateAvailability();
   // Profiles must load before the first thread so the default profile applies.
-  await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles(), refreshLaunchSets(), refreshHistory()]);
+  await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles(), refreshLaunchSets(),
+    refreshHistory(), refreshServers()]);
   const pane = createPane();
   $('#pane-area').appendChild(pane.root);
   state.panes.push(pane);

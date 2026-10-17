@@ -1,13 +1,16 @@
 //! SSH shell sessions backed by russh (pure Rust — no OpenSSL/libssh2 to
 //! link, which keeps Windows/macOS/Linux builds uniform).
 
+use std::collections::HashMap;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use russh::client::{self, Handle};
 use russh::keys::known_hosts::learn_known_hosts_path;
 use russh::keys::{check_known_hosts_path, load_secret_key, HashAlg, PrivateKeyWithHashAlg, PublicKey};
-use russh::{ChannelMsg, ChannelStream, Disconnect};
+use russh::{Channel, ChannelMsg, ChannelStream, Disconnect};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex as AsyncMutex;
 
 use super::forward::{parse_forward_spec, ForwardSpec};
@@ -18,9 +21,7 @@ use crate::models::{SshAuthMethod, SshHost};
 /// writes without holding the session-map lock.
 pub(crate) struct SshWriter {
     write_half: russh::ChannelWriteHalf<client::Msg>,
-    /// The connection handle — also used to open extra channels on the same
-    /// connection (the SFTP subsystem, see `sessions::sftp`).
-    pub(crate) handle: Handle<Client>,
+    handle: Handle<Client>,
 }
 
 /// The channel's read half, handed back rather than pumped immediately so
@@ -75,10 +76,15 @@ pub(crate) struct SshSession {
     /// GUI thread outside any runtime. Using `tokio::spawn` there would panic
     /// with "there is no reactor running".
     runtime: tokio::runtime::Handle,
-    /// Listener tasks for this session's local port forwards. Aborted on
-    /// drop, so forwards stop both on explicit kill and when the channel
-    /// closes on its own (the reader task removes the session from the map,
-    /// dropping this struct).
+    /// Listener tasks for this session's locally-bound forwards (`-L`, `-D`).
+    /// Aborted on drop, so forwards stop both on explicit kill and when the
+    /// channel closes on its own (the reader task removes the session from
+    /// the map, dropping this struct).
+    ///
+    /// `-R` has nothing here on purpose: its listener belongs to the server,
+    /// which drops it when the connection goes away. There is no local task
+    /// to abort and no `cancel_tcpip_forward` to send — by the time this
+    /// struct drops, the connection carrying that request is already gone.
     forward_tasks: Vec<tokio::task::JoinHandle<()>>,
     /// Intermediate jump-host handles for a multi-hop connection, kept alive
     /// so their tunnels stay open for the session's lifetime. Dropping them
@@ -87,8 +93,6 @@ pub(crate) struct SshSession {
     /// before its underlying tunnel goes away.
     #[allow(dead_code)]
     jump_handles: Vec<Handle<Client>>,
-    /// Lazily opened SFTP subsystem for file transfers (see `sessions::sftp`).
-    sftp: super::sftp::SftpCache,
 }
 
 impl Drop for SshSession {
@@ -228,9 +232,30 @@ pub(crate) fn default_known_hosts_path() -> PathBuf {
 /// connect and "接続テスト" buttons indefinitely.
 const SSH_STAGE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
 
-pub(crate) struct Client {
+/// Where a `-R` forward should deliver: the local address this side connects
+/// to when the server hands us a connection it accepted.
+#[derive(Debug, Clone)]
+struct RemoteTarget {
     host: String,
     port: u16,
+}
+
+/// Remote forwards active on one hop's connection, keyed by the port the
+/// **server** is listening on.
+///
+/// It has to be shared rather than owned because of the order russh forces:
+/// the handler is moved into the session at connect time, but `tcpip_forward`
+/// — which is what tells us the server actually granted the port — can only be
+/// called afterwards, on the `Handle`. So the handler holds one end and
+/// `finish_shell_session` fills in the other once the requests succeed.
+type RemoteForwards = Arc<StdMutex<HashMap<u32, RemoteTarget>>>;
+
+struct Client {
+    host: String,
+    port: u16,
+    /// `-R` targets for this connection; empty for jump hops, which never
+    /// carry forwards of their own.
+    remote_forwards: RemoteForwards,
     /// `Some(fp)` means: the host was unknown on a *prior* handshake, the UI
     /// showed the user fingerprint `fp`, and the user approved it. The key
     /// presented on THIS handshake is only trusted (and learned) if its own
@@ -245,6 +270,50 @@ pub(crate) struct Client {
 
 impl client::Handler for Client {
     type Error = russh::Error;
+
+    /// A connection arrived on a port the server is forwarding for us
+    /// (`ssh -R`). Connect to the matching local target and pump.
+    ///
+    /// The port is looked up rather than trusted: a server can open a
+    /// forwarded-tcpip channel naming any port it likes, and honouring one we
+    /// never requested would let it reach arbitrary services on this machine
+    /// through a tunnel the user only meant to point at one of them. An
+    /// unknown port drops the channel.
+    async fn server_channel_open_forwarded_tcpip(
+        &mut self,
+        channel: Channel<client::Msg>,
+        _connected_address: &str,
+        connected_port: u32,
+        _originator_address: &str,
+        _originator_port: u32,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        // `connected_port` is what the server bound. When the request asked
+        // for a fixed port that is the port we asked for; the lookup is what
+        // makes an unrequested one a no-op.
+        let target = self
+            .remote_forwards
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&connected_port)
+            .cloned();
+        let Some(target) = target else {
+            // Dropping the channel is the whole defence: say nothing, connect
+            // nowhere. There is no session sink to report to at this layer.
+            return Ok(());
+        };
+        tokio::spawn(async move {
+            // A refused local connection just drops the channel, the same
+            // thing OpenSSH does when nothing is listening on the target.
+            if let Ok(mut tcp) =
+                tokio::net::TcpStream::connect((target.host.as_str(), target.port)).await
+            {
+                let mut stream = channel.into_stream();
+                let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+            }
+        });
+        Ok(())
+    }
 
     /// OpenSSH-compatible known_hosts (TOFU) verification:
     /// - key matches the recorded entry → accept
@@ -403,12 +472,16 @@ async fn establish_hop(
     hop: &ChainHop,
     known_hosts_path: PathBuf,
     transport: HopTransport,
-) -> Result<Handle<Client>, SessionError> {
+) -> Result<(Handle<Client>, RemoteForwards), SessionError> {
     let host = &hop.host;
     let outcome = Arc::new(StdMutex::new(None));
+    // Empty for now; only the target hop's copy is ever filled in, once
+    // `finish_shell_session` knows which ports the server granted.
+    let remote_forwards: RemoteForwards = Arc::new(StdMutex::new(HashMap::new()));
     let handler = Client {
         host: host.host.clone(),
         port: host.port,
+        remote_forwards: remote_forwards.clone(),
         expected_fingerprint: hop.expected_fingerprint.clone(),
         known_hosts_path,
         outcome: outcome.clone(),
@@ -435,7 +508,7 @@ async fn establish_hop(
         Ok(res) => res?,
         Err(_) => return Err(SessionError::Ssh("認証がタイムアウトしました".into())),
     }
-    Ok(handle)
+    Ok((handle, remote_forwards))
 }
 
 impl SshSession {
@@ -453,8 +526,9 @@ impl SshSession {
         known_hosts_path: PathBuf,
     ) -> Result<(Self, SshReader, Vec<String>), SessionError> {
         let hop = ChainHop { host: host.clone(), secrets, expected_fingerprint };
-        let handle = establish_hop(&hop, known_hosts_path, HopTransport::Tcp).await?;
-        Self::finish_shell_session(handle, Vec::new(), host, cols, rows).await
+        let (handle, remote_forwards) =
+            establish_hop(&hop, known_hosts_path, HopTransport::Tcp).await?;
+        Self::finish_shell_session(handle, remote_forwards, Vec::new(), host, cols, rows).await
     }
 
     /// Multi-hop connect (ProxyJump). `chain` is ordered `[jump1, .., jumpN,
@@ -469,6 +543,9 @@ impl SshSession {
     ) -> Result<(Self, SshReader, Vec<String>), SessionError> {
         assert!(!chain.is_empty(), "connect_chain requires at least the target");
         let mut handles: Vec<Handle<Client>> = Vec::with_capacity(chain.len());
+        // Only the last hop's registry matters: forwards belong to the target
+        // host, and jump hops never carry any of their own.
+        let mut target_forwards: Option<RemoteForwards> = None;
         for (i, hop) in chain.iter().enumerate() {
             let transport = if i == 0 {
                 HopTransport::Tcp
@@ -486,13 +563,17 @@ impl SshSession {
                     })?;
                 HopTransport::Stream(Box::new(channel.into_stream()))
             };
-            let handle = establish_hop(hop, known_hosts_path.clone(), transport).await?;
+            let (handle, remote_forwards) =
+                establish_hop(hop, known_hosts_path.clone(), transport).await?;
+            target_forwards = Some(remote_forwards);
             handles.push(handle);
         }
         // Last handle is the target; everything before it are the jump hops.
         let target_handle = handles.pop().expect("chain non-empty");
+        let target_forwards = target_forwards.expect("chain non-empty");
         let target = &chain.last().expect("chain non-empty").host;
-        Self::finish_shell_session(target_handle, handles, target, cols, rows).await
+        Self::finish_shell_session(target_handle, target_forwards, handles, target, cols, rows)
+            .await
     }
 
     /// Shared tail: opens the shell channel on the (already authenticated)
@@ -501,6 +582,7 @@ impl SshSession {
     /// direct connect).
     async fn finish_shell_session(
         handle: Handle<Client>,
+        remote_forwards: RemoteForwards,
         jump_handles: Vec<Handle<Client>>,
         host: &SshHost,
         cols: u16,
@@ -523,7 +605,7 @@ impl SshSession {
 
         let writer = Arc::new(AsyncMutex::new(SshWriter { write_half, handle }));
 
-        // Local port forwards (ssh -L). Failures never fail the session —
+        // Port forwards (ssh -L / -R / -D). Failures never fail the session —
         // they are reported as banner lines in the terminal, mirroring how
         // OpenSSH complains but keeps the shell.
         //
@@ -537,21 +619,80 @@ impl SshSession {
             let spec = match parse_forward_spec(raw) {
                 Ok(spec) => spec,
                 Err(err) => {
-                    banners.push(format!("\x1b[31m[senju] ポートフォワード設定が不正です: {err}\x1b[0m"));
+                    banners.push(err_banner(format!("ポートフォワード設定が不正です: {err}")));
                     continue;
                 }
             };
-            match tokio::net::TcpListener::bind(("127.0.0.1", spec.local_port)).await {
-                Ok(listener) => {
-                    banners.push(format!(
-                        "\x1b[36m[senju] ポートフォワード 127.0.0.1:{} → {}:{}\x1b[0m",
-                        spec.local_port, spec.remote_host, spec.remote_port
-                    ));
-                    forward_tasks.push(tokio::spawn(run_local_forward(writer.clone(), spec, listener)));
+            match spec {
+                ForwardSpec::Local { local_port, ref remote_host, remote_port } => {
+                    match tokio::net::TcpListener::bind((LOOPBACK_V4, local_port)).await {
+                        Ok(listener) => {
+                            banners.push(ok_banner(format!(
+                                "ポートフォワード (-L) 127.0.0.1:{local_port} → {remote_host}:{remote_port}"
+                            )));
+                            forward_tasks.push(tokio::spawn(run_local_forward(
+                                writer.clone(),
+                                local_port,
+                                remote_host.clone(),
+                                remote_port,
+                                listener,
+                            )));
+                        }
+                        Err(e) => banners
+                            .push(err_banner(format!("ポートフォワード {spec} を開始できません: {e}"))),
+                    }
                 }
-                Err(e) => banners.push(format!(
-                    "\x1b[31m[senju] ポートフォワード {spec} を開始できません: {e}\x1b[0m"
-                )),
+                ForwardSpec::Dynamic { local_port } => {
+                    match tokio::net::TcpListener::bind((LOOPBACK_V4, local_port)).await {
+                        Ok(listener) => {
+                            banners.push(ok_banner(format!(
+                                "動的フォワード (-D) SOCKS5 127.0.0.1:{local_port}"
+                            )));
+                            forward_tasks
+                                .push(tokio::spawn(run_socks_forward(writer.clone(), local_port, listener)));
+                        }
+                        Err(e) => banners
+                            .push(err_banner(format!("動的フォワード {spec} を開始できません: {e}"))),
+                    }
+                }
+                ForwardSpec::Remote { remote_port, ref local_host, local_port } => {
+                    // The listener is the server's, so there is nothing to
+                    // spawn here: register the target first, then ask. Doing
+                    // it in that order means a connection arriving in the gap
+                    // between the request being granted and us recording it
+                    // still finds its target instead of being dropped.
+                    remote_forwards
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(remote_port as u32, RemoteTarget {
+                            host: local_host.clone(),
+                            port: local_port,
+                        });
+                    // Bound to loopback on the server, matching OpenSSH's
+                    // default (`GatewayPorts no`): the tunnel is for whoever
+                    // is on that host, not for its whole network. Reached
+                    // through the writer because `Handle` is not `Clone` and
+                    // has already moved in there; the lock is held for the
+                    // request alone.
+                    let requested = {
+                        let mut guard = writer.lock().await;
+                        guard.handle.tcpip_forward(REMOTE_BIND, remote_port as u32).await
+                    };
+                    match requested {
+                        Ok(_) => banners.push(ok_banner(format!(
+                            "リモートフォワード (-R) {REMOTE_BIND}:{remote_port} (リモート) → {local_host}:{local_port}"
+                        ))),
+                        Err(e) => {
+                            remote_forwards
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .remove(&(remote_port as u32));
+                            banners.push(err_banner(format!(
+                                "リモートフォワード {spec} をサーバーが受け付けませんでした: {e}"
+                            )));
+                        }
+                    }
+                }
             }
         }
 
@@ -561,7 +702,6 @@ impl SshSession {
                 runtime: tokio::runtime::Handle::current(),
                 forward_tasks,
                 jump_handles,
-                sftp: Arc::new(AsyncMutex::new(None)),
             },
             SshReader { read_half },
             banners,
@@ -570,10 +710,6 @@ impl SshSession {
 
     pub fn writer(&self) -> Arc<AsyncMutex<SshWriter>> {
         self.writer.clone()
-    }
-
-    pub(crate) fn sftp_cache(&self) -> super::sftp::SftpCache {
-        self.sftp.clone()
     }
 
     pub async fn write(writer: &AsyncMutex<SshWriter>, data: &[u8]) -> Result<(), SessionError> {
@@ -621,6 +757,34 @@ impl SshSession {
     }
 }
 
+/// Opens an SFTP channel on an already-authenticated session.
+///
+/// A second channel on the same connection, not a second connection: no
+/// re-authentication, no extra host key to trust, and a jump-host chain is
+/// followed for free because the channel opens on the far end of it.
+///
+/// Servers with `Subsystem sftp` disabled reject the request, which surfaces
+/// as a plain error rather than a hang.
+pub(crate) async fn open_sftp(
+    writer: &AsyncMutex<SshWriter>,
+) -> Result<russh_sftp::client::SftpSession, SessionError> {
+    let channel = {
+        let guard = writer.lock().await;
+        guard
+            .handle
+            .channel_open_session()
+            .await
+            .map_err(|e| SessionError::Ssh(format!("SFTP チャネルを開けません: {e}")))?
+    };
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| SessionError::Ssh(format!("SFTP サブシステムを開始できません: {e}")))?;
+    russh_sftp::client::SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|e| SessionError::Ssh(format!("SFTP セッションを開始できません: {e}")))
+}
+
 /// Writes app-generated status lines (the port-forward banners from
 /// [`SshSession::connect`]) into the session's terminal stream. Called by
 /// `SessionManager` after the session is in the map, so the lines land ahead
@@ -631,13 +795,76 @@ pub(crate) fn emit_banners(sink: &Arc<dyn EventSink>, id: &str, lines: &[String]
     }
 }
 
-/// Accept loop for one `-L` forward: each local TCP connection gets its own
-/// direct-tcpip channel through the SSH session, pumped bidirectionally until
-/// either side closes. A failed channel open (e.g. the remote port refused
-/// the connection) just drops the local socket, like OpenSSH.
+/// The address every locally-bound forward listens on, and the one the server
+/// is asked to bind for `-R`. Never `0.0.0.0` — see the `forward` module docs.
+const LOOPBACK_V4: &str = "127.0.0.1";
+const REMOTE_BIND: &str = "127.0.0.1";
+
+fn ok_banner(msg: String) -> String {
+    format!("\x1b[36m[senju] {msg}\x1b[0m")
+}
+
+fn err_banner(msg: String) -> String {
+    format!("\x1b[31m[senju] {msg}\x1b[0m")
+}
+
+/// Opens one direct-tcpip channel and pumps `tcp` through it until either
+/// side closes. Shared by `-L` (fixed target) and `-D` (target per request).
+/// A failed open — the usual case being the remote refusing the connection —
+/// just drops the local socket, like OpenSSH.
+async fn tunnel_through(
+    writer: &AsyncMutex<SshWriter>,
+    mut tcp: tokio::net::TcpStream,
+    target_host: &str,
+    target_port: u16,
+    originator_port: u16,
+) {
+    // Hold the writer lock only for the channel-open handshake, not for the
+    // lifetime of the tunnel.
+    let opened = {
+        let guard = writer.lock().await;
+        guard
+            .handle
+            .channel_open_direct_tcpip(
+                target_host,
+                target_port as u32,
+                LOOPBACK_V4,
+                originator_port as u32,
+            )
+            .await
+    };
+    if let Ok(channel) = opened {
+        let mut stream = channel.into_stream();
+        let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
+    }
+}
+
+/// Accept loop for one `-L` forward: every local connection is tunnelled to
+/// the same fixed `remote_host:remote_port`.
 async fn run_local_forward(
     writer: Arc<AsyncMutex<SshWriter>>,
-    spec: ForwardSpec,
+    local_port: u16,
+    remote_host: String,
+    remote_port: u16,
+    listener: tokio::net::TcpListener,
+) {
+    loop {
+        let Ok((tcp, _peer)) = listener.accept().await else {
+            break;
+        };
+        let writer = writer.clone();
+        let remote_host = remote_host.clone();
+        tokio::spawn(async move {
+            tunnel_through(&writer, tcp, &remote_host, remote_port, local_port).await;
+        });
+    }
+}
+
+/// Accept loop for one `-D` forward: a SOCKS5 proxy where the target comes
+/// from each client's own CONNECT request instead of the host config.
+async fn run_socks_forward(
+    writer: Arc<AsyncMutex<SshWriter>>,
+    local_port: u16,
     listener: tokio::net::TcpListener,
 ) {
     loop {
@@ -645,28 +872,112 @@ async fn run_local_forward(
             break;
         };
         let writer = writer.clone();
-        let spec = spec.clone();
         tokio::spawn(async move {
-            // Hold the writer lock only for the channel-open handshake, not
-            // for the lifetime of the tunnel.
-            let opened = {
-                let guard = writer.lock().await;
-                guard
-                    .handle
-                    .channel_open_direct_tcpip(
-                        spec.remote_host.as_str(),
-                        spec.remote_port as u32,
-                        "127.0.0.1",
-                        spec.local_port as u32,
-                    )
-                    .await
+            // A client that cannot complete the handshake gets nothing but a
+            // closed socket; there is no session sink down here to report to.
+            let Ok((host, port)) = socks5_handshake(&mut tcp).await else {
+                return;
             };
-            if let Ok(channel) = opened {
-                let mut stream = channel.into_stream();
-                let _ = tokio::io::copy_bidirectional(&mut tcp, &mut stream).await;
-            }
+            tunnel_through(&writer, tcp, &host, port, local_port).await;
         });
     }
+}
+
+/// Minimal SOCKS5 server side: no authentication, CONNECT only.
+///
+/// No-auth is safe here only because the listener is bound to loopback (the
+/// same reasoning OpenSSH's `-D` uses); it would not be on any other address.
+/// BIND and UDP ASSOCIATE are refused rather than half-implemented — a proxy
+/// that accepts a request it cannot honour is worse than one that says no.
+///
+/// Returns the requested target on success, having already written the reply.
+async fn socks5_handshake(tcp: &mut tokio::net::TcpStream) -> std::io::Result<(String, u16)> {
+    const VER: u8 = 5;
+    const CMD_CONNECT: u8 = 1;
+    const ATYP_V4: u8 = 1;
+    const ATYP_DOMAIN: u8 = 3;
+    const ATYP_V6: u8 = 4;
+    const REP_OK: u8 = 0;
+    const REP_CMD_UNSUPPORTED: u8 = 7;
+    const REP_ATYP_UNSUPPORTED: u8 = 8;
+
+    let invalid = |msg: &str| std::io::Error::new(std::io::ErrorKind::InvalidData, msg.to_string());
+
+    // Greeting: version, method count, methods.
+    let mut head = [0u8; 2];
+    tcp.read_exact(&mut head).await?;
+    if head[0] != VER {
+        return Err(invalid("not SOCKS5"));
+    }
+    let mut methods = vec![0u8; head[1] as usize];
+    tcp.read_exact(&mut methods).await?;
+    // 0x00 = no authentication required. Selecting a method the client never
+    // offered is a protocol violation, so a client that insists on
+    // authenticating is told there is no common method (0xFF) instead.
+    const METHOD_NONE: u8 = 0x00;
+    const METHOD_UNACCEPTABLE: u8 = 0xFF;
+    if !methods.contains(&METHOD_NONE) {
+        tcp.write_all(&[VER, METHOD_UNACCEPTABLE]).await?;
+        return Err(invalid("client requires an authentication method"));
+    }
+    tcp.write_all(&[VER, METHOD_NONE]).await?;
+
+    // Request: version, command, reserved, address type.
+    let mut req = [0u8; 4];
+    tcp.read_exact(&mut req).await?;
+    if req[0] != VER {
+        return Err(invalid("not SOCKS5"));
+    }
+    if req[1] != CMD_CONNECT {
+        // Reply before giving up so the client sees a refusal, not a hang.
+        let _ = socks5_reply(tcp, REP_CMD_UNSUPPORTED).await;
+        return Err(invalid("only CONNECT is supported"));
+    }
+
+    let host = match req[3] {
+        ATYP_V4 => {
+            let mut b = [0u8; 4];
+            tcp.read_exact(&mut b).await?;
+            IpAddr::V4(Ipv4Addr::from(b)).to_string()
+        }
+        ATYP_V6 => {
+            let mut b = [0u8; 16];
+            tcp.read_exact(&mut b).await?;
+            IpAddr::V6(Ipv6Addr::from(b)).to_string()
+        }
+        ATYP_DOMAIN => {
+            let mut len = [0u8; 1];
+            tcp.read_exact(&mut len).await?;
+            let mut name = vec![0u8; len[0] as usize];
+            tcp.read_exact(&mut name).await?;
+            // The name is resolved by the SSH server, not here — that is the
+            // point of a dynamic forward, and resolving locally would leak
+            // every hostname to this machine's DNS.
+            String::from_utf8(name).map_err(|_| invalid("domain name is not UTF-8"))?
+        }
+        _ => {
+            let _ = socks5_reply(tcp, REP_ATYP_UNSUPPORTED).await;
+            return Err(invalid("unsupported address type"));
+        }
+    };
+
+    let mut port = [0u8; 2];
+    tcp.read_exact(&mut port).await?;
+    let port = u16::from_be_bytes(port);
+
+    // Success is reported before the tunnel exists. Opening the channel first
+    // would be more truthful, but it also needs the writer lock, and holding
+    // that across a client handshake stalls every other forward on the
+    // session. A target that turns out to be unreachable shows up as the
+    // connection closing immediately, which is what SSH gives us anyway.
+    socks5_reply(tcp, REP_OK).await?;
+    Ok((host, port))
+}
+
+/// Writes a SOCKS5 reply with an all-zero IPv4 bound address. Clients ignore
+/// that field for CONNECT, and inventing one would be a lie either way.
+async fn socks5_reply(tcp: &mut tokio::net::TcpStream, code: u8) -> std::io::Result<()> {
+    tcp.write_all(&[5, code, 0, 1, 0, 0, 0, 0, 0, 0]).await
 }
 
 // Generic over the handler so both the real session (`Client`) and the
@@ -1136,5 +1447,103 @@ mod known_hosts_tests {
             std::fs::read_to_string(&path).unwrap().trim().is_empty(),
             "known_hosts must not be written when no fingerprint has been approved yet"
         );
+    }
+}
+
+#[cfg(test)]
+mod socks_tests {
+    use super::*;
+
+    /// Runs `socks5_handshake` against a real loopback socket and returns
+    /// what the server side decided plus every byte it wrote back. The
+    /// handshake is byte-level protocol code, so the bytes are the assertion
+    /// that matters — a length or offset mistake is invisible from the
+    /// Rust-level result alone.
+    async fn handshake(client_bytes: &[u8]) -> (Option<(String, u16)>, Vec<u8>) {
+        let listener = tokio::net::TcpListener::bind((LOOPBACK_V4, 0)).await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            socks5_handshake(&mut sock).await.ok()
+        });
+
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        client.write_all(client_bytes).await.unwrap();
+        let outcome = server.await.unwrap();
+        // The server side is done, so the peer is closed: read to EOF rather
+        // than a fixed length, which also catches an over-long reply.
+        let mut reply = Vec::new();
+        let _ = client.read_to_end(&mut reply).await;
+        (outcome, reply)
+    }
+
+    fn greeting_no_auth() -> Vec<u8> {
+        vec![5, 1, 0]
+    }
+
+    #[tokio::test]
+    async fn connect_to_a_domain_name_is_passed_through_unresolved() {
+        let mut req = greeting_no_auth();
+        // VER, CONNECT, RSV, ATYP=domain, len, "db.internal", port 5432
+        req.extend_from_slice(&[5, 1, 0, 3, 11]);
+        req.extend_from_slice(b"db.internal");
+        req.extend_from_slice(&5432u16.to_be_bytes());
+        let (outcome, reply) = handshake(&req).await;
+
+        // The name must arrive verbatim: resolving it here would both leak
+        // internal hostnames to this machine's DNS and resolve them on the
+        // wrong side of the tunnel.
+        assert_eq!(outcome, Some(("db.internal".to_string(), 5432)));
+        assert_eq!(reply[0..2], [5, 0x00], "method selection: no auth");
+        assert_eq!(reply[2..4], [5, 0], "reply: version, success");
+    }
+
+    #[tokio::test]
+    async fn connect_to_an_ipv4_literal() {
+        let mut req = greeting_no_auth();
+        req.extend_from_slice(&[5, 1, 0, 1, 10, 0, 1, 11]);
+        req.extend_from_slice(&22u16.to_be_bytes());
+        let (outcome, _) = handshake(&req).await;
+        assert_eq!(outcome, Some(("10.0.1.11".to_string(), 22)));
+    }
+
+    #[tokio::test]
+    async fn connect_to_an_ipv6_literal() {
+        let mut req = greeting_no_auth();
+        req.extend_from_slice(&[5, 1, 0, 4]);
+        req.extend_from_slice(&Ipv6Addr::LOCALHOST.octets());
+        req.extend_from_slice(&443u16.to_be_bytes());
+        let (outcome, _) = handshake(&req).await;
+        assert_eq!(outcome, Some(("::1".to_string(), 443)));
+    }
+
+    #[tokio::test]
+    async fn a_client_that_cannot_do_no_auth_is_told_so_not_hung() {
+        // Offers only 0x02 (username/password). Answering 0x00 anyway would
+        // be a protocol violation; the client must get 0xFF.
+        let (outcome, reply) = handshake(&[5, 1, 2]).await;
+        assert_eq!(outcome, None);
+        assert_eq!(reply, [5, 0xFF]);
+    }
+
+    #[tokio::test]
+    async fn unsupported_commands_are_refused_with_a_reply() {
+        // BIND (0x02) — refused rather than half-implemented, and the client
+        // is told, so it fails fast instead of waiting on a dead tunnel.
+        let mut req = greeting_no_auth();
+        req.extend_from_slice(&[5, 2, 0, 1, 127, 0, 0, 1]);
+        req.extend_from_slice(&80u16.to_be_bytes());
+        let (outcome, reply) = handshake(&req).await;
+        assert_eq!(outcome, None);
+        assert_eq!(reply[0..2], [5, 0x00]);
+        assert_eq!(reply[2..4], [5, 7], "reply: command not supported");
+    }
+
+    #[tokio::test]
+    async fn a_non_socks5_client_is_rejected() {
+        // SOCKS4 begins with 0x04. Nothing should be written back to it.
+        let (outcome, reply) = handshake(&[4, 1, 0, 80]).await;
+        assert_eq!(outcome, None);
+        assert!(reply.is_empty(), "no reply is defined for a non-SOCKS5 greeting");
     }
 }

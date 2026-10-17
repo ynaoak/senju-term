@@ -8,6 +8,13 @@
 //!
 //! The options list is what makes a placeholder a choice; `:` still
 //! introduces the default in both forms.
+//!
+//! Names starting with `$` are *built-ins* — `{{$cwd}}`, `{{$host}}`,
+//! `{{$date}}`, `{{$clipboard}}` and so on. They are never prompted for: the
+//! UI knows the answer (which thread is focused, what the clock says) and
+//! supplies it in the values map at run time. This module only has to keep
+//! them out of the prompt list and say which ones a template uses, so the
+//! UI reads the clipboard, say, only when a template actually asks for it.
 
 use std::collections::HashMap;
 
@@ -34,12 +41,32 @@ impl Placeholder {
     }
 }
 
-/// Extracts placeholders in order of first appearance. Duplicate names are
-/// reported once; the first occurrence that carries a default wins, and the
-/// first occurrence that carries options wins.
+/// A `$`-prefixed name: filled in by the app, never asked of the user.
+pub fn is_builtin(name: &str) -> bool {
+    name.starts_with('$')
+}
+
+/// The built-in names a template references, each once, in order.
+pub fn builtin_names(command: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for p in scan(command) {
+        if is_builtin(&p.name) && !out.contains(&p.name) {
+            out.push(p.name);
+        }
+    }
+    out
+}
+
+/// Extracts the placeholders to prompt for, in order of first appearance.
+/// Built-ins are left out. Duplicate names are reported once; the first
+/// occurrence that carries a default wins, and the first occurrence that
+/// carries options wins.
 pub fn extract_placeholders(command: &str) -> Vec<Placeholder> {
     let mut out: Vec<Placeholder> = Vec::new();
     for p in scan(command) {
+        if is_builtin(&p.name) {
+            continue;
+        }
         match out.iter_mut().find(|e| e.name == p.name) {
             Some(existing) => {
                 if existing.default.is_none() {
@@ -134,37 +161,24 @@ mod tests {
             .collect()
     }
 
+    fn free(name: &str, default: Option<&str>) -> Placeholder {
+        Placeholder {
+            name: name.into(),
+            default: default.map(String::from),
+            options: vec![],
+        }
+    }
+
     #[test]
     fn extracts_names_and_defaults() {
         let ps = extract_placeholders("git log -n {{count:20}} --author {{author}}");
-        assert_eq!(
-            ps,
-            vec![
-                Placeholder {
-                    name: "count".into(),
-                    default: Some("20".into()),
-                    options: vec![],
-                },
-                Placeholder {
-                    name: "author".into(),
-                    default: None,
-                    options: vec![],
-                },
-            ]
-        );
+        assert_eq!(ps, vec![free("count", Some("20")), free("author", None)]);
     }
 
     #[test]
     fn deduplicates_and_keeps_first_default() {
         let ps = extract_placeholders("{{x}} {{x:1}} {{x:2}}");
-        assert_eq!(
-            ps,
-            vec![Placeholder {
-                name: "x".into(),
-                default: Some("1".into()),
-                options: vec![],
-            }]
-        );
+        assert_eq!(ps, vec![free("x", Some("1"))]);
     }
 
     #[test]
@@ -232,5 +246,37 @@ mod tests {
         let cmd = "ls -la";
         assert!(extract_placeholders(cmd).is_empty());
         assert_eq!(fill_placeholders(cmd, &HashMap::new()), cmd);
+    }
+
+    #[test]
+    fn builtins_are_not_prompted_but_are_filled() {
+        let t = "scp {{file}} {{$user}}@{{$host}}:{{$cwd}}/backup-{{$date}}.tgz";
+        let prompts: Vec<_> = extract_placeholders(t).into_iter().map(|p| p.name).collect();
+        assert_eq!(prompts, vec!["file".to_string()]);
+        assert_eq!(builtin_names(t), vec!["$user", "$host", "$cwd", "$date"]);
+        let mut v = HashMap::new();
+        for (k, val) in [("file", "db.sql"), ("$user", "deploy"), ("$host", "web-01"), ("$cwd", "/srv"), ("$date", "2026-10-02")] {
+            v.insert(k.to_string(), val.to_string());
+        }
+        assert_eq!(fill_placeholders(t, &v), "scp db.sql deploy@web-01:/srv/backup-2026-10-02.tgz");
+    }
+
+    #[test]
+    fn builtin_names_are_unique_and_unknown_ones_fill_empty() {
+        assert_eq!(builtin_names("{{$date}} {{$date}} {{x}}"), vec!["$date"]);
+        assert!(builtin_names("echo {{x:1}}").is_empty());
+        // A built-in the UI does not know stays empty rather than literal:
+        // the same rule as any other missing value.
+        assert_eq!(fill_placeholders("a{{$nope}}b", &HashMap::new()), "ab");
+        // A default on a built-in still applies when the UI has no value.
+        assert_eq!(fill_placeholders("{{$cwd:~}}", &HashMap::new()), "~");
+    }
+
+    #[test]
+    fn builtins_with_options_are_still_builtins() {
+        // A choice on a built-in makes no sense, but it must not turn the
+        // built-in into a prompt either.
+        assert!(extract_placeholders("{{$host|a,b}}").is_empty());
+        assert_eq!(builtin_names("{{$host|a,b}}"), vec!["$host"]);
     }
 }

@@ -17,9 +17,21 @@ portable-pty = "0.9"
 # stock Rust toolchain builds Senju on Windows/macOS/Linux out of the box.
 russh = { version = "0.54", default-features = false, features = ["ring", "flate2", "rsa"] }
 dirs = "6"
-# SFTP client on top of a russh channel (file upload/download within an
-# existing SSH session, including through jump hosts). Pure Rust like russh.
-russh-sftp = "3"
 # Generates the throwaway rcfile/ZDOTDIR used to auto-inject shell integration
 # (see sessions::shell_integration) — a real dependency now, not just tests.
 tempfile = "3"
+russh-sftp = "2.4.0"
+toml = { version = "1.1.6", default-features = false, features = ["parse", "serde"] }
+# Filesystem watching for the built-in dev server's hot reload (inotify on
+# Linux, FSEvents on macOS, ReadDirectoryChangesW on Windows — each selected by
+# target, not by a feature). Default features: they are exactly
+# `macos_fsevent`, which is the backend wanted on macOS, and the optional
+# `crossbeam-channel` dependency stays off, which is what notify recommends
+# when its events are consumed inside a tokio runtime (they are here).
+notify = "8"
+# Local-time stamps for session log file names. `clock` only: no serde, no
+# oldtime, no wasm — the crate is already in the tree via other deps.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# OS randomness for generating SSH key pairs (`keygen`). 0.8, because the
+# ssh-key crate russh re-exports takes a rand_core 0.6 `CryptoRngCore`.
+rand = "0.8"

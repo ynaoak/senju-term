@@ -33,7 +33,7 @@ const STUB = () => {
       { id: uid(), name: 'git 同期', description: 'fetch & rebase', command: 'git fetch && git rebase origin/main', tags: ['git'], group: '', shortcut: 'alt+g', show_button: false },
     ],
     hosts: [
-      { id: 'host-prod', name: 'prod-web-01', host: '10.0.1.11', port: 22, username: 'deploy', auth_method: 'key', key_path: '~/.ssh/id_ed25519', forwards: ['8080:localhost:80', '5433:db.internal:5432'], jump_hosts: ['host-bastion'] },
+      { id: 'host-prod', name: 'prod-web-01', host: '10.0.1.11', port: 22, username: 'deploy', auth_method: 'key', key_path: '~/.ssh/id_ed25519', save_credentials: true, forwards: ['8080:localhost:80', '5433:db.internal:5432'], jump_hosts: ['host-bastion'] },
       { id: 'host-bastion', name: 'bastion', host: 'bastion.example.com', port: 2222, username: 'admin', auth_method: 'keypassword', key_path: '~/.ssh/id_rsa', jump_hosts: [] },
       { id: 'host-db', name: '', host: 'db.internal', port: 22, username: 'postgres', auth_method: 'password', key_path: '', jump_hosts: [] },
     ],
@@ -60,8 +60,16 @@ const STUB = () => {
   // same byte-oriented base64 the Rust backend sends.
   const b64 = (s) => btoa(String.fromCharCode(...new TextEncoder().encode(s)));
 
+  // Stands in for the real core.Channel: app.js registers one for terminal
+  // output at load time, so it has to exist before boot() runs.
+  class StubChannel {
+    constructor() { this.onmessage = () => {}; }
+    toJSON() { return '__CHANNEL__:0'; }
+  }
+
   window.__TAURI__ = {
     core: {
+      Channel: StubChannel,
       invoke: async (cmd, args) => {
         switch (cmd) {
           case 'get_settings':
@@ -72,8 +80,51 @@ const STUB = () => {
             // emulation artifact, not an app bug (real HiDPI displays keep
             // the two in agreement). The dedicated __GPU__ page below smoke-
             // tests WebGL at DPR 1 where emulation is faithful.
-            return { ...store.settings, theme: window.__LIGHT__ ? 'light' : 'dark', language: window.__EN__ ? 'en' : 'ja', gpu_rendering: !!window.__GPU__, ai_api_key: 'sk-ant-demo', ai_model: '' };
-          case 'save_settings': store.settings = args.settings; return null;
+            // Mirrors the real command: the API key itself never crosses
+            // into the page, only whether one is stored.
+            return { ...store.settings, theme: window.__LIGHT__ ? 'light' : 'dark', language: window.__EN__ ? 'en' : 'ja', gpu_rendering: !!window.__GPU__, ai_api_key: '', aiApiKeySaved: true, ai_model: '' };
+          case 'save_settings': store.settings = args.settings; return { aiKeyError: null };
+          // No keychain behind the harness: report nothing saved, which is
+          // the path that still prompts for credentials.
+          case 'ssh_saved_credentials':
+            return Object.fromEntries((args.hostIds || []).map((id) => [id, false]));
+          case 'forget_ssh_credentials': return null;
+          // SFTP: emit a few progress ticks then finish, so the transfer
+          // modal can be exercised (and shot) without a real server.
+          case 'sftp_upload':
+          case 'sftp_download': {
+            const total = 4 * 1024 * 1024;
+            for (let i = 1; i <= 4; i++) {
+              await new Promise((r) => setTimeout(r, 60));
+              emit('sftp:progress', { transferId: args.transferId, transferred: (total / 4) * i, total });
+            }
+            return { bytes: total, remotePath: args.remotePath };
+          }
+          case 'sftp_cancel': return null;
+          // A small fake remote tree, enough to exercise navigation, the
+          // dirs-first ordering and the "up" affordance.
+          case 'sftp_list': {
+            const tree = {
+              '/home/deploy': [
+                { name: 'dumps', isDir: true, isSymlink: false, size: null, mtime: 1787000000 },
+                { name: 'logs', isDir: true, isSymlink: false, size: null, mtime: 1786900000 },
+                { name: '.bashrc', isDir: false, isSymlink: false, size: 3771, mtime: 1780000000 },
+                { name: 'deploy.log', isDir: false, isSymlink: false, size: 1048576, mtime: 1787100000 },
+                { name: 'latest', isDir: false, isSymlink: true, size: 12, mtime: 1787100000 },
+              ],
+              '/home/deploy/dumps': [
+                { name: 'db-2026-08-01.sql', isDir: false, isSymlink: false, size: 734003200, mtime: 1786000000 },
+                { name: 'db-2026-08-28.sql', isDir: false, isSymlink: false, size: 812000000, mtime: 1787200000 },
+              ],
+              '/home': [{ name: 'deploy', isDir: true, isSymlink: false, size: null, mtime: 1780000000 }],
+              '/': [{ name: 'home', isDir: true, isSymlink: false, size: null, mtime: 1770000000 }],
+            };
+            const p = args.path === '.' || !args.path ? '/home/deploy' : args.path;
+            const entries = (tree[p] || []).map((e) => ({ ...e, path: p === '/' ? `/${e.name}` : `${p}/${e.name}` }));
+            const trimmed = p.replace(/\/+$/, '');
+            const parent = trimmed === '' ? null : (trimmed.lastIndexOf('/') === 0 ? '/' : trimmed.slice(0, trimmed.lastIndexOf('/')));
+            return { path: p, parent, entries };
+          }
           case 'list_workflows': return window.__EMPTY__ ? [] : store.workflows;
           case 'list_ssh_hosts': return store.hosts;
           case 'list_profiles': return store.profiles;
@@ -180,6 +231,43 @@ for (const v of VIEWS) {
   await page.waitForTimeout(250);
   await page.screenshot({ path: path.join(outDir, `${v}.png`) });
 }
+
+// The menu a clicked filesystem path opens (copy / reveal). Written into the
+// live terminal and clicked for real, so the shot also proves the link
+// provider found the path and put the range on the right columns.
+await page.evaluate(() => window.setView('shell'));
+await page.evaluate(() => state.threads[0].term.write('\r\nerror: cannot open /etc/hosts.\r\n'));
+await page.waitForTimeout(300);
+{
+  const cell = await page.evaluate(() => {
+    const t = state.threads[0].term;
+    for (const row of document.querySelectorAll('.xterm-rows > div')) {
+      const col = row.textContent.indexOf('/etc/hosts');
+      if (col < 0) continue;
+      const r = row.getBoundingClientRect();
+      if (!r.width) continue;
+      return { x: r.left + (r.width / t.cols) * (col + 3), y: r.top + r.height / 2 };
+    }
+    return null;
+  });
+  if (cell) {
+    await page.mouse.move(cell.x, cell.y);
+    await page.waitForTimeout(150);
+    await page.mouse.click(cell.x, cell.y);
+    await page.waitForTimeout(250);
+    await page.screenshot({ path: path.join(outDir, 'path-menu.png') });
+    await page.keyboard.press('Escape');
+  }
+}
+
+// Remote file browser (SFTP), against the stub's fake tree. Driven through
+// the real open path so the shot also proves the listing renders.
+await page.evaluate(() => { state.threads[0].kind = 'ssh'; });
+await page.evaluate(() => openRemoteBrowser());
+await page.waitForTimeout(350);
+await page.screenshot({ path: path.join(outDir, 'sftp-browser.png') });
+await page.keyboard.press('Escape');
+await page.evaluate(() => { state.threads[0].kind = 'local'; });
 
 // Workflow drag-and-drop reorder in progress: one DB-group card lifted
 // (.dragging), the other showing the accent drop-after insertion line. The
