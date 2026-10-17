@@ -61,8 +61,16 @@ mod tests {
             username: "u".into(),
             auth_method: SshAuthMethod::Agent,
             key_path: String::new(),
+            save_credentials: false,
+            password: String::new(),
+            passphrase: String::new(),
             forwards: Vec::new(),
             jump_hosts: jumps.iter().map(|s| s.to_string()).collect(),
+            group: String::new(),
+            tags: Vec::new(),
+            color: String::new(),
+            log_sessions: false,
+            auto_reconnect: false,
         }
     }
 

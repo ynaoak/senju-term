@@ -20,10 +20,22 @@
          (decorations:false) and draw the controls below; macOS keeps its real
          traffic lights over a transparent title bar, so it hides them. -->
     <header id="topbar" data-tauri-drag-region>
-      <button id="toggle-threadbar" class="icon-btn" data-i18n-title="topbar.toggleThreadbar"><span data-icon="menu"></span></button>
       <div id="brand" data-tauri-drag-region>
         <img id="brand-mark" src="./assets/icon.png" alt="" width="20" height="20" decoding="async" />
-        <span>Senju</span>
+        <span class="tb-label">Senju</span>
+      </div>
+      <!-- The terminal workspace's own controls. Every one of them acts on the
+           panes — the thread list they live in, the split, the broadcast
+           between panes, the task pane beside them — so they are shown only
+           while the シェル tab is active and are inert (and absent) in a tool
+           panel. Keeping them in one group is what says "these belong to that
+           view". -->
+      <div id="shell-tools">
+        <button id="toggle-threadbar" class="icon-btn" data-i18n-title="topbar.toggleThreadbar"><span data-icon="menu"></span></button>
+        <button id="task-toggle" class="ghost-btn" data-i18n-title="topbar.tasks.title"><span class="split-ico" data-icon="play"></span><span class="tb-label" data-i18n="topbar.tasks">タスク</span></button>
+        <button id="split-toggle" class="ghost-btn" data-i18n-title="topbar.split.title"><span class="split-ico" data-icon="split"></span><span class="split-label tb-label" data-i18n="topbar.split">上下分割</span></button>
+        <button id="split-h-toggle" class="ghost-btn" data-i18n-title="topbar.splitH.title"><span class="split-ico" data-icon="splitH"></span><span class="split-label tb-label" data-i18n="topbar.splitH">左右分割</span></button>
+        <button id="broadcast-toggle" class="ghost-btn" data-i18n-title="topbar.broadcast.title" style="display:none"><span class="split-ico" data-icon="broadcast"></span><span class="tb-label" data-i18n="topbar.broadcast">一斉入力</span></button>
       </div>
       <div class="spacer" data-tauri-drag-region></div>
       <!-- Tool-panel tabs, centered in the header. Each toggles its panel in
@@ -32,16 +44,14 @@
       <nav id="header-tabs">
         <button class="hdr-tab" data-panel="shell" data-i18n="tab.shell">シェル</button>
         <button class="hdr-tab" data-panel="workflows" data-i18n="tab.workflows">ワークフロー</button>
+        <button class="hdr-tab" data-panel="servers" data-i18n="tab.servers">サーバー</button>
         <button class="hdr-tab" data-panel="hosts" data-i18n="tab.hosts">SSH</button>
         <button class="hdr-tab" data-panel="profiles" data-i18n="tab.profiles">端末</button>
         <button class="hdr-tab" data-panel="launchsets" data-i18n="tab.launchsets">起動セット</button>
         <button class="hdr-tab" data-panel="settings" data-i18n="tab.settings">設定</button>
       </nav>
       <div class="spacer" data-tauri-drag-region></div>
-      <button id="split-toggle" class="ghost-btn" data-i18n-title="topbar.split.title"><span class="split-ico" data-icon="split"></span><span class="split-label" data-i18n="topbar.split">上下分割</span></button>
-      <button id="split-h-toggle" class="ghost-btn" data-i18n-title="topbar.splitH.title"><span class="split-ico" data-icon="splitH"></span><span class="split-label" data-i18n="topbar.splitH">左右分割</span></button>
-      <button id="broadcast-toggle" class="ghost-btn" data-i18n-title="topbar.broadcast.title" style="display:none"><span class="split-ico" data-icon="broadcast"></span><span data-i18n="topbar.broadcast">一斉入力</span></button>
-      <button id="palette-btn" class="ghost-btn" data-i18n-title="topbar.palette.title"><span data-icon="search"></span><span data-i18n="topbar.palette">パレット</span><kbd>Ctrl⇧P</kbd></button>
+      <button id="palette-btn" class="ghost-btn" data-i18n-title="topbar.palette.title"><span data-icon="search"></span><span class="tb-label" data-i18n="topbar.palette">パレット</span><kbd>Ctrl⇧P</kbd></button>
       <button id="help-btn" class="icon-btn" data-i18n-title="topbar.help.title"><span data-icon="help"></span></button>
       <!-- Windows / Linux: window controls on the right. Plain Unicode glyphs
            so they render without the Segoe icon font (absent on Linux). -->
@@ -85,6 +95,25 @@
         <div id="pane-area"></div>
       </main>
 
+      <!-- 中央右: タスク。表示中のシェルの作業ディレクトリ (OSC 7) にある
+           タスクランナー定義を読み取って一覧する。中身は scan_tasks が返すので
+           ここは表示だけ。ツールタブではなくペインなのは、タスクを押す目的が
+           「実行して流れを見る」ことにあるため — 一覧とターミナルが同時に
+           見えていないと、押すたびに画面を往復することになる。 -->
+      <!-- 幅を変えるつまみ。ペインの中ではなく外に置くのは、ペイン自身が縦に
+           スクロールするため — 中に入れると内容と一緒に流れてしまい、下まで
+           スクロールするとつかめなくなる。 -->
+      <div id="taskpane-grip" class="hidden"></div>
+      <aside id="taskpane" class="hidden">
+        <div class="taskpane-head">
+          <h2><span class="ph-icon" data-icon="play"></span><span data-i18n="taskpane.title">タスク</span></h2>
+          <button id="task-refresh" class="icon-btn" data-i18n-title="tasks.refresh"><span data-icon="zap"></span></button>
+          <button id="task-close" class="icon-btn" data-i18n-title="common.close"><span data-icon="x"></span></button>
+        </div>
+        <p id="task-cwd" class="panel-note"></p>
+        <div id="task-body"></div>
+      </aside>
+
       <!-- 右: ワークフロー / SSH / プロファイル / 設定。タブはヘッダー中央 (#header-tabs) -->
       <aside id="sidebar">
         <section id="panel-workflows" class="panel cards active">
@@ -101,13 +130,59 @@
           <ul id="wf-list" class="card-list"></ul>
         </section>
 
+        <!-- 組み込みの静的サーバー。127.0.0.1 のみで待ち受け、変更を検知して
+             ブラウザを自動リロードする。実体は senju-core::devserver。 -->
+        <section id="panel-servers" class="panel cards">
+          <header class="panel-header">
+            <h2><span class="ph-icon" data-icon="server"></span><span data-i18n="panel.servers.title">サーバー</span></h2>
+            <p class="panel-desc" data-i18n="panel.servers.desc">任意のディレクトリを組み込みサーバーで公開します。ファイルを変更するとブラウザが自動でリロードします。待ち受けは 127.0.0.1 のみで、外部からは接続できません。</p>
+          </header>
+
+          <form id="srv-start" class="srv-start">
+            <label class="srv-dir">
+              <span data-i18n="srv.field.root">公開するディレクトリ</span>
+              <span class="srv-dir-row">
+                <input id="srv-root" type="text" name="root" spellcheck="false" data-i18n-ph="srv.root.ph" />
+                <button type="button" id="srv-browse" class="ghost-btn"><span data-icon="folder"></span><span data-i18n="srv.browse">選択</span></button>
+                <button type="button" id="srv-use-cwd" class="ghost-btn"><span data-icon="terminal"></span><span data-i18n="srv.useCwd">現在地</span></button>
+              </span>
+            </label>
+            <label class="srv-port">
+              <span data-i18n="srv.field.port">ポート</span>
+              <input id="srv-port" type="number" name="port" min="0" max="65535" value="0" />
+            </label>
+            <label class="srv-check"><input id="srv-hot" type="checkbox" checked /><span data-i18n="srv.field.hotReload">ホットリロード</span></label>
+            <label class="srv-check"><input id="srv-spa" type="checkbox" /><span data-i18n="srv.field.spa">SPA モード</span></label>
+            <label class="srv-check"><input id="srv-open" type="checkbox" checked /><span data-i18n="srv.field.openBrowser">起動後にブラウザを開く</span></label>
+            <div class="srv-actions">
+              <button type="submit" class="accent-btn"><span data-icon="play"></span><span data-i18n="srv.start">起動</span></button>
+              <button type="button" id="srv-save-preset" class="ghost-btn"><span data-icon="star"></span><span data-i18n="srv.savePreset">この設定を保存</span></button>
+            </div>
+            <p class="field-hint" data-i18n="srv.portHint">ポートに 0 を指定すると、空いているポートを自動で割り当てます。</p>
+          </form>
+
+          <h3 class="srv-heading" data-i18n="srv.runningTitle">起動中</h3>
+          <ul id="srv-running" class="card-list"></ul>
+
+          <h3 class="srv-heading" data-i18n="srv.presetsTitle">保存した設定</h3>
+          <ul id="srv-presets" class="card-list"></ul>
+
+          <div class="srv-log-head">
+            <h3 class="srv-heading" data-i18n="srv.logTitle">アクセスログ</h3>
+            <button type="button" id="srv-log-clear" class="ghost-btn"><span data-icon="trash"></span><span data-i18n="srv.logClear">消去</span></button>
+          </div>
+          <ul id="srv-log" class="srv-log"></ul>
+        </section>
+
         <section id="panel-hosts" class="panel cards">
           <header class="panel-header">
             <h2><span class="ph-icon" data-icon="server"></span><span data-i18n="panel.hosts.title">SSH 接続</span></h2>
-            <p class="panel-desc" data-i18n="panel.hosts.desc">接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。パスワードは保存されません。</p>
+            <p class="panel-desc" data-i18n="panel.hosts.desc">接続先を登録。新規スレッド作成時のメニューや下のリストから接続できます。グループにまとめると、一斉接続と一斉実行ができます。</p>
           </header>
           <div class="panel-head">
             <input id="host-search" type="search" data-i18n-ph="panel.hosts.search.ph" />
+            <button id="host-known" class="ghost-btn" data-i18n-title="host.knownHosts.title"><span data-icon="lock"></span><span data-i18n="host.knownHosts">ホスト鍵</span></button>
+            <button id="host-keygen" class="ghost-btn" data-i18n-title="host.keygen.title"><span data-icon="plus"></span><span data-i18n="host.keygen">鍵ペアを生成</span></button>
             <button id="host-import" class="ghost-btn"><span data-icon="download"></span><span data-i18n="host.import">~/.ssh/config を取り込み</span></button>
             <button id="host-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
           </div>
@@ -211,14 +286,48 @@
               <p id="auto-update-hint" class="field-hint" data-i18n="settings.autoUpdate.hint">GitHub Releases の署名付きアップデートを起動時に確認します。新しいバージョンがある時だけ通知します(適用するかは毎回確認)。</p>
             </fieldset>
             <fieldset class="settings-group">
+              <legend data-i18n="settings.group.sessionLog">セッションログ</legend>
+              <p class="field-hint" data-i18n="settings.sessionLog.hint">ターミナルに流れた内容をファイルに残します (作業のエビデンス用)。SSH はホスト編集画面で「セッションを記録する」をオンにしたホストだけが対象です。日付ごとのフォルダに「ホスト名_時刻.log」として保存します。</p>
+              <label><span data-i18n="settings.sessionLogDir">保存先フォルダ (空欄 = 既定)</span>
+                <input name="session_log_dir" type="text" autocomplete="off" spellcheck="false" />
+              </label>
+              <div class="row">
+                <button type="button" id="session-log-open" class="ghost-btn"><span data-icon="folder"></span><span data-i18n="settings.sessionLog.open">フォルダを開く</span></button>
+              </div>
+              <label class="checkbox-row">
+                <input name="session_log_plain" type="checkbox" />
+                <span data-i18n="settings.sessionLogPlain">エスケープシーケンスを除き、読めるテキストとして保存</span>
+              </label>
+              <p class="field-hint" data-i18n="settings.sessionLogPlain.hint">オフにすると色や画面制御を含む生のバイト列をそのまま保存します (cat で端末に流すと再現できます)。</p>
+              <label class="checkbox-row">
+                <input name="session_log_local" type="checkbox" />
+                <span data-i18n="settings.sessionLogLocal">ローカルシェルも記録する</span>
+              </label>
+            </fieldset>
+            <fieldset class="settings-group">
               <legend data-i18n="settings.group.ai">AI コマンド支援</legend>
               <label><span data-i18n="settings.aiApiKey">Anthropic API キー(空欄 = 無効)</span>
                 <input name="ai_api_key" type="password" autocomplete="off" placeholder="sk-ant-..." />
               </label>
-              <p class="field-hint" data-i18n="settings.aiApiKey.hint">あなた自身の API キーで Anthropic API を直接呼び出します。送信されるのは入力した質問と OS/シェル名のみで、ターミナルの内容や履歴は送信されません。キーはローカルの設定ファイルに保存されます。</p>
+              <label class="checkbox-row" id="ai-key-clear-row" hidden>
+                <input type="checkbox" name="clear_ai_api_key" />
+                <span data-i18n="settings.aiApiKey.clear">保存済みのキーを削除する</span>
+              </label>
+              <p class="field-hint" data-i18n="settings.aiApiKey.hint">あなた自身の API キーで Anthropic API を直接呼び出します。送信されるのは入力した質問と OS/シェル名のみで、ターミナルの内容や履歴は送信されません。キーは設定ディレクトリの settings.json に平文で保存されます。設定の書き出しには含まれません。</p>
               <label><span data-i18n="settings.aiModel">モデル(空欄 = claude-opus-5)</span>
                 <input name="ai_model" type="text" placeholder="claude-opus-5" />
               </label>
+            </fieldset>
+            <!-- 設定一式の持ち出し。資格情報 (API キー・SSH パスワード) は
+                 書き出しに含めないので、このファイルは共有・コミットできる。 -->
+            <fieldset class="settings-group">
+              <legend data-i18n="settings.group.backup">設定の書き出し / 取り込み</legend>
+              <div class="settings-actions">
+                <button type="button" id="settings-export" class="ghost-btn"><span data-icon="upload"></span><span data-i18n="settings.export">書き出し</span></button>
+                <button type="button" id="settings-import" class="ghost-btn"><span data-icon="download"></span><span data-i18n="settings.import">取り込み</span></button>
+              </div>
+              <p class="field-hint" data-i18n="settings.backup.hint">設定・ワークフロー・SSH ホスト・端末プロファイル・起動セット・サーバー設定を 1 つの JSON にまとめます。別のマシンへ移すとき用です。取り込みは id 単位の上書きなので、同じファイルを 2 回取り込んでも増えません。</p>
+              <p class="field-hint" data-i18n="settings.backup.secrets">API キーと SSH の保存済みパスワード / パスフレーズは書き出しに含まれません。移行先では入力し直しになりますが、そのぶん書き出したファイルを共有・バックアップしても資格情報は漏れません。</p>
             </fieldset>
             <div class="settings-actions">
               <button type="submit" class="accent-btn" data-i18n="settings.save">保存</button>
@@ -249,6 +358,7 @@
         <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.select">選択</span></span>
         <span><kbd>Enter</kbd> <span data-i18n="palette.foot.run">実行</span></span>
         <span><kbd>⇧</kbd><kbd>Enter</kbd> <span data-i18n="palette.foot.insert">挿入</span></span>
+        <span><kbd>Ctrl</kbd><kbd>Enter</kbd> <span data-i18n="palette.foot.save">ワークフローに保存</span></span>
         <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">閉じる</span></span>
         <span class="palette-foot-filters" data-i18n="palette.foot.filters">履歴の絞り込み: @ホスト  !failed / !ok  #ssh / #local</span>
       </div>
@@ -281,27 +391,6 @@
   <!-- Toasts are the only feedback for several actions (copy, save, SSH
        disconnect), so announce them to assistive tech rather than leaving them
        purely visual. -->
-  <!-- SFTP: リモートファイルブラウザ(ダウンロード元の選択) -->
-  <div id="remote-browser" class="overlay hidden" role="dialog" aria-modal="true" aria-labelledby="rb-title">
-    <div class="modal-box rb-box">
-      <h3 id="rb-title" data-i18n="sftp.browser.title">リモートのファイルをダウンロード</h3>
-      <div class="rb-pathbar">
-        <button id="rb-up" class="icon-btn" data-i18n-title="sftp.browser.up" title="親ディレクトリへ">↑</button>
-        <input id="rb-path" type="text" spellcheck="false" autocomplete="off" />
-        <button id="rb-go" class="ghost-btn" data-i18n="sftp.browser.go">移動</button>
-      </div>
-      <div id="rb-list" class="rb-list" role="listbox" tabindex="0"></div>
-      <p id="rb-status" class="field-hint"></p>
-      <div class="modal-actions">
-        <button id="rb-cancel" class="ghost-btn" data-i18n="modal.cancel">キャンセル</button>
-        <button id="rb-download" class="accent-btn" disabled data-i18n="sftp.browser.download">ダウンロード…</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- SFTP: 進行中の転送 -->
-  <div id="transfers" class="hidden" aria-live="polite"></div>
-
   <div id="toast" class="hidden" role="status" aria-live="polite" aria-atomic="true"></div>
 
   <script src="app.js"></script>

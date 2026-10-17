@@ -1,6 +1,13 @@
-//! Auto-injects OSC 133 shell-integration hooks (the prompt/command/output
-//! markers the frontend's command-block UI reads) into local shell sessions,
-//! without ever editing the user's own rc files.
+//! Auto-injects shell-integration hooks into local shell sessions, without
+//! ever editing the user's own rc files:
+//!
+//! - **OSC 133** — the prompt/command/output markers the frontend's
+//!   command-block UI reads.
+//! - **OSC 7** — the working directory, reported after every command. Nothing
+//!   else can tell the app where the shell currently *is*: the child process
+//!   `cd`s on its own and the parent is never told, so a feature that depends
+//!   on the directory (the task panel reading `package.json` next to you) has
+//!   no other source for it.
 //!
 //! Detected purely by executable basename — bash/zsh/fish are recognized;
 //! every other shell (cmd.exe, PowerShell, a custom REPL, …) is left
@@ -26,7 +33,7 @@
 use std::io::Write as _;
 use std::path::Path;
 
-/// Extra launch parameters that make a shell emit OSC 133 markers. The
+/// Extra launch parameters that make a shell emit the OSC markers. The
 /// `guard` (when present) owns the generated temp directory and must be kept
 /// alive for as long as the spawned shell might still be starting up.
 pub struct Integration {
@@ -48,7 +55,8 @@ pub struct Integration {
 //
 // `__senju_precmd` re-`return`s the status it was handed so a user's own
 // PROMPT_COMMAND, appended after ours, still sees the real `$?`.
-const BASH_SNIPPET: &str = r#"__senju_precmd() { printf '\e]133;D;%s\a' "$1"; return "$1"; }
+const BASH_SNIPPET: &str = r#"__senju_cwd() { local p=${PWD//%/%25}; printf '\e]7;file://%s%s\a' "${HOSTNAME:-}" "${p// /%20}"; }
+__senju_precmd() { __senju_cwd; printf '\e]133;D;%s\a' "$1"; return "$1"; }
 __senju_arm() { __senju_at_prompt=1; }
 __senju_preexec() {
   [ -n "$COMP_LINE" ] && return 0
@@ -68,13 +76,14 @@ fi
 PROMPT_COMMAND='__senju_precmd $?'"${PROMPT_COMMAND:+;$PROMPT_COMMAND}"';__senju_arm'
 "#;
 
-const ZSH_SNIPPET: &str = r#"precmd() { print -Pn '\e]133;D;%?\a\e]133;A\a' }
+const ZSH_SNIPPET: &str = r#"precmd() { print -Pn '\e]133;D;%?\a\e]133;A\a'; local p=${PWD//\%/%25}; print -n "\e]7;file://${HOST}${p// /%20}\a" }
 preexec() { print -n '\e]133;C\a' }
 PS1="$PS1"$'%{\e]133;B\a%}'
 "#;
 
 const FISH_SNIPPET: &str = r#"function __senju_blocks_prompt --on-event fish_prompt
     printf '\e]133;D;%s\a\e]133;A\a' $status
+    printf '\e]7;file://%s%s\a' (hostname) (string replace -a ' ' '%20' -- (string replace -a '%' '%25' -- $PWD))
 end
 function __senju_blocks_preexec --on-event fish_preexec
     printf '\e]133;C\a'

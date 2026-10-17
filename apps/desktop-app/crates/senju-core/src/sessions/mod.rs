@@ -4,15 +4,14 @@
 //! the UI layer only deals with a single data/exit event stream.
 
 mod forward;
+pub mod sftp;
 mod jump;
 mod local;
-mod sftp;
 mod shell_integration;
 mod ssh;
 
 pub use forward::{parse_forward_spec, ForwardSpec};
 pub use jump::{resolve_jump_chain, MAX_JUMP_HOPS};
-pub use sftp::{join_remote, RemoteDirListing, RemoteEntry, TransferSummary};
 pub use ssh::SshTestReport;
 
 use std::collections::HashMap;
@@ -28,10 +27,6 @@ use crate::models::SshHost;
 pub trait EventSink: Send + Sync + 'static {
     fn data(&self, id: &str, data: &[u8]);
     fn exit(&self, id: &str, code: i32);
-    /// Byte-level progress of an SFTP transfer started through
-    /// [`SessionManager::sftp_upload`] / [`SessionManager::sftp_download`].
-    /// `total` is 0 when unknown. Default: ignored.
-    fn transfer_progress(&self, _transfer_id: &str, _done: u64, _total: u64) {}
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -135,10 +130,6 @@ type SessionMap = Arc<Mutex<HashMap<String, Backend>>>;
 pub struct SessionManager {
     sink: Arc<dyn EventSink>,
     sessions: SessionMap,
-    /// In-flight SFTP transfers by transfer id, so the UI can cancel one.
-    /// Aborting the task stops the copy where it is (a partial remote/local
-    /// file may remain — the UI says so).
-    transfers: Arc<Mutex<HashMap<String, tokio::task::AbortHandle>>>,
     /// Overrides the known_hosts file SSH connections verify against.
     /// `None` means the real `~/.ssh/known_hosts`; tests point this at a
     /// tempfile so they never touch (or depend on) a real home directory.
@@ -156,7 +147,6 @@ impl SessionManager {
         Self {
             sink,
             sessions: Arc::new(Mutex::new(HashMap::new())),
-            transfers: Arc::new(Mutex::new(HashMap::new())),
             known_hosts_path,
         }
     }
@@ -260,6 +250,37 @@ impl SessionManager {
     /// agent hop), and fingerprints carry the SHA256 the user approved for a
     /// specific hop during a prior TOFU prompt (so re-connecting trusts only
     /// that exact hop's exact key).
+    /// Opens an SFTP channel on an existing SSH session and hands it to
+    /// `run`, which does the actual transfer.
+    ///
+    /// The closure shape is what keeps the session-map lock off the await
+    /// path: the writer handle is cloned out under the lock, the lock is
+    /// released, and everything slow happens after. A transfer holding that
+    /// lock would freeze every terminal in the app for its duration.
+    ///
+    /// The channel is closed when `run` returns, so one transfer does not
+    /// leave a subsystem channel open on the server.
+    pub async fn with_sftp<T, F, Fut>(&self, session_id: &str, run: F) -> Result<T, SessionError>
+    where
+        F: FnOnce(russh_sftp::client::SftpSession) -> Fut,
+        Fut: std::future::Future<Output = Result<T, SessionError>>,
+    {
+        let writer = {
+            let map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
+            match map.get(session_id) {
+                Some(Backend::Ssh(s)) => s.writer(),
+                Some(Backend::Local(_)) => {
+                    return Err(SessionError::Ssh(
+                        "ファイル転送は SSH スレッドでのみ利用できます".into(),
+                    ))
+                }
+                None => return Err(SessionError::UnknownSession(session_id.to_string())),
+            }
+        };
+        let sftp = ssh::open_sftp(&writer).await?;
+        run(sftp).await
+    }
+
     pub async fn create_ssh_chain(
         &self,
         chain: &[SshHost],
@@ -368,120 +389,6 @@ impl SessionManager {
         ssh::SshSession::resize(&target, cols, rows).await
     }
 
-    /// The SSH writer + SFTP cache of session `id`, or an error for a local /
-    /// unknown session. Looked up under the map lock, used outside it.
-    fn sftp_parts(
-        &self,
-        id: &str,
-    ) -> Result<(Arc<tokio::sync::Mutex<ssh::SshWriter>>, sftp::SftpCache), SessionError> {
-        let map = self.sessions.lock().unwrap_or_else(|e| e.into_inner());
-        match map.get(id) {
-            Some(Backend::Ssh(s)) => Ok((s.writer(), s.sftp_cache())),
-            Some(Backend::Local(_)) => Err(SessionError::Ssh(
-                "ファイル転送は SSH スレッドでのみ使えます".into(),
-            )),
-            None => Err(SessionError::UnknownSession(id.into())),
-        }
-    }
-
-    /// Lists a remote directory over SFTP (empty / "." = the login home).
-    pub async fn sftp_list_dir(&self, id: &str, path: &str) -> Result<RemoteDirListing, SessionError> {
-        let (writer, cache) = self.sftp_parts(id)?;
-        let sftp = sftp::get_sftp(&writer, &cache).await?;
-        let out = sftp::list_dir(&sftp, path).await;
-        if out.is_err() {
-            sftp::reset_sftp(&cache).await;
-        }
-        out
-    }
-
-    /// Uploads a local file or folder into `remote_dir` on session `id`,
-    /// reporting progress through the sink under `transfer_id`. Cancelable
-    /// via [`Self::cancel_transfer`].
-    pub async fn sftp_upload(
-        &self,
-        id: &str,
-        transfer_id: &str,
-        local: PathBuf,
-        remote_dir: String,
-    ) -> Result<TransferSummary, SessionError> {
-        let (writer, cache) = self.sftp_parts(id)?;
-        let sink = self.sink.clone();
-        let tid = transfer_id.to_string();
-        let progress: sftp::ProgressFn = Arc::new(move |done, total| sink.transfer_progress(&tid, done, total));
-        let cache2 = cache.clone();
-        let task = tokio::spawn(async move {
-            let sftp = sftp::get_sftp(&writer, &cache2).await?;
-            let out = sftp::upload(&sftp, &local, &remote_dir, progress).await;
-            if out.is_err() {
-                sftp::reset_sftp(&cache2).await;
-            }
-            out
-        });
-        self.await_transfer(transfer_id, task).await
-    }
-
-    /// Downloads one remote file to `local` on session `id`. See
-    /// [`Self::sftp_upload`] for progress and cancellation.
-    pub async fn sftp_download(
-        &self,
-        id: &str,
-        transfer_id: &str,
-        remote: String,
-        local: PathBuf,
-    ) -> Result<u64, SessionError> {
-        let (writer, cache) = self.sftp_parts(id)?;
-        let sink = self.sink.clone();
-        let tid = transfer_id.to_string();
-        let progress: sftp::ProgressFn = Arc::new(move |done, total| sink.transfer_progress(&tid, done, total));
-        let cache2 = cache.clone();
-        let task = tokio::spawn(async move {
-            let sftp = sftp::get_sftp(&writer, &cache2).await?;
-            let out = sftp::download(&sftp, &remote, &local, progress).await;
-            if out.is_err() {
-                sftp::reset_sftp(&cache2).await;
-            }
-            out
-        });
-        self.await_transfer(transfer_id, task).await
-    }
-
-    /// Registers `task` under `transfer_id` for cancellation, awaits it, and
-    /// maps an abort into a distinguishable "cancelled" error.
-    async fn await_transfer<T>(
-        &self,
-        transfer_id: &str,
-        task: tokio::task::JoinHandle<Result<T, SessionError>>,
-    ) -> Result<T, SessionError> {
-        self.transfers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(transfer_id.to_string(), task.abort_handle());
-        let out = task.await;
-        self.transfers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(transfer_id);
-        match out {
-            Ok(r) => r,
-            Err(e) if e.is_cancelled() => Err(SessionError::Ssh("TRANSFER_CANCELLED".into())),
-            Err(e) => Err(SessionError::Ssh(format!("transfer task failed: {e}"))),
-        }
-    }
-
-    /// Aborts an in-flight transfer. Unknown ids are ignored (it may have just
-    /// finished).
-    pub fn cancel_transfer(&self, transfer_id: &str) {
-        if let Some(h) = self
-            .transfers
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(transfer_id)
-        {
-            h.abort();
-        }
-    }
-
     /// Terminates the session. The exit event is emitted by the session's own
     /// reader task once the underlying stream closes.
     pub fn kill(&self, id: &str) {
@@ -577,27 +484,45 @@ mod tests {
         let spec = LocalSpec { command: "bash".into(), ..Default::default() };
         let info = mgr.create_local(&spec, 80, 24, true).unwrap();
 
+        mgr.write(&info.id, b"echo hi\n").await.unwrap();
+        assert_emits_every_osc_133_marker(&sink);
+    }
+
+    /// Waits for every OSC 133 marker to appear, then asserts, naming whichever
+    /// ones never arrived.
+    ///
+    /// Gating on 133;D alone — which these tests used to do — is a race. A
+    /// shell runs its precmd hook, and so emits D, *before* it prints its
+    /// first prompt: the very first D therefore arrives at startup, ahead of
+    /// any A/B and before the command has run at all. Stopping there lets the
+    /// remaining assertions fire in the window between that startup D and the
+    /// prompt behind it. It is invisible on a fast machine and reproducible on
+    /// a loaded CI runner — which is exactly how this failed, reporting a
+    /// missing `\e]133;A` while the captured output held nothing but the
+    /// echoed input and a lone `D;0`: no prompt had been printed yet.
+    ///
+    /// Waiting on the whole set is also simply what these tests are about.
+    fn assert_emits_every_osc_133_marker(sink: &Arc<Capture>) {
         fn has(haystack: &[u8], marker: &[u8]) -> bool {
             haystack.windows(marker.len()).any(|w| w == marker)
         }
+        const MARKERS: [&[u8]; 4] =
+            [b"\x1b]133;A", b"\x1b]133;B", b"\x1b]133;C", b"\x1b]133;D"];
 
-        mgr.write(&info.id, b"echo hi\n").await.unwrap();
-        assert!(
-            wait_until(Duration::from_secs(10), || has(
-                &sink.data.lock().unwrap(),
-                b"\x1b]133;D"
-            )),
-            "expected an OSC 133;D (command-done) marker, got: {}",
-            String::from_utf8_lossy(&sink.data.lock().unwrap())
-        );
+        let ok = wait_until(Duration::from_secs(10), || {
+            let out = sink.data.lock().unwrap();
+            MARKERS.iter().all(|m| has(&out, m))
+        });
         let out = sink.data.lock().unwrap();
-        for marker in [&b"\x1b]133;A"[..], b"\x1b]133;B", b"\x1b]133;C"] {
-            assert!(
-                has(&out, marker),
-                "missing {marker:?} in: {}",
-                String::from_utf8_lossy(&out)
-            );
-        }
+        // Report the absent markers as text. The byte-slice `Debug` form
+        // prints them as `[27, 93, 49, 51, 51, 59, 65]`, which does not say
+        // which marker is missing.
+        let missing: Vec<String> = MARKERS
+            .iter()
+            .filter(|m| !has(&out, m))
+            .map(|m| String::from_utf8_lossy(m).escape_debug().to_string())
+            .collect();
+        assert!(ok, "missing {missing:?} in: {}", String::from_utf8_lossy(&out));
     }
 
     /// Same end-to-end check for zsh — the default shell on macOS, and the one
@@ -614,27 +539,47 @@ mod tests {
         let spec = LocalSpec { command: "/bin/zsh".into(), ..Default::default() };
         let info = mgr.create_local(&spec, 80, 24, true).unwrap();
 
-        fn has(haystack: &[u8], marker: &[u8]) -> bool {
-            haystack.windows(marker.len()).any(|w| w == marker)
-        }
-
         mgr.write(&info.id, b"echo hi\n").await.unwrap();
-        assert!(
-            wait_until(Duration::from_secs(10), || has(
-                &sink.data.lock().unwrap(),
-                b"\x1b]133;D"
-            )),
-            "expected an OSC 133;D (command-done) marker, got: {}",
-            String::from_utf8_lossy(&sink.data.lock().unwrap())
-        );
+        assert_emits_every_osc_133_marker(&sink);
+    }
+
+    /// The task panel reads the files sitting in the shell's current directory,
+    /// and nothing else can tell it where that is: the child `cd`s on its own
+    /// and never informs the parent process. So this pins the one signal the
+    /// panel has — a real bash reporting OSC 7 — and pins it *after a `cd*`,
+    /// because reporting only the startup directory would leave the panel
+    /// permanently showing the wrong repository.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shell_integration_reports_the_working_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        // /tmp is a symlink to /private/tmp on macOS, so the path bash reports
+        // is the resolved one. Comparing against the unresolved path would fail
+        // there for a reason that has nothing to do with the feature.
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir(root.join("proj")).unwrap();
+
+        let sink = Arc::new(Capture::default());
+        let mgr = SessionManager::new(sink.clone());
+        let spec = LocalSpec {
+            command: "bash".into(),
+            cwd: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let info = mgr.create_local(&spec, 80, 24, true).unwrap();
+
+        let want = "\x1b]7;file://";
+        let moved = format!("{}/proj\x07", root.display());
+        mgr.write(&info.id, b"cd proj\n").await.unwrap();
+        let ok = wait_until(Duration::from_secs(10), || {
+            let out = String::from_utf8_lossy(&sink.data.lock().unwrap()).into_owned();
+            out.contains(want) && out.contains(&moved)
+        });
         let out = sink.data.lock().unwrap();
-        for marker in [&b"\x1b]133;A"[..], b"\x1b]133;B", b"\x1b]133;C"] {
-            assert!(
-                has(&out, marker),
-                "missing {marker:?} in: {}",
-                String::from_utf8_lossy(&out)
-            );
-        }
+        assert!(
+            ok,
+            "expected an OSC 7 report of {moved:?}, got: {}",
+            String::from_utf8_lossy(&out).escape_debug()
+        );
     }
 
     /// Q5: a shell that exits the instant it starts must still end up removed

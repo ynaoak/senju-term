@@ -77,8 +77,20 @@ pub fn parse_ssh_config(content: &str, default_user: &str) -> Vec<SshHost> {
                     SshAuthMethod::Key
                 },
                 key_path,
+                // Imported hosts never opt in to saving credentials: the
+                // choice belongs to the user, per host, in the editor.
+                save_credentials: false,
+                password: String::new(),
+                passphrase: String::new(),
                 forwards: Vec::new(),
                 jump_hosts: Vec::new(),
+                // Labels are the user's to assign in the editor; nothing in
+                // ssh_config maps onto them.
+                group: String::new(),
+                tags: Vec::new(),
+                color: String::new(),
+                log_sessions: false,
+                auto_reconnect: false,
             });
         }
     }

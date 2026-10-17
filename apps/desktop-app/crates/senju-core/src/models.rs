@@ -58,13 +58,39 @@ pub struct SshHost {
     /// Path to the private key when `auth_method == Key`. `~` is expanded.
     #[serde(default)]
     pub key_path: String,
-    /// Local port forwards (`ssh -L` style, one
-    /// `local_port:remote_host:remote_port` string each) started
-    /// automatically when a session to this host connects and stopped when it
-    /// ends. Listeners bind to 127.0.0.1 only. Parsed by
-    /// `sessions::parse_forward_spec`.
+    /// Port forwards started automatically when a session to this host
+    /// connects and stopped when it ends — one line each, in `ssh` shape:
+    ///
+    /// ```text
+    ///   8080:localhost:80        local   (-L; the bare form, kept for
+    ///   -L 8080:localhost:80              hosts saved before -R/-D existed)
+    ///   -R 9000:localhost:3000   remote  (-R)
+    ///   -D 1080                  dynamic (-D, SOCKS5)
+    /// ```
+    ///
+    /// Every listener binds loopback — locally for `-L`/`-D`, on the server
+    /// for `-R`. Parsed by `sessions::parse_forward_spec`.
     #[serde(default)]
     pub forwards: Vec<String>,
+    /// Remember this host's password / passphrase so connecting does not ask
+    /// for it again. **Opt-in and off by default**: the app does not persist
+    /// credentials unless asked, and this is the user overriding that for one
+    /// host, not a default anyone gets by accident.
+    ///
+    /// The values sit in `password` / `passphrase` below, in this same
+    /// `ssh-hosts.json`, in the clear. Settings export strips them
+    /// (`share::to_config_json`), so a shared or committed export never
+    /// carries them — but anyone who can read the app's config directory can
+    /// read them, which is the trade this option asks the user to accept.
+    #[serde(default)]
+    pub save_credentials: bool,
+    /// Password for `SshAuthMethod::Password`, kept only while
+    /// `save_credentials` is on and erased the moment it is turned off.
+    #[serde(default)]
+    pub password: String,
+    /// Passphrase for an encrypted private key, on the same terms.
+    #[serde(default)]
+    pub passphrase: String,
     /// Ordered ids of other saved SSH hosts to connect *through* before
     /// reaching this one — the multi-hop / ProxyJump (`ssh -J`) chain. The
     /// first id is the first hop from the client; the last hop opens the
@@ -72,6 +98,70 @@ pub struct SshHost {
     /// Resolved and validated by `sessions::resolve_jump_chain`.
     #[serde(default)]
     pub jump_hosts: Vec<String>,
+    /// Group path for the hosts panel, `/`-nested exactly like
+    /// [`Workflow::group`] (`"Prod/Web"`). Empty = ungrouped. The panel groups
+    /// hosts under it and offers connect-all / run-on-all per group, so it is
+    /// the unit of "these machines go together". Normalized on save.
+    #[serde(default)]
+    pub group: String,
+    /// Free-form labels, searched alongside name / host / user.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Label color: one of [`HOST_COLORS`], or empty for none. Shown on the
+    /// host card, on its thread rows, and as a frame around the pane while a
+    /// session to it is on screen — so a production box is visibly different
+    /// from a staging one before anything is typed. Named rather than hex so
+    /// each theme can pick a readable shade and a typo cannot paint a pane an
+    /// invisible color; `store::save_ssh_host` rejects anything else.
+    #[serde(default)]
+    pub color: String,
+    /// Write every session to this host into a log file (see
+    /// `session_log`). Off by default: a transcript of a root shell is not
+    /// something to leave on disk without being asked. Per host rather than
+    /// global because the hosts that need an audit trail are rarely all of
+    /// them.
+    #[serde(default)]
+    pub log_sessions: bool,
+    /// Reconnect by itself when the connection drops mid-session (not on a
+    /// clean `exit`, and never at app start — session restore still skips
+    /// SSH). Off by default and per host: an unattended reconnect retries
+    /// authentication against a server, which is not something every host
+    /// should get without being asked. Saved credentials are reused when
+    /// present; otherwise the first retry prompts once.
+    #[serde(default)]
+    pub auto_reconnect: bool,
+}
+
+/// The label colors a host may carry (`SshHost::color`). The UI maps each to
+/// a per-theme token; the store rejects any other value.
+pub const HOST_COLORS: &[&str] = &["red", "orange", "yellow", "green", "blue", "purple"];
+
+/// A saved built-in dev server: the directory, port and options to start it
+/// with. Only the *settings* are stored — whether a server is running lives in
+/// `devserver::DevServerManager` and dies with the process, so a preset can
+/// never claim to be serving something it is not.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct DevServerPreset {
+    #[serde(default)]
+    pub id: String,
+    pub name: String,
+    /// Directory to serve. `~` expands, like a profile's `cwd`.
+    pub root: String,
+    /// 0 means "ask the OS for a free port" — the same meaning it has in
+    /// `DevServerSpec`, so a preset can avoid fighting over a number.
+    #[serde(default)]
+    pub port: u16,
+    #[serde(default)]
+    pub spa: bool,
+    #[serde(default = "default_hot_reload")]
+    pub hot_reload: bool,
+    /// Open the browser once it is listening.
+    #[serde(default)]
+    pub open_browser: bool,
+}
+
+fn default_hot_reload() -> bool {
+    true
 }
 
 fn default_ssh_port() -> u16 {
@@ -254,9 +344,15 @@ pub struct Settings {
     /// (missing the field) also default on.
     #[serde(default = "default_shell_integration")]
     pub shell_integration: bool,
-    /// API key for AI command assistance (the user's own Anthropic key).
-    /// Empty (default) disables the feature. Stored in the local settings
-    /// file — never sent anywhere except directly to the Anthropic API.
+    /// Anthropic API key for AI command assistance. Empty (default) disables
+    /// the feature.
+    ///
+    /// Persisted here, in settings.json, in the clear. Settings export strips
+    /// it (`share::to_config_json`) so a shared export never carries it, but
+    /// anyone who can read the app's config directory can read the key.
+    ///
+    /// Never sent anywhere except directly to the Anthropic API, and never
+    /// handed to the webview — the UI is told only whether one is saved.
     #[serde(default)]
     pub ai_api_key: String,
     /// Model used for AI command assistance. Empty falls back to the
@@ -278,6 +374,22 @@ pub struct Settings {
     /// is sent. Zero notifies for every finished command.
     #[serde(default = "default_notify_threshold_secs")]
     pub notify_threshold_secs: u32,
+    /// Where session logs go. Empty = `<config dir>/logs`. `~` expands.
+    #[serde(default)]
+    pub session_log_dir: String,
+    /// Strip escape sequences so the log is readable text (default). Off
+    /// keeps the raw byte stream, colors and all, for replaying in a
+    /// terminal.
+    #[serde(default = "default_session_log_plain")]
+    pub session_log_plain: bool,
+    /// Also log local shells, not only the SSH hosts that opted in. Off by
+    /// default for the same reason `SshHost::log_sessions` is.
+    #[serde(default)]
+    pub session_log_local: bool,
+}
+
+fn default_session_log_plain() -> bool {
+    true
 }
 
 fn default_font_size() -> u16 {
@@ -340,6 +452,9 @@ impl Default for Settings {
             auto_update_check: default_auto_update_check(),
             notify_long_commands: default_notify_long_commands(),
             notify_threshold_secs: default_notify_threshold_secs(),
+            session_log_dir: String::new(),
+            session_log_plain: default_session_log_plain(),
+            session_log_local: false,
         }
     }
 }

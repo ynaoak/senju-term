@@ -1,0 +1,264 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+# Least privilege by default: nothing here needs to write to the repo. The one
+# job that does (attaching installers to a draft release on a v* tag) opts in
+# for itself below.
+permissions:
+  contents: read
+
+# Third-party actions are pinned to a commit SHA rather than a moving tag: a
+# tag like `@v0` can be repointed at any commit by whoever owns the action, and
+# these steps run with a GITHUB_TOKEN. The trailing comment records the
+# human-readable version each SHA corresponds to, so upgrades stay reviewable.
+# (Pinning `dtolnay/rust-toolchain@stable` freezes the *action*, not the Rust
+# release — it still installs whatever stable is current.)
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          workspaces: apps/desktop-app
+
+      - name: Core tests (no GUI deps required)
+        working-directory: apps/desktop-app
+        run: cargo test -p senju-core
+
+      # Lints the GUI-independent core only. `senju-term` (the Tauri crate)
+      # needs the webkit2gtk system libraries, so it is checked in the `build`
+      # job instead, where those are installed.
+      #
+      # Deliberately no `cargo fmt --check`: the sources are hand-wrapped in
+      # places rustfmt would collapse, so a fmt gate would demand reformatting
+      # the whole codebase. Add one only together with that reformat.
+      - name: Clippy (core)
+        working-directory: apps/desktop-app
+        run: cargo clippy -p senju-core --all-targets -- -D warnings
+
+      # The release-manifest rules decide whether an installed app can find its
+      # update at all, and they only ever run on a tag — so they are exercised
+      # here on every push instead of being discovered broken at release time.
+      - name: Update-manifest rules
+        working-directory: apps/desktop-app
+        run: node scripts/expand-update-manifest.mjs --self-test
+
+      # Packaging config that is only exercised on a tag: platform config drift,
+      # version drift, MSIX template drift. Cheap to check on every push, and
+      # each failure it catches would otherwise surface mid-release.
+      - name: Release config
+        working-directory: apps/desktop-app
+        run: node scripts/check-release-config.mjs
+
+      # The icon generator hand-rolls PNG / ICO / ICNS encoding, and it is only
+      # run when the artwork changes — so its codec is checked on every push
+      # rather than the next time someone regenerates the icons.
+      - name: Icon pipeline
+        working-directory: apps/desktop-app
+        run: python3 scripts/icons_from_source.py --self-test
+
+      # Which characters of a line of output become a clickable path. Too
+      # greedy underlines punctuation, too shy drops the last character of a
+      # filename — neither shows up in a screenshot, and both are wrong on
+      # every line, every day.
+      - name: Terminal path links
+        working-directory: apps/desktop-app
+        run: node scripts/check-path-links.mjs
+
+  build:
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: ubuntu-latest
+            args: ""
+          - platform: windows-latest
+            args: ""
+          - platform: macos-latest
+            args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.platform }}
+    # tauri-action attaches the installers to a draft release on v* tags.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
+            libayatana-appindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2.9.1
+        with:
+          workspaces: apps/desktop-app
+
+      # The Tauri crate only compiles where its system webview deps exist, so
+      # its type-check and lint gate lives here rather than in `test`.
+      - name: Check & lint the Tauri crate
+        working-directory: apps/desktop-app
+        run: cargo clippy -p senju-term --all-targets -- -D warnings
+
+      # Updater artifacts (signed .sig files + latest.json) need BOTH halves of
+      # the configuration: the private key as a secret, and the matching public
+      # key in tauri.conf.json. Either alone is useless — and enabling the
+      # overlay with the pubkey placeholder still in place fails the build deep
+      # inside the bundler with "failed to decode base64 key", which says
+      # nothing about the actual missing step. So the overlay is enabled only
+      # when both are present, and a half-configured repo is reported in terms
+      # of what is missing. See .docs/release-and-distribution.md §2.
+      - name: Decide whether to build updater artifacts
+        id: updater
+        shell: bash
+        env:
+          HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          IS_RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        run: |
+          set -euo pipefail
+          pubkey=$(node -e "const c=require('./apps/desktop-app/src-tauri/tauri.conf.json');process.stdout.write(c.plugins?.updater?.pubkey ?? '')")
+          has_pubkey=true
+          case "$pubkey" in ''|REPLACE_WITH_*) has_pubkey=false ;; esac
+
+          if [ "$HAS_SIGNING_KEY" = "true" ] && [ "$has_pubkey" = "true" ]; then
+            echo "args=--config src-tauri/tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "args=" >> "$GITHUB_OUTPUT"
+
+          # Both missing is the normal unconfigured state (and every fork):
+          # nothing to say. Exactly one missing is a half-finished setup.
+          if [ "$HAS_SIGNING_KEY" = "$has_pubkey" ]; then
+            exit 0
+          fi
+          if [ "$HAS_SIGNING_KEY" = "true" ]; then
+            msg="TAURI_SIGNING_PRIVATE_KEY is set but tauri.conf.json still has the pubkey placeholder — replace it with the public key from 'cargo tauri signer generate' (.docs/release-and-distribution.md 2-2)."
+          else
+            msg="tauri.conf.json has an updater pubkey but the TAURI_SIGNING_PRIVATE_KEY secret is not set — add it under Settings > Secrets and variables > Actions (.docs/release-and-distribution.md 2-1)."
+          fi
+          # Harmless on a PR (updater artifacts simply are not built), but on a
+          # release tag it would ship a release nobody can auto-update from.
+          if [ "$IS_RELEASE_TAG" = "true" ]; then
+            echo "::error::$msg"
+            exit 1
+          fi
+          echo "::warning::$msg"
+
+      - name: Build app (and attach installers to a draft release on v* tags)
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop-app
+          args: ${{ matrix.args }} ${{ steps.updater.outputs.args }}
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: ${{ startsWith(github.ref, 'refs/tags/v') && format('Senju Term {0}', github.ref_name) || '' }}
+          # What each asset is for. The release used to be created by
+          # scripts/release-public.ps1, which wrote this table itself; now that
+          # the build owns the release, the table has to come from here or the
+          # download page is a bare list of filenames.
+          releaseBody: |
+            | File | Purpose |
+            |---|---|
+            | `*-setup.exe` | Windows installer (recommended) |
+            | `*.msi` | Windows MSI installer |
+            | `*.dmg` | macOS disk image (universal) |
+            | `*.AppImage` | Linux, portable |
+            | `*.deb` | Debian / Ubuntu package |
+            | `*.rpm` | Fedora / RHEL package |
+
+            Built from ${{ github.sha }}.
+          releaseDraft: true
+
+      # The Store cannot ingest the NSIS/MSI installers, so the Store artifact is
+      # packed separately from the same binary. Gated on the Store identity
+      # being configured: Partner Center assigns those values when the app is
+      # reserved, and a package built with anything else is rejected on
+      # submission. They are repository *variables*, not secrets — the identity
+      # is public information that ends up inside the shipped package.
+      - name: Pack Microsoft Store MSIX
+        if: matrix.platform == 'windows-latest' && vars.MSSTORE_IDENTITY_NAME != ''
+        shell: pwsh
+        working-directory: apps/desktop-app
+        run: |
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          ./scripts/build-msix.ps1 -Exe target/release/senju-term.exe -Version $version `
+            -IdentityName '${{ vars.MSSTORE_IDENTITY_NAME }}' `
+            -Publisher '${{ vars.MSSTORE_PUBLISHER }}' `
+            -PublisherDisplayName '${{ vars.MSSTORE_PUBLISHER_DISPLAY_NAME }}'
+
+      # Attached to the draft release so the owner can upload it to Partner
+      # Center straight from there.
+      - name: Attach MSIX to the draft release
+        if: matrix.platform == 'windows-latest' && vars.MSSTORE_IDENTITY_NAME != '' && startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        working-directory: apps/desktop-app
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$GITHUB_REF_NAME" target/msstore/*.msix --clobber
+
+      # NOTE: this workflow deliberately uploads no build artifacts, and new
+      # steps should not add any. Installers for three platforms run to
+      # hundreds of megabytes each; kept for the default 90 days they filled
+      # the account's artifact storage, at which point the upload itself
+      # started failing and took otherwise-green jobs red with it.
+      #
+      # Nothing needs them. On a v* tag tauri-action attaches the installers to
+      # the draft release, and the MSIX goes up in the step above, so the
+      # release carries the full set. `release-manifest` reads that release via
+      # `gh release download`, and no step anywhere calls `download-artifact`.
+      # Off a tag the bundles are build output with no consumer at all.
+      #
+      # To hand someone a build off a tag, re-run with a tag or attach the file
+      # to a release — do not reintroduce an upload-artifact step.
+
+  # Runs after every platform has attached its installers to the release,
+  # because the expansion needs the whole release in one place. Without it a
+  # shipped app can look for an update key the release does not contain — see
+  # the script's header.
+  release-manifest:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+      - name: Expand latest.json with per-arch and per-installer keys
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          # No latest.json means the updater signing key is not configured yet,
+          # so there is nothing to expand and nothing is wrong.
+          if ! gh release download "$TAG" -p latest.json -D . --clobber 2>/dev/null; then
+            echo "latest.json not attached to $TAG — updater not configured, skipping"
+            exit 0
+          fi
+          gh release view "$TAG" --json assets > assets.json
+          mkdir -p sigs
+          gh release download "$TAG" -p '*.sig' -D sigs --clobber || true
+          node apps/desktop-app/scripts/expand-update-manifest.mjs \
+            --manifest latest.json --assets assets.json --sig-dir sigs
+          gh release upload "$TAG" latest.json --clobber
