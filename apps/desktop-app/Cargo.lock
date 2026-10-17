@@ -4347,7 +4347,7 @@ dependencies = [
 
 [[package]]
 name = "senju-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -4367,7 +4367,7 @@ dependencies = [
 
 [[package]]
 name = "senju-term"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",
