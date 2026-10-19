@@ -46,7 +46,7 @@
         <button class="hdr-tab" data-panel="workflows" data-i18n="tab.workflows">ワークフロー</button>
         <button class="hdr-tab" data-panel="servers" data-i18n="tab.servers">サーバー</button>
         <button class="hdr-tab" data-panel="hosts" data-i18n="tab.hosts">SSH</button>
-        <button class="hdr-tab" data-panel="profiles" data-i18n="tab.profiles">端末</button>
+        <button class="hdr-tab" data-panel="profiles" data-i18n="tab.profiles">プロファイル</button>
         <button class="hdr-tab" data-panel="launchsets" data-i18n="tab.launchsets">起動セット</button>
         <button class="hdr-tab" data-panel="settings" data-i18n="tab.settings">設定</button>
       </nav>
@@ -121,13 +121,32 @@
             <h2><span class="ph-icon" data-icon="zap"></span><span data-i18n="panel.workflows.title">ワークフロー</span></h2>
             <p class="panel-desc" data-i18n="panel.workflows.desc">よく使うコマンドをテンプレート化。検索・ショートカット・クイックボタンから実行できます。</p>
           </header>
-          <div class="panel-head">
-            <input id="wf-search" type="search" data-i18n-ph="panel.workflows.search.ph" />
-            <button id="wf-export" class="ghost-btn" data-i18n-title="wf.export"><span data-icon="upload"></span><span data-i18n="wf.export">書き出し</span></button>
-            <button id="wf-import" class="ghost-btn" data-i18n-title="wf.import"><span data-icon="download"></span><span data-i18n="wf.import">取り込み</span></button>
-            <button id="wf-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
+          <div id="wf-layout" class="wf-layout">
+            <!-- グループのツリー。グループ自体は保存されず、各ワークフローの group
+                 パスから導出される (app.js の buildWorkflowTree 参照)。 -->
+            <nav id="wf-tree" class="wf-tree" data-i18n-aria="wf.tree.label">
+              <div class="wf-tree-head">
+                <button id="wf-tree-toggle" class="wf-tree-title" type="button" aria-expanded="true">
+                  <span class="wf-tree-title-chev" data-icon="chevronDown"></span><span data-i18n="wf.tree.title">グループ</span>
+                </button>
+                <span class="wf-tree-tools">
+                  <button id="wf-tree-new" class="icon-btn" type="button" data-i18n-title="wf.tree.newGroup"><span data-icon="createNewFolder"></span></button>
+                  <button id="wf-tree-expand" class="icon-btn" type="button" data-i18n-title="wf.tree.expandAll"><span data-icon="unfoldMore"></span></button>
+                  <button id="wf-tree-collapse" class="icon-btn" type="button" data-i18n-title="wf.tree.collapseAll"><span data-icon="unfoldLess"></span></button>
+                </span>
+              </div>
+              <div id="wf-tree-body" class="wf-tree-body" role="tree"></div>
+            </nav>
+            <div class="wf-main">
+              <div class="panel-head">
+                <input id="wf-search" type="search" data-i18n-ph="panel.workflows.search.ph" />
+                <button id="wf-export" class="ghost-btn" data-i18n-title="wf.export"><span data-icon="upload"></span><span data-i18n="wf.export">書き出し</span></button>
+                <button id="wf-import" class="ghost-btn" data-i18n-title="wf.import"><span data-icon="download"></span><span data-i18n="wf.import">取り込み</span></button>
+                <button id="wf-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
+              </div>
+              <ul id="wf-list" class="card-list"></ul>
+            </div>
           </div>
-          <ul id="wf-list" class="card-list"></ul>
         </section>
 
         <!-- 組み込みの静的サーバー。127.0.0.1 のみで待ち受け、変更を検知して
@@ -250,6 +269,14 @@
               <label><span data-i18n="settings.scrollback">スクロールバック行数</span>
                 <input name="scrollback" type="number" min="1000" max="100000" />
               </label>
+              <label><span data-i18n="settings.rightClick">右クリックの動作</span>
+                <select name="right_click">
+                  <option value="" data-i18n="settings.rightClick.auto">自動 (OS 標準)</option>
+                  <option value="copy_paste" data-i18n="settings.rightClick.copyPaste">コピー / 貼り付け (Windows Terminal 方式)</option>
+                  <option value="menu" data-i18n="settings.rightClick.menu">メニューを表示</option>
+                </select>
+              </label>
+              <p class="field-hint" data-i18n="settings.rightClick.hint">コピー / 貼り付けは、選択範囲があればコピー(選択は解除)、無ければ貼り付けます。Shift+右クリックでは、この設定にかかわらず常にワークフローのメニューを開きます。自動は Windows / Linux ではコピー / 貼り付け、macOS ではメニューです。</p>
               <label class="checkbox-row">
                 <input name="gpu_rendering" type="checkbox" />
                 <span data-i18n="settings.gpuRendering">GPU レンダリング(WebGL)</span>
@@ -355,11 +382,11 @@
              autocomplete="off" role="combobox" aria-expanded="true" aria-controls="palette-results" aria-autocomplete="list" />
       <ul id="palette-results" role="listbox" data-i18n-aria="palette.results.aria"></ul>
       <div class="palette-foot">
-        <span><kbd>↑</kbd><kbd>↓</kbd> <span data-i18n="palette.foot.select">選択</span></span>
-        <span><kbd>Enter</kbd> <span data-i18n="palette.foot.run">実行</span></span>
-        <span><kbd>⇧</kbd><kbd>Enter</kbd> <span data-i18n="palette.foot.insert">挿入</span></span>
-        <span><kbd>Ctrl</kbd><kbd>Enter</kbd> <span data-i18n="palette.foot.save">ワークフローに保存</span></span>
-        <span><kbd>Esc</kbd> <span data-i18n="palette.foot.close">閉じる</span></span>
+        <span><span data-palette-keys="prev next"><kbd>↑</kbd><kbd>↓</kbd></span> <span data-i18n="palette.foot.select">選択</span></span>
+        <span><span data-palette-keys="run"><kbd>Enter</kbd></span> <span data-i18n="palette.foot.run">実行</span></span>
+        <span><span data-palette-keys="insert"><kbd>⇧</kbd><kbd>Enter</kbd></span> <span data-i18n="palette.foot.insert">挿入</span></span>
+        <span><span data-palette-keys="save"><kbd>Ctrl</kbd><kbd>Enter</kbd></span> <span data-i18n="palette.foot.save">ワークフローに保存</span></span>
+        <span><span data-palette-keys="close"><kbd>Esc</kbd></span> <span data-i18n="palette.foot.close">閉じる</span></span>
         <span class="palette-foot-filters" data-i18n="palette.foot.filters">履歴の絞り込み: @ホスト  !failed / !ok  #ssh / #local</span>
       </div>
     </div>
