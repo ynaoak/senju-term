@@ -211,6 +211,7 @@ const STUB = () => {
         minimize: async () => {}, toggleMaximize: async () => {}, close: async () => {},
         onResized: () => {},
         onCloseRequested: () => {},
+        onDragDropEvent: async () => () => {},
       }),
     },
   };

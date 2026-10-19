@@ -1270,6 +1270,13 @@ fn get_settings(state: State<AppState>) -> SettingsView {
     SettingsView { settings, ai_api_key_saved }
 }
 
+/// Absolute path of `settings.json`, for "show in file manager". The file may
+/// not exist yet (nothing has been saved); the caller saves first in that case.
+#[tauri::command]
+fn settings_file_path(state: State<AppState>) -> String {
+    state.stores.settings_path().to_string_lossy().into_owned()
+}
+
 /// Saves settings. A blank `ai_api_key` leaves the stored key alone (the
 /// editor never had it to send back); `clear_ai_api_key` is the explicit
 /// delete.
@@ -1633,6 +1640,7 @@ pub fn run() {
             save_launch_set,
             delete_launch_set,
             get_settings,
+            settings_file_path,
             save_settings,
             dist_info,
             open_update_manager,

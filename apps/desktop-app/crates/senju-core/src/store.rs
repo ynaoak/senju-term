@@ -361,6 +361,11 @@ impl Stores {
         self.dir.join(format!("{name}.json"))
     }
 
+    /// Where `settings.json` lives (it may not exist until the first save).
+    pub fn settings_path(&self) -> PathBuf {
+        self.path("settings")
+    }
+
     /// Serializes writes so two `save_*`/`delete_*` can't interleave a
     /// read-modify-write. Recovers from a poisoned lock: the guarded value is
     /// `()`, so a prior panic left no broken invariant.
@@ -857,9 +862,27 @@ mod tests {
             session_log_dir: "~/logs".into(),
             session_log_plain: false,
             session_log_local: true,
+            right_click: "menu".into(),
+            palette_keys: [("open".to_string(), vec!["ctrl+k".to_string()])].into(),
         };
         s.save_settings(&new).unwrap();
         assert_eq!(s.settings(), new);
+    }
+
+    /// `palette_keys` is hand-edited in settings.json: a file from before the
+    /// field existed loads with an empty map, and a file that sets it keeps it
+    /// through a save/load.
+    #[test]
+    fn palette_keys_default_empty_and_roundtrip() {
+        let (d, s) = stores();
+        std::fs::write(d.path().join("settings.json"), r#"{"font_size":15}"#).unwrap();
+        assert!(s.settings().palette_keys.is_empty());
+
+        std::fs::write(d.path().join("settings.json"), r#"{"palette_keys":{"open":["ctrl+k"]}}"#).unwrap();
+        let loaded = s.settings();
+        assert_eq!(loaded.palette_keys["open"], ["ctrl+k"]);
+        s.save_settings(&loaded).unwrap();
+        assert_eq!(s.settings().palette_keys, loaded.palette_keys);
     }
 
     /// The whole point of moving the key: whatever the OS credential store

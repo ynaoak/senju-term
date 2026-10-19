@@ -386,6 +386,21 @@ pub struct Settings {
     /// default for the same reason `SshHost::log_sessions` is.
     #[serde(default)]
     pub session_log_local: bool,
+    /// What a right-click in a terminal pane does: "copy_paste" copies the
+    /// selection (or pastes when there is none), as Windows Terminal does;
+    /// "menu" opens the workflow launcher menu. Empty (or any unknown value)
+    /// follows the platform default — copy/paste on Windows and Linux, the
+    /// menu on macOS. Shift+right-click opens the menu either way. Free
+    /// string so more actions can be added without a schema change.
+    #[serde(default)]
+    pub right_click: String,
+    /// Command-palette key bindings, edited by hand in settings.json: action id
+    /// ("open", "next", "prev", "run", "insert", "save", "close") → key combos
+    /// such as "ctrl+shift+p". An action left out (or given an empty list) keeps
+    /// its built-in keys; unknown actions and unparsable combos are ignored by the
+    /// UI (which warns). Free-form here so the UI owns the key syntax.
+    #[serde(default)]
+    pub palette_keys: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 fn default_session_log_plain() -> bool {
@@ -455,6 +470,8 @@ impl Default for Settings {
             session_log_dir: String::new(),
             session_log_plain: default_session_log_plain(),
             session_log_local: false,
+            right_click: String::new(),
+            palette_keys: Default::default(),
         }
     }
 }

@@ -41,7 +41,7 @@ const state = {
   // sockets), `presets` is the saved-settings store, `log` is a capped ring of
   // recent requests — it exists only to be looked at, so it is never persisted.
   servers: { running: [], presets: [], log: [] },
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', term_theme: '', term_colors: {}, restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10 },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', term_theme: '', term_colors: {}, restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10, right_click: '', palette_keys: {} },
   renaming: null,      // thread id currently being renamed inline in the sidebar
   dist: null,          // { channel, installer, inAppUpdates, hasExternalManager }
 };
@@ -63,7 +63,7 @@ const STRINGS = {
   'tab.shell': { ja: 'シェル', en: 'Shell' },
   'tab.workflows': { ja: 'ワークフロー', en: 'Workflows' },
   'tab.hosts': { ja: 'SSH', en: 'SSH' },
-  'tab.profiles': { ja: '端末', en: 'Terminals' },
+  'tab.profiles': { ja: 'プロファイル', en: 'Profiles' },
   'tab.launchsets': { ja: '起動セット', en: 'Launch Sets' },
   'tab.settings': { ja: '設定', en: 'Settings' },
   'topbar.split.title': { ja: 'ペインを上下分割 (Ctrl+Shift+D)', en: 'Split pane vertically (Ctrl+Shift+D)' },
@@ -75,7 +75,7 @@ const STRINGS = {
   'topbar.broadcast': { ja: '一斉入力', en: 'Broadcast' },
   'topbar.tasks.title': { ja: 'ターミナルの横にタスク一覧を開く — 作業ディレクトリの package.json・Cargo.toml・Makefile などから実行できるコマンドを読み取ります', en: 'Open the task list beside the terminal — the commands declared by package.json, Cargo.toml, Makefile and friends in the working directory' },
   'topbar.tasks': { ja: 'タスク', en: 'Tasks' },
-  'topbar.palette.title': { ja: 'コマンドパレット (Ctrl+Shift+P)', en: 'Command palette (Ctrl+Shift+P)' },
+  'topbar.palette.title': { ja: 'コマンドパレット ({key})', en: 'Command palette ({key})' },
   'topbar.palette': { ja: 'パレット', en: 'Palette' },
   'topbar.help.title': { ja: 'キーボードショートカット (Ctrl+Shift+/)', en: 'Keyboard shortcuts (Ctrl+Shift+/)' },
 
@@ -197,6 +197,31 @@ const STRINGS = {
   'wf.quickButton': { ja: 'クイックボタン', en: 'Quick button' },
   'wf.drag': { ja: 'ドラッグして並べ替え', en: 'Drag to reorder' },
   'toast.reorderFailed': { ja: '並べ替えに失敗: {e}', en: 'Failed to reorder: {e}' },
+  'wf.tree.label': { ja: 'ワークフローのグループ', en: 'Workflow groups' },
+  'wf.tree.title': { ja: 'グループ', en: 'Groups' },
+  'wf.tree.all': { ja: 'すべて', en: 'All' },
+  'wf.tree.ungrouped': { ja: 'グループなし', en: 'Ungrouped' },
+  'wf.tree.expandAll': { ja: 'すべて展開', en: 'Expand all' },
+  'wf.tree.collapseAll': { ja: 'すべて折りたたむ', en: 'Collapse all' },
+  'wf.tree.newGroup': { ja: 'グループを作成', en: 'New group' },
+  'wf.group.toggle': { ja: '開閉', en: 'Expand / collapse' },
+  'wf.group.moveUp': { ja: 'グループを上へ移動', en: 'Move group up' },
+  'wf.group.moveDown': { ja: 'グループを下へ移動', en: 'Move group down' },
+  'wf.group.more': { ja: 'グループのメニュー', en: 'Group menu' },
+  'wf.group.addWorkflow': { ja: 'このグループにワークフローを追加', en: 'Add a workflow to this group' },
+  'wf.group.newSub': { ja: 'サブグループを作成', en: 'Create subgroup' },
+  'wf.group.rename': { ja: '名前を変更', en: 'Rename' },
+  'wf.group.new.title': { ja: 'グループを作成', en: 'New group' },
+  'wf.group.newSub.title': { ja: 'サブグループを作成', en: 'New subgroup' },
+  'wf.group.rename.title': { ja: 'グループ名を変更', en: 'Rename group' },
+  'wf.group.name': { ja: 'グループ名', en: 'Group name' },
+  'wf.group.next': { ja: '次へ', en: 'Next' },
+  'wf.group.new.hint': { ja: 'グループはワークフローを登録した時点で作られます。次の画面で、このグループに入れる最初のワークフローを登録してください。', en: 'A group exists once it has a workflow. On the next screen, register the first workflow to go in this group.' },
+  'wf.group.name.empty': { ja: 'グループ名を入力してください', en: 'Enter a group name' },
+  'wf.group.name.slash': { ja: 'グループ名に / は使えません (階層は別途サブグループで作成します)', en: 'A group name cannot contain / (nest with subgroups instead)' },
+  'wf.group.renameFailed': { ja: 'グループ名の変更に失敗: {e}', en: 'Failed to rename the group: {e}' },
+  'wf.moved': { ja: '「{name}」を「{group}」に移動しました', en: 'Moved “{name}” to {group}' },
+  'wf.moveFailed': { ja: '移動に失敗: {e}', en: 'Failed to move: {e}' },
   'wf.loadFailed': { ja: 'ワークフローの読み込みに失敗: {e}', en: 'Failed to load workflows: {e}' },
   'wf.emptyTitle': { ja: 'ワークフローがまだありません', en: 'No workflows yet' },
   'wf.emptyHint': { ja: 'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。', en: 'Templatize frequently used commands to run them with one key or from search.' },
@@ -236,6 +261,7 @@ const STRINGS = {
   // Shortcut conflicts
   'sc.conflict.reserved': { ja: 'アプリのショートカットと重複しています', en: 'Conflicts with an app shortcut' },
   'sc.conflict.shell': { ja: 'シェルが使うキーのため割り当てできません', en: 'Can’t be assigned — this key is used by the shell' },
+  'sc.conflict.paletteOpen': { ja: 'コマンドパレットを開くキーに割り当て済みです', en: 'Already used to open the command palette' },
   'sc.conflict.dup': { ja: '「{name}」に割り当て済みです', en: 'Already assigned to “{name}”' },
   'shortcut.ph': { ja: 'クリックしてキーを押す (Backspace で消去)', en: 'Click and press a key (Backspace to clear)' },
 
@@ -573,6 +599,11 @@ const STRINGS = {
   'palette.registerWorkflow': { ja: 'ワークフローを登録', en: 'Add workflow' },
   'palette.registerHost': { ja: 'SSH ホストを登録', en: 'Add SSH host' },
   'palette.registerSet': { ja: '起動セットを登録', en: 'Add launch set' },
+  'palette.reloadSettings': { ja: '設定ファイルを再読み込み', en: 'Reload settings file' },
+  'palette.showSettingsFile': { ja: '設定ファイルをフォルダーで表示', en: 'Show settings file in file manager' },
+  'palette.settingsReloaded': { ja: '設定ファイルを再読み込みしました', en: 'Reloaded the settings file' },
+  'palette.settingsFileFailed': { ja: '設定ファイルを表示できませんでした: {e}', en: 'Could not show the settings file: {e}' },
+  'paletteKeys.invalid': { ja: 'settings.json の palette_keys に解釈できないキーがあります(無視しました): {keys}', en: 'Ignored unrecognized entries in settings.json palette_keys: {keys}' },
   'palette.shortcutsList': { ja: 'キーボードショートカット一覧', en: 'Keyboard shortcuts' },
   'palette.newThreadOf': { ja: '新規スレッド: {name}', en: 'New thread: {name}' },
   'palette.showThread': { ja: '表示: {title}', en: 'Show: {title}' },
@@ -629,6 +660,13 @@ const STRINGS = {
   'settings.restoreSession.hint': { ja: '起動時に、前回開いていたローカルスレッド(プロファイル構成と順序)を再作成します。SSH 接続は認証が必要なため自動再接続せず、SSH パネルや新規メニューから接続します。', en: 'Recreates the local threads (profiles and order) you had open last time. SSH connections are never auto-reconnected (they need credentials) — connect from the SSH panel or the new-thread menu.' },
   'restore.sshSkipped': { ja: 'SSH スレッド {count} 件は認証が必要なため復元されませんでした(SSH パネルから接続してください)', en: 'Skipped restoring {count} SSH threads — they need authentication (connect from the SSH panel)' },
   'settings.gpuRendering': { ja: 'GPU レンダリング(WebGL)', en: 'GPU rendering (WebGL)' },
+  'settings.rightClick': { ja: '右クリックの動作', en: 'Right-click action' },
+  'settings.rightClick.auto': { ja: '自動 (OS 標準)', en: 'Auto (OS default)' },
+  'settings.rightClick.copyPaste': { ja: 'コピー / 貼り付け (Windows Terminal 方式)', en: 'Copy & paste (Windows Terminal style)' },
+  'settings.rightClick.menu': { ja: 'メニューを表示', en: 'Show menu' },
+  'settings.rightClick.hint': { ja: 'コピー / 貼り付けは、選択範囲があればコピー(選択は解除)、無ければ貼り付けます。Shift+右クリックでは、この設定にかかわらず常にワークフローのメニューを開きます。自動は Windows / Linux ではコピー / 貼り付け、macOS ではメニューです。', en: 'Copy & paste copies the selection (and clears it) or, with nothing selected, pastes. Shift+right-click always opens the workflow menu regardless of this setting. Auto means copy & paste on Windows / Linux and the menu on macOS.' },
+  'ctx.copy': { ja: 'コピー', en: 'Copy' },
+  'ctx.paste': { ja: '貼り付け', en: 'Paste' },
   'settings.gpuRendering.hint': { ja: '描画を GPU で高速化します。表示が乱れる環境ではオフにしてください(変更は開いているスレッドにも即時適用)。', en: 'Accelerates rendering with the GPU. Turn it off if the display glitches on your machine (applies immediately to open threads).' },
   'settings.shellIntegration': { ja: 'シェル統合を自動で有効化(コマンドブロック用)', en: 'Auto-enable shell integration (for command blocks)' },
   'settings.shellIntegration.hint': { ja: 'bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。', en: 'Injects OSC 133 prompt hooks into bash / zsh / fish at launch. Your rc files are not modified.' },
@@ -670,6 +708,7 @@ const STRINGS = {
   'sc.title': { ja: 'キーボードショートカット', en: 'Keyboard Shortcuts' },
   'sc.close': { ja: '閉じる', en: 'Close' },
   'sc.group.general': { ja: '全般', en: 'General' },
+  'sc.item.palette.custom': { ja: 'コマンドパレットを開く(settings.json の palette_keys で変更済み)', en: 'Open command palette (customized via palette_keys in settings.json)' },
   'sc.item.palette': { ja: 'コマンドパレットを開く(ターミナル外では {mod}+P も可)', en: 'Open command palette ({mod}+P also works outside the terminal)' },
   'sc.item.newThread': { ja: '新しいローカルスレッド', en: 'New local thread' },
   'sc.item.closeThread': { ja: '表示中のスレッドを終了', en: 'Close the visible thread' },
@@ -683,6 +722,10 @@ const STRINGS = {
   'sc.group.terminal': { ja: 'ターミナル', en: 'Terminal' },
   'sc.item.copy': { ja: '選択範囲をコピー', en: 'Copy selection' },
   'sc.item.paste': { ja: 'クリップボードを貼り付け', en: 'Paste clipboard' },
+  'sc.item.copyWin': { ja: '選択範囲をコピー (選択がある時。無ければ Ctrl+C は中断 SIGINT)', en: 'Copy selection (with a selection; otherwise Ctrl+C is SIGINT)' },
+  'sc.item.pasteAlt': { ja: 'クリップボードを貼り付け (別のキー)', en: 'Paste clipboard (alternate keys)' },
+  'sc.item.copyAlt': { ja: '選択範囲をコピー (別のキー)', en: 'Copy selection (alternate keys)' },
+  'sc.item.rightClickCopyPaste': { ja: '選択があればコピー、無ければ貼り付け (Shift+右クリックでメニュー)', en: 'Copy the selection, or paste when none (Shift+right-click for the menu)' },
   'sc.item.find': { ja: 'ターミナル内を検索', en: 'Search in terminal' },
   'sc.item.prevBlock': { ja: '前のコマンドブロックへ (要シェル統合)', en: 'Previous command block (needs shell integration)' },
   'sc.item.nextBlock': { ja: '次のコマンドブロックへ (要シェル統合)', en: 'Next command block (needs shell integration)' },
@@ -714,7 +757,8 @@ function applyStaticI18n() {
   document.documentElement.lang = state.settings.language === 'en' ? 'en' : 'ja';
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = tr(el.dataset.i18n); });
   document.querySelectorAll('[data-i18n-ph]').forEach((el) => { el.placeholder = tr(el.dataset.i18nPh); });
-  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = tr(el.dataset.i18nTitle); });
+  // `{key}` is the (possibly customized) palette-open key; no other title uses it.
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => { el.title = tr(el.dataset.i18nTitle, { key: paletteKeyLabel('open') }); });
   document.querySelectorAll('[data-i18n-aria]').forEach((el) => { el.setAttribute('aria-label', tr(el.dataset.i18nAria)); });
 }
 
@@ -741,6 +785,7 @@ function applyLanguage() {
     const live = editor.querySelector('input[data-tc-key]') ? readTermColorEditor() : (state.settings.term_colors || {});
     renderTermColorEditor(live);
   }
+  renderPaletteKeyUi();
   if (!$('#shortcuts').classList.contains('hidden')) renderShortcuts();
   if (palette.open) updatePalette();
 }
@@ -969,7 +1014,13 @@ async function newLocalThread({ paneIdx = state.focusedPane, profileId = null } 
   try {
     const info = await invoke('create_local_session', { profileId, cols, rows });
     const idx = pane ? state.panes.indexOf(pane) : -1;
-    createThread(info, idx >= 0 ? idx : state.focusedPane, { profileId: profileId || '' });
+    // The profile's name becomes the thread name (see createThread's
+    // `origin.title`); the backend already echoes it as `info.title`, but
+    // only an explicit title survives the shell's first OSC title.
+    const p = resolveProfile(profileId);
+    const name = p && typeof p.name === 'string' ? p.name.trim() : '';
+    createThread(info, idx >= 0 ? idx : state.focusedPane,
+      name ? { profileId: profileId || '', title: name } : { profileId: profileId || '' });
   } catch (e) {
     toast(tr('toast.shellStartFailed', { e }), true);
   }
@@ -1182,6 +1233,13 @@ function createThread(info, paneIdx, origin = {}) {
     // Let a registered workflow shortcut bubble to the window handler instead
     // of being typed into the shell.
     if (ev.type === 'keydown' && workflowForShortcut(ev)) return false;
+    // Same for a palette-open key from settings.json (it need not be one of
+    // the Ctrl+Shift keys listed below).
+    if (ev.type === 'keydown' && paletteKeyIs('open', ev)) return false;
+    // Windows Terminal's plain clipboard keys (Ctrl+V / Ctrl+C with a
+    // selection / Shift+Insert / Ctrl+Insert): bubble to the window handler,
+    // which does the copy/paste and preventDefaults the native paste event.
+    if (winClipboardAction(ev, term)) return false;
     const key = ev.key.toLowerCase();
     // Ctrl+Alt+↑/↓ = command-block navigation; bubble to the window handler.
     if (ev.ctrlKey && ev.altKey && (key === 'arrowup' || key === 'arrowdown')) return false;
@@ -1304,8 +1362,11 @@ function createThread(info, paneIdx, origin = {}) {
     invoke('session_resize', { id: sessionId, cols, rows }).catch(() => {}));
 
   const thread = {
-    id: info.id, title: info.title, kind: info.kind, pinned: false,
-    term, fit, hostEl, search, customTitle: false, activity: false, blocks,
+    id: info.id, title: origin.title || info.title, kind: info.kind, pinned: false,
+    // A launch title (the profile name) is pinned like a user rename: shells
+    // emit OSC 0/2 titles ("user@host: ~", the exe path on cmd.exe) right
+    // away, which would otherwise overwrite the profile name.
+    term, fit, hostEl, search, customTitle: !!origin.title, activity: false, blocks,
     gl: null, // WebGL addon handle when GPU rendering is active
     // Last directory reported over OSC 7 (local shells with integration on).
     // Empty means "unknown" — the task panel says so rather than guessing.
@@ -1802,8 +1863,16 @@ const ICONS = {
   alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   copy: '<rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>',
   layers: '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+  // The icons below are Google Material Icons (24px, filled paths) rather than
+  // Lucide strokes — hence their place in FILLED_ICONS.
+  moreVert: '<path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/>',
+  unfoldMore: '<path d="M12 5.83 15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z"/>',
+  unfoldLess: '<path d="M7.41 18.59 8.83 20 12 16.83 15.17 20l1.41-1.41L12 14l-4.59 4.59zm9.18-13.18L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59z"/>',
+  createNewFolder: '<path d="M20 6h-8l-2-2H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/>',
+  contentPaste: '<path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/>',
+  list: '<path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>',
 };
-const FILLED_ICONS = new Set(['play', 'star', 'grip']);
+const FILLED_ICONS = new Set(['play', 'star', 'grip', 'moreVert', 'unfoldMore', 'unfoldLess', 'createNewFolder', 'list', 'contentPaste']);
 
 /** Returns inline SVG markup for a named icon. Stroke icons inherit
  * currentColor; the few filled marks (play/star) fill with it instead. */
@@ -2068,13 +2137,13 @@ async function refreshWorkflows() {
   renderQuickbar();
 }
 
-/** Normalized shortcut string from a keydown event, e.g. "ctrl+shift+g".
- * Requires a ctrl/alt/meta modifier so a shortcut never fires while plainly
- * typing. Returns null for modifier-only or unmodified keys. */
-function shortcutFromEvent(ev) {
+/** Canonical key combo for a keydown event, e.g. "ctrl+shift+g": modifiers in
+ * ctrl→alt→shift→meta order, then the lowercased `ev.key` (' ' → "space").
+ * Unlike `shortcutFromEvent` it needs no modifier (Enter, Escape and the
+ * arrows are bindings too). Returns null for modifier-only keys. */
+function keyComboFromEvent(ev) {
   const k = ev.key;
-  if (['Control', 'Alt', 'Shift', 'Meta', 'Dead'].includes(k)) return null;
-  if (!(ev.ctrlKey || ev.altKey || ev.metaKey)) return null;
+  if (typeof k !== 'string' || ['Control', 'Alt', 'Shift', 'Meta', 'Dead'].includes(k)) return null;
   const mods = [];
   if (ev.ctrlKey) mods.push('ctrl');
   if (ev.altKey) mods.push('alt');
@@ -2085,11 +2154,60 @@ function shortcutFromEvent(ev) {
   return [...mods, key].join('+');
 }
 
+/** Normalized shortcut string from a keydown event, e.g. "ctrl+shift+g".
+ * Requires a ctrl/alt/meta modifier so a shortcut never fires while plainly
+ * typing. Returns null for modifier-only or unmodified keys. */
+function shortcutFromEvent(ev) {
+  if (!(ev.ctrlKey || ev.altKey || ev.metaKey)) return null;
+  return keyComboFromEvent(ev);
+}
+
+const KEY_MODIFIER_ORDER = ['ctrl', 'alt', 'shift', 'meta'];
+const KEY_MODIFIER_ALIAS = {
+  ctrl: 'ctrl', control: 'ctrl', alt: 'alt', option: 'alt', opt: 'alt', shift: 'shift',
+  meta: 'meta', cmd: 'meta', command: 'meta', super: 'meta', win: 'meta',
+};
+const KEY_NAME_ALIAS = {
+  esc: 'escape', return: 'enter', spacebar: 'space',
+  up: 'arrowup', down: 'arrowdown', left: 'arrowleft', right: 'arrowright',
+};
+// What a key name may be: one character, or a `KeyboardEvent.key` name that
+// exists (lowercased). Strict on purpose so a typo is reported, not silently
+// bound to a key that can never be pressed.
+const KEY_NAME_RE = /^(f([1-9]|1\d|2[0-4])|arrow(up|down|left|right)|enter|escape|tab|space|backspace|delete|insert|home|end|pageup|pagedown)$/;
+
+/** Parses a user-written combo ("Ctrl+Shift+P", "cmd+k", "mod+enter") into the
+ * canonical form `keyComboFromEvent` emits, or null if it does not parse.
+ * Case-insensitive; parts are trimmed. `mod` is ⌘ on macOS and Ctrl elsewhere.
+ * Exactly one non-modifier key is required. A literal "+" key cannot be
+ * written (it is the separator, so "ctrl++" is rejected). */
+function normalizeKeyCombo(str) {
+  if (typeof str !== 'string') return null;
+  const mods = new Set();
+  let key = null;
+  for (const raw of str.toLowerCase().split('+')) {
+    const part = raw.trim();
+    if (!part) return null;
+    const mod = part === 'mod' ? (IS_MAC ? 'meta' : 'ctrl') : KEY_MODIFIER_ALIAS[part];
+    if (mod) { mods.add(mod); continue; }
+    if (key !== null) return null;
+    key = KEY_NAME_ALIAS[part] || part;
+    if ([...key].length !== 1 && !KEY_NAME_RE.test(key)) return null;
+  }
+  if (key === null) return null;
+  return [...KEY_MODIFIER_ORDER.filter((m) => mods.has(m)), key].join('+');
+}
+
+const KEY_LABEL = {
+  arrowup: '↑', arrowdown: '↓', arrowleft: '←', arrowright: '→',
+  enter: 'Enter', escape: 'Esc', space: 'Space',
+};
 const SC_LABEL = { ctrl: 'Ctrl', alt: 'Alt', shift: 'Shift', meta: 'Meta' };
 function prettyShortcut(s) {
   if (!s) return '';
   return s.split('+')
-    .map((p) => SC_LABEL[p] || (p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1)))
+    .map((p) => (p === 'meta' && IS_MAC ? '⌘' : SC_LABEL[p] || KEY_LABEL[p]
+      || (p.length === 1 ? p.toUpperCase() : p[0].toUpperCase() + p.slice(1))))
     .join('+');
 }
 
@@ -2127,9 +2245,128 @@ function isAppTextEntry(el) {
   return !!el.closest('input, textarea, select, [contenteditable="true"]');
 }
 
+/* ---------------- command palette keys ----------------
+ * Built-in keys, overridable per action from `palette_keys` in settings.json.
+ * `open` uses `mod` so it stays ⌘⇧P on macOS and Ctrl+Shift+P elsewhere, the
+ * same split as `appMod`. */
+const PALETTE_KEY_DEFAULTS = {
+  open: ['mod+shift+p'],
+  next: ['arrowdown', 'ctrl+n'],
+  prev: ['arrowup', 'ctrl+p'],
+  run: ['enter'],
+  insert: ['shift+enter'],
+  save: ['ctrl+enter', 'meta+enter'],
+  close: ['escape'],
+};
+
+/** The key table in effect: `keys` action → canonical combos, `custom` action →
+ * whether settings.json supplied it, `invalid` the entries that were ignored.
+ * Recomputed by `applyPaletteKeys`; empty until the first settings load. */
+let paletteKeys = { keys: {}, custom: {}, invalid: [] };
+
+/** True when `combo` can open the palette without getting in the way of
+ * typing: needs a ctrl/alt/meta modifier, or is a function key. */
+function isSafeOpenCombo(combo) {
+  const parts = combo.split('+');
+  return /^f\d+$/.test(parts[parts.length - 1]) || parts.some((p) => ['ctrl', 'alt', 'meta'].includes(p));
+}
+
+function resolvePaletteKeys(settings) {
+  const given = settings && settings.palette_keys;
+  const src = given && typeof given === 'object' && !Array.isArray(given) ? given : {};
+  const keys = {};
+  const custom = {};
+  const invalid = Object.keys(src).filter((a) => !(a in PALETTE_KEY_DEFAULTS));
+  for (const action in PALETTE_KEY_DEFAULTS) {
+    const list = src[action];
+    const good = [];
+    if (Array.isArray(list)) {
+      for (const entry of list) {
+        const combo = normalizeKeyCombo(entry);
+        if (combo && (action !== 'open' || isSafeOpenCombo(combo))) good.push(combo);
+        else invalid.push(String(entry));
+      }
+    } else if (list !== undefined) {
+      invalid.push(action);
+    }
+    custom[action] = good.length > 0;
+    keys[action] = good.length ? [...new Set(good)] : PALETTE_KEY_DEFAULTS[action].map(normalizeKeyCombo);
+  }
+  return { keys, custom, invalid };
+}
+
+/** Does this keydown trigger palette action `action` ("open", "next", …)? */
+function paletteKeyIs(action, ev) {
+  const combo = keyComboFromEvent(ev);
+  return !!combo && (paletteKeys.keys[action] || []).includes(combo);
+}
+
+/** The combo to show for an action: on macOS the ⌘ form if there is one, else
+ * the first listed. */
+function paletteKeyFirst(action) {
+  const list = paletteKeys.keys[action] || [];
+  return (IS_MAC && list.find((c) => c.split('+').includes('meta'))) || list[0] || '';
+}
+
+// Display order puts meta before shift (⌘⇧P), unlike the canonical one.
+function displayCombo(combo) {
+  const parts = combo.split('+');
+  const key = parts.pop();
+  const rank = (m) => ['ctrl', 'alt', 'meta', 'shift'].indexOf(m);
+  return [...parts.sort((a, b) => rank(a) - rank(b)), key].join('+');
+}
+
+function paletteKeyLabel(action) {
+  return prettyShortcut(displayCombo(paletteKeyFirst(action)));
+}
+
+/** The pieces of a combo for separate <kbd> chips (⌘ ⇧ P / Ctrl Enter / ↓). */
+function kbdParts(combo) {
+  const glyph = { ctrl: IS_MAC ? '⌃' : 'Ctrl', alt: IS_MAC ? '⌥' : 'Alt', shift: '⇧', meta: IS_MAC ? '⌘' : 'Meta' };
+  return displayCombo(combo).split('+').map((p) => glyph[p] || prettyShortcut(p));
+}
+
+/** Compact one-chip form for the top bar: "Ctrl⇧P", "⌘⇧P", "Ctrl+K", "F1". */
+function compactCombo(combo) {
+  const isGlyph = (c) => /[⌃⌥⇧⌘↑↓←→]/.test(c);
+  return kbdParts(combo).reduce((out, p, i) => (i === 0 ? p
+    : out + (isGlyph(out.slice(-1)) || isGlyph(p[0]) ? '' : '+') + p), '');
+}
+
+/** Repaints everything that shows palette keys: top-bar chip + tooltip, the
+ * palette footer. (The shortcut overlay re-renders itself when opened.) */
+function renderPaletteKeyUi() {
+  const open = paletteKeyFirst('open');
+  const chip = document.querySelector('#palette-btn kbd');
+  if (chip && open) chip.textContent = compactCombo(open);
+  const btn = $('#palette-btn');
+  if (btn) btn.title = tr('topbar.palette.title', { key: paletteKeyLabel('open') });
+  document.querySelectorAll('[data-palette-keys]').forEach((el) => {
+    el.replaceChildren();
+    for (const action of el.dataset.paletteKeys.split(' ')) {
+      const combo = paletteKeyFirst(action);
+      if (!combo) continue;
+      for (const part of kbdParts(combo)) {
+        const k = document.createElement('kbd');
+        k.textContent = part;
+        el.appendChild(k);
+      }
+    }
+  });
+}
+
+/** Re-reads `palette_keys` from `state.settings`, repaints, and warns once
+ * about entries it had to ignore. */
+function applyPaletteKeys() {
+  paletteKeys = resolvePaletteKeys(state.settings);
+  renderPaletteKeyUi();
+  if (paletteKeys.invalid.length) toast(tr('paletteKeys.invalid', { keys: paletteKeys.invalid.join(', ') }), true);
+}
+
 /** Returns a reason string if `sc` is a bad workflow shortcut, else null. */
 function shortcutConflict(sc, excludeId) {
   if (RESERVED_SHORTCUTS.has(sc)) return tr('sc.conflict.reserved');
+  if ((paletteKeys.keys.open || []).includes(sc)) return tr('sc.conflict.paletteOpen');
   // A plain Ctrl+<letter> (no shift/alt/meta) is a core shell key (Ctrl+C
   // interrupt, Ctrl+D EOF, Ctrl+Z suspend, …); stealing it would break the
   // terminal.
@@ -2278,8 +2515,9 @@ async function duplicateWorkflow(w) {
 }
 
 // The workflow currently being dragged (drag-and-drop reorder), or null.
-// `group` gates drops so a card can only be dropped among its own group's
-// siblings — the same constraint as the ▲▼ buttons.
+// `group` gates drops onto other *cards* so a card can only be dropped among
+// its own group's siblings — the same constraint as the ▲▼ buttons. Rows of
+// the group tree ignore that gate: dropping on one moves the workflow there.
 let wfDrag = null;
 
 /** Drops the dragged workflow immediately before/after `targetId` in the stored
@@ -2422,8 +2660,8 @@ function wireWorkflowDrag(li, w) {
     li.classList.remove('dragging');
     li.draggable = false;
     wfDrag = null;
-    document.querySelectorAll('#wf-list .drop-before, #wf-list .drop-after')
-      .forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+    document.querySelectorAll('#wf-list .drop-before, #wf-list .drop-after, #wf-tree-body .drop-into')
+      .forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-into'));
   });
   li.addEventListener('dragover', (ev) => {
     if (!accepts()) return;
@@ -2444,25 +2682,539 @@ function wireWorkflowDrag(li, w) {
   });
 }
 
+/* ---- group tree (left pane of the Workflows panel) ----
+ *
+ * Groups are not stored entities: a workflow just carries a `group` path like
+ * "Deploy/Staging", and `buildWorkflowTree` derives the hierarchy from it. So
+ * every group operation below is really an operation on the workflows
+ * underneath — reordering groups rewrites workflow order, renaming rewrites the
+ * `group` prefix, and an empty group cannot exist (a new one only appears once
+ * its first workflow is saved). */
+
+// Selection keys. A group is `g:<path>`; the two fixed rows get their own keys
+// so no group name, whatever it is, can collide with them.
+const WF_ALL = 'all';
+const WF_NONE = 'none';
+const wfGroupKey = (path) => `g:${path}`;
+
+// UI-only state for the tree: which node the card list is scoped to and which
+// groups are folded. Shared by the tree and the list's group headings, and kept
+// in localStorage as a per-viewer convenience — every access is guarded because
+// storage can be unavailable or hold junk, and the panel must work without it.
+const wfUi = { selected: WF_ALL, collapsed: new Set() };
+
+function loadWfUi() {
+  try {
+    const c = JSON.parse(localStorage.getItem('senju.wf.collapsed') || '[]');
+    if (Array.isArray(c)) wfUi.collapsed = new Set(c.filter((x) => typeof x === 'string'));
+  } catch { /* unavailable or corrupt: start expanded */ }
+  try {
+    const s = localStorage.getItem('senju.wf.selected');
+    if (typeof s === 'string' && s) wfUi.selected = s;
+  } catch { /* start on "All" */ }
+}
+
+function saveWfUi() {
+  try {
+    localStorage.setItem('senju.wf.collapsed', JSON.stringify([...wfUi.collapsed]));
+    localStorage.setItem('senju.wf.selected', wfUi.selected);
+  } catch { /* storage unavailable: the choice just won't survive a restart */ }
+}
+loadWfUi();
+
+/** Workflow ids in the order the panel shows them: a node's own workflows, then
+ * each child group (in Map order) recursively. Feeding this to
+ * `reorder_workflows` after editing a node's `groups` Map is how a group move
+ * is persisted. */
+function flattenWorkflowTree(node) {
+  const ids = node.workflows.map((w) => w.id);
+  for (const [, c] of node.groups) ids.push(...flattenWorkflowTree(c));
+  return ids;
+}
+
+/** The node for a `/`-separated group path ('' = the root), or null. */
+function findGroupNode(root, path) {
+  let node = root;
+  for (const part of path.split('/').filter(Boolean)) {
+    node = node.groups.get(part);
+    if (!node) return null;
+  }
+  return node;
+}
+
+const groupParentPath = (path) => path.slice(0, Math.max(0, path.lastIndexOf('/')));
+const groupLeafName = (path) => path.slice(path.lastIndexOf('/') + 1);
+/** True when workflow `w` is in group `path` or any group below it. */
+const inGroupSubtree = (w, path) => {
+  const g = groupParts(w).join('/');
+  return g === path || g.startsWith(`${path}/`);
+};
+
+/** Writes the tree's current group order to the backend and reloads. */
+async function persistGroupOrder(root) {
+  try {
+    await invoke('reorder_workflows', { ids: flattenWorkflowTree(root) });
+    await refreshWorkflows();
+  } catch (e) {
+    toast(tr('toast.reorderFailed', { e }), true);
+  }
+}
+
+/** Moves a group one slot up/down among its siblings (same parent only — the
+ * same rule as workflows within a group). */
+async function moveGroup(path, dir) {
+  const root = buildWorkflowTree(state.workflows);
+  const parent = findGroupNode(root, groupParentPath(path));
+  if (!parent) return;
+  const entries = [...parent.groups];
+  const i = entries.findIndex(([name]) => name === groupLeafName(path));
+  const j = i + dir;
+  if (i < 0 || j < 0 || j >= entries.length) return; // already at the edge
+  [entries[i], entries[j]] = [entries[j], entries[i]];
+  parent.groups = new Map(entries);
+  await persistGroupOrder(root);
+}
+
+/** Drops group `draggedPath` immediately before/after sibling `targetPath`. */
+async function reorderGroupTo(draggedPath, targetPath, placeAfter) {
+  if (draggedPath === targetPath) return;
+  if (groupParentPath(draggedPath) !== groupParentPath(targetPath)) return;
+  const root = buildWorkflowTree(state.workflows);
+  const parent = findGroupNode(root, groupParentPath(targetPath));
+  if (!parent) return;
+  const dragged = groupLeafName(draggedPath);
+  const target = groupLeafName(targetPath);
+  const entries = [...parent.groups].filter(([name]) => name !== dragged);
+  const ti = entries.findIndex(([name]) => name === target);
+  const moved = parent.groups.get(dragged);
+  if (ti < 0 || !moved) return;
+  entries.splice(placeAfter ? ti + 1 : ti, 0, [dragged, moved]);
+  parent.groups = new Map(entries);
+  await persistGroupOrder(root);
+}
+
+/** Moves one workflow into group `path` ('' = ungrouped) and files it at the
+ * end of that group's own workflows. `save_workflow` keeps a known id's
+ * position, so without the follow-up reorder the card would stay wherever it
+ * sat in the old group's stretch of the stored order. */
+async function moveWorkflowToGroup(id, path) {
+  const w = state.workflows.find((x) => x.id === id);
+  if (!w || groupParts(w).join('/') === path) return;
+  try {
+    await invoke('save_workflow', { workflow: { ...w, group: path } });
+    // Re-place the card in the tree and flatten it, rather than splicing the
+    // flat list: every group keeps its slot among its siblings — the source
+    // group too, which would otherwise shift when the card was its first.
+    const root = buildWorkflowTree(state.workflows);
+    const from = findGroupNode(root, groupParts(w).join('/'));
+    const to = findGroupNode(root, path);
+    if (from && to) {
+      from.workflows = from.workflows.filter((x) => x.id !== id);
+      to.workflows.push(w);
+    }
+    const ids = flattenWorkflowTree(root);
+    await invoke('reorder_workflows', { ids });
+    await refreshWorkflows();
+    toast(tr('wf.moved', { name: w.name, group: path ? path.split('/').join(' / ') : tr('wf.tree.ungrouped') }));
+  } catch (e) {
+    toast(tr('wf.moveFailed', { e }), true);
+    refreshWorkflows();
+  }
+}
+
+/** Why `name` cannot be a single group segment, or null when it can. */
+function groupNameProblem(name) {
+  if (!name) return tr('wf.group.name.empty');
+  if (name.includes('/')) return tr('wf.group.name.slash');
+  return null;
+}
+
+/** Asks for a new group's name, then opens the workflow editor with the group
+ * prefilled. The group does not exist yet — it is created by saving that first
+ * workflow — which is why the dialog says so instead of just "Create". */
+function promptNewGroup(parentPath) {
+  openModal({
+    title: parentPath ? tr('wf.group.newSub.title') : tr('wf.group.new.title'),
+    okLabel: tr('wf.group.next'),
+    body: [
+      field(tr('wf.group.name'), 'name', '', { required: true }),
+      fieldNote(tr('wf.group.new.hint')),
+    ],
+    onOk: async (values) => {
+      const name = values.name.trim();
+      const problem = groupNameProblem(name);
+      if (problem) throw problem; // shown inline; the dialog stays open
+      const group = parentPath ? `${parentPath}/${name}` : name;
+      // Deferred: submitModal hides the modal right after onOk resolves, which
+      // would immediately close an editor opened from in here.
+      setTimeout(() => editWorkflow(newWorkflowIn(group)), 0);
+    },
+  });
+}
+
+/** A blank, unsaved workflow draft in `group` (editWorkflow treats `id: ''` as new). */
+function newWorkflowIn(group) {
+  return { id: '', name: '', description: '', command: '', tags: [], group, shortcut: '', show_button: false };
+}
+
+/** Renames the last segment of group `path`. Every workflow in the subtree
+ * gets its `group` prefix rewritten through `save_workflow`, which keeps each
+ * one's position, so the group stays where it was. Renaming onto an existing
+ * sibling's name simply merges the two. */
+function promptRenameGroup(path) {
+  const oldName = groupLeafName(path);
+  openModal({
+    title: tr('wf.group.rename.title'),
+    okLabel: tr('common.save'),
+    body: [field(tr('wf.group.name'), 'name', oldName, { required: true })],
+    onOk: async (values) => {
+      const name = values.name.trim();
+      const problem = groupNameProblem(name);
+      if (problem) throw problem;
+      if (name === oldName) return;
+      const parent = groupParentPath(path);
+      const newPath = parent ? `${parent}/${name}` : name;
+      const affected = state.workflows.filter((w) => inGroupSubtree(w, path));
+      try {
+        for (const w of affected) {
+          const g = groupParts(w).join('/');
+          await invoke('save_workflow', { workflow: { ...w, group: newPath + g.slice(path.length) } });
+        }
+      } catch (e) {
+        await refreshWorkflows(); // some may have been renamed already
+        throw tr('wf.group.renameFailed', { e });
+      }
+      // Keep the fold state and the selection pointing at the renamed group.
+      const remap = (p) => (p === path || p.startsWith(`${path}/`) ? newPath + p.slice(path.length) : p);
+      wfUi.collapsed = new Set([...wfUi.collapsed].map(remap));
+      if (wfUi.selected.startsWith('g:')) wfUi.selected = wfGroupKey(remap(wfUi.selected.slice(2)));
+      saveWfUi();
+      await refreshWorkflows();
+    },
+  });
+}
+
+/** Whether `w` belongs to the tree node the list is currently scoped to. */
+function inWfSelection(w) {
+  const sel = wfUi.selected;
+  if (sel === WF_ALL) return true;
+  if (sel === WF_NONE) return groupParts(w).length === 0;
+  return inGroupSubtree(w, sel.slice(2));
+}
+
+/** Falls back to "All" when the saved selection no longer exists (its last
+ * workflow was deleted or moved, or the stored value is stale). */
+function resolveWfSelection(root) {
+  const sel = wfUi.selected;
+  const ok = sel === WF_ALL
+    || (sel === WF_NONE && root.workflows.length > 0)
+    || (sel.startsWith('g:') && !!findGroupNode(root, sel.slice(2)));
+  if (!ok) {
+    wfUi.selected = WF_ALL;
+    saveWfUi();
+  }
+}
+
+function selectWfNode(key) {
+  wfUi.selected = key;
+  saveWfUi();
+  renderWorkflows();
+}
+
+function toggleWfCollapsed(path, collapse) {
+  const folded = wfUi.collapsed.has(path);
+  if (collapse === undefined) collapse = !folded;
+  if (collapse === folded) return;
+  if (collapse) wfUi.collapsed.add(path); else wfUi.collapsed.delete(path);
+  saveWfUi();
+  renderWorkflows();
+}
+
+/** Every group path that has subgroups — the only ones that can be folded. */
+function foldableGroupPaths(node, out = []) {
+  for (const [, c] of node.groups) {
+    if (c.groups.size) out.push(c.path);
+    foldableGroupPaths(c, out);
+  }
+  return out;
+}
+
+// The group row being dragged in the tree (sibling reorder), or null. Card
+// drags use `wfDrag`; the two never overlap.
+let wfGroupDrag = null;
+
+/** One row of the tree. `o`: key, depth, iconName, name, count, and for real
+ * groups also `path`, `node`, `index`, `siblings`. */
+function wfTreeRow(o) {
+  const isGroup = o.path !== undefined;
+  const row = document.createElement('div');
+  row.className = 'wf-tree-row';
+  row.setAttribute('role', 'treeitem');
+  row.dataset.key = o.key;
+  if (isGroup) row.dataset.path = o.path;
+  row.style.setProperty('--depth', o.depth);
+  row.setAttribute('aria-level', o.depth + 1);
+  row.setAttribute('aria-selected', String(wfUi.selected === o.key));
+  row.classList.toggle('selected', wfUi.selected === o.key);
+  const foldable = isGroup && o.node.groups.size > 0;
+  const folded = foldable && wfUi.collapsed.has(o.path);
+  if (foldable) row.setAttribute('aria-expanded', String(!folded));
+  row.innerHTML = `
+    <span class="wf-tree-guides"></span>
+    <span class="wf-tree-twist">${foldable ? icon(folded ? 'chevronRight' : 'chevronDown') : ''}</span>
+    ${icon(o.iconName)}
+    <span class="wf-tree-name"></span>
+    <span class="wf-tree-count"></span>`;
+  row.querySelector('.wf-tree-name').textContent = o.name;
+  row.querySelector('.wf-tree-count').textContent = o.count;
+  row.title = o.name;
+  row.addEventListener('click', () => selectWfNode(o.key));
+  if (foldable) {
+    row.querySelector('.wf-tree-twist').addEventListener('click', (ev) => {
+      ev.stopPropagation(); // fold without also selecting the row
+      toggleWfCollapsed(o.path);
+    });
+  }
+
+  if (isGroup) {
+    const actions = document.createElement('span');
+    actions.className = 'wf-tree-actions';
+    const mk = (iconName, title, onClick, disabled) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'icon-btn wf-tree-act';
+      b.tabIndex = -1; // reached with the keyboard through the row's context menu
+      b.title = title;
+      b.innerHTML = icon(iconName);
+      b.disabled = !!disabled;
+      b.addEventListener('click', (ev) => { ev.stopPropagation(); onClick(b); });
+      actions.appendChild(b);
+    };
+    mk('chevronUp', tr('wf.group.moveUp'), () => moveGroup(o.path, -1), o.index === 0);
+    mk('chevronDown', tr('wf.group.moveDown'), () => moveGroup(o.path, 1), o.index === o.siblings - 1);
+    mk('moreVert', tr('wf.group.more'), (b) => {
+      const r = b.getBoundingClientRect();
+      openWfTreeMenu(r.left, r.bottom + 2, o.path);
+    });
+    row.appendChild(actions);
+    row.addEventListener('contextmenu', (ev) => {
+      ev.preventDefault();
+      openWfTreeMenu(ev.clientX, ev.clientY, o.path);
+    });
+  }
+  wireWfTreeDrag(row, o, isGroup);
+  row.addEventListener('keydown', (ev) => wfTreeKey(ev, row, o, foldable, folded));
+  return row;
+}
+
+/** Group rows drag among their siblings; any row but "All" also takes a
+ * dropped workflow card. Reordering shows the same before/after insertion line
+ * as cards; a card drop highlights the whole row instead. */
+function wireWfTreeDrag(row, o, isGroup) {
+  const marks = ['drop-before', 'drop-after', 'drop-into'];
+  const clear = () => row.classList.remove(...marks);
+  const isAfter = (ev) => {
+    const r = row.getBoundingClientRect();
+    return ev.clientY > r.top + r.height / 2;
+  };
+  // What a drag over this row would do, or null when it can't land here.
+  const intent = () => {
+    if (isGroup && wfGroupDrag && wfGroupDrag.path !== o.path
+        && groupParentPath(wfGroupDrag.path) === groupParentPath(o.path)) return 'reorder';
+    if (wfDrag && o.key !== WF_ALL && wfDrag.group !== (isGroup ? o.path : '')) return 'move';
+    return null;
+  };
+  if (isGroup && o.siblings > 1) {
+    row.draggable = true;
+    row.addEventListener('dragstart', (ev) => {
+      wfGroupDrag = { path: o.path };
+      row.classList.add('dragging');
+      ev.dataTransfer.effectAllowed = 'move';
+      ev.dataTransfer.setData('text/plain', o.path);
+    });
+    row.addEventListener('dragend', () => {
+      wfGroupDrag = null;
+      row.classList.remove('dragging');
+      document.querySelectorAll('#wf-tree-body .wf-tree-row')
+        .forEach((el) => el.classList.remove(...marks));
+    });
+  }
+  row.addEventListener('dragover', (ev) => {
+    const what = intent();
+    if (!what) return;
+    ev.preventDefault();
+    ev.dataTransfer.dropEffect = 'move';
+    if (what === 'reorder') {
+      const after = isAfter(ev);
+      row.classList.toggle('drop-after', after);
+      row.classList.toggle('drop-before', !after);
+    } else {
+      row.classList.add('drop-into');
+    }
+  });
+  row.addEventListener('dragleave', (ev) => {
+    if (!row.contains(ev.relatedTarget)) clear();
+  });
+  row.addEventListener('drop', (ev) => {
+    const what = intent();
+    if (!what) return;
+    ev.preventDefault();
+    const after = isAfter(ev);
+    clear();
+    if (what === 'reorder') reorderGroupTo(wfGroupDrag.path, o.path, after);
+    else moveWorkflowToGroup(wfDrag.id, isGroup ? o.path : '');
+  });
+}
+
+/** Tree keyboard model: ↑/↓ move focus, ← folds (or jumps to the parent),
+ * → unfolds (or steps into the first child), Enter/Space selects. */
+function wfTreeKey(ev, row, o, foldable, folded) {
+  const rows = [...$('#wf-tree-body').querySelectorAll('.wf-tree-row')];
+  const i = rows.indexOf(row);
+  const focusRow = (el) => { if (el) { ev.preventDefault(); el.focus(); } };
+  switch (ev.key) {
+    case 'ArrowDown': focusRow(rows[i + 1]); break;
+    case 'ArrowUp': focusRow(rows[i - 1]); break;
+    case 'Home': focusRow(rows[0]); break;
+    case 'End': focusRow(rows[rows.length - 1]); break;
+    case 'ArrowRight':
+      ev.preventDefault();
+      if (foldable && folded) toggleWfCollapsed(o.path, false);
+      else if (foldable) rows[i + 1]?.focus();
+      break;
+    case 'ArrowLeft':
+      ev.preventDefault();
+      if (foldable && !folded) toggleWfCollapsed(o.path, true);
+      else if (o.path !== undefined && o.path.includes('/')) {
+        focusRow(rows.find((r) => r.dataset.path === groupParentPath(o.path)));
+      }
+      break;
+    case 'Enter':
+    case ' ':
+      ev.preventDefault();
+      selectWfNode(o.key);
+      break;
+    case 'ContextMenu':
+    case 'F10':
+      if (o.path !== undefined && (ev.key === 'ContextMenu' || ev.shiftKey)) {
+        ev.preventDefault();
+        const r = row.getBoundingClientRect();
+        openWfTreeMenu(r.left + 24, r.bottom, o.path);
+      }
+      break;
+    default:
+  }
+}
+
+/** Appends the rows for a node's child groups, recursing into the unfolded ones. */
+function renderWfTreeNode(body, node, depth) {
+  const siblings = node.groups.size;
+  let index = 0;
+  for (const [, child] of node.groups) {
+    body.appendChild(wfTreeRow({
+      key: wfGroupKey(child.path), path: child.path, node: child, depth,
+      iconName: 'folder', name: child.name, count: countWorkflows(child), index, siblings,
+    }));
+    index++;
+    if (child.groups.size && !wfUi.collapsed.has(child.path)) renderWfTreeNode(body, child, depth + 1);
+  }
+}
+
+function renderWorkflowTree(root) {
+  const body = $('#wf-tree-body');
+  // Re-rendering replaces every row; hand focus back to the same one so
+  // keyboard navigation survives folding and selecting.
+  const focusedKey = body.contains(document.activeElement) ? document.activeElement.dataset.key : null;
+  body.innerHTML = '';
+  body.appendChild(wfTreeRow({
+    key: WF_ALL, depth: 0, iconName: 'list', name: tr('wf.tree.all'), count: state.workflows.length,
+  }));
+  if (root.workflows.length) {
+    body.appendChild(wfTreeRow({
+      key: WF_NONE, depth: 0, iconName: 'folder', name: tr('wf.tree.ungrouped'), count: root.workflows.length,
+    }));
+  }
+  renderWfTreeNode(body, root, 0);
+  // Roving tabindex: one stop for Tab (the selected row, else the first), the
+  // rest reached with the arrow keys.
+  const rows = [...body.children];
+  const stop = rows.find((r) => r.dataset.key === wfUi.selected) || rows[0];
+  for (const r of rows) r.tabIndex = r === stop ? 0 : -1;
+  if (focusedKey) rows.find((r) => r.dataset.key === focusedKey)?.focus();
+}
+
+/** The "more" menu of a group row: a small popup next to the pointer, closed by
+ * any outside click, Escape, or choosing an item. */
+function openWfTreeMenu(x, y, path) {
+  closeWfTreeMenu();
+  const menu = document.createElement('div');
+  menu.id = 'wf-tree-menu';
+  menu.className = 'popup-menu';
+  menu.setAttribute('role', 'menu');
+  const items = [
+    ['plus', tr('wf.group.addWorkflow'), () => editWorkflow(newWorkflowIn(path))],
+    ['createNewFolder', tr('wf.group.newSub'), () => promptNewGroup(path)],
+    ['edit', tr('wf.group.rename'), () => promptRenameGroup(path)],
+  ];
+  for (const [iconName, label, run] of items) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'popup-item';
+    b.setAttribute('role', 'menuitem');
+    b.innerHTML = `<span class="pi-line">${icon(iconName)}<span class="pi-name"></span></span>`;
+    b.querySelector('.pi-name').textContent = label;
+    b.addEventListener('click', () => { closeWfTreeMenu(); run(); });
+    menu.appendChild(b);
+  }
+  document.body.appendChild(menu);
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
+  menu.addEventListener('keydown', (ev) => {
+    const btns = [...menu.querySelectorAll('button')];
+    const i = btns.indexOf(document.activeElement);
+    if (ev.key === 'ArrowDown') { ev.preventDefault(); btns[(i + 1) % btns.length].focus(); }
+    else if (ev.key === 'ArrowUp') { ev.preventDefault(); btns[(i - 1 + btns.length) % btns.length].focus(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); closeWfTreeMenu(); }
+  });
+  menu.querySelector('button').focus();
+  setTimeout(() => window.addEventListener('mousedown', wfTreeMenuOutside), 0);
+}
+
+function closeWfTreeMenu() {
+  $('#wf-tree-menu')?.remove();
+  window.removeEventListener('mousedown', wfTreeMenuOutside);
+}
+
+function wfTreeMenuOutside(ev) {
+  if (!ev.target.closest('#wf-tree-menu')) closeWfTreeMenu();
+}
+
 /** Renders a group node into the panel: its direct workflows (reorderable
- * among themselves), then a header + recursion for each subgroup. */
+ * among themselves), then a header + recursion for each subgroup. A heading
+ * folds its subgroup — the same state the tree uses, so both stay in step. */
 function renderWorkflowNode(list, node, depth) {
   node.workflows.forEach((w, i) => {
     list.appendChild(workflowCard(w, {
       moveUp: i > 0,
       moveDown: i < node.workflows.length - 1,
-      draggable: node.workflows.length > 1,
+      // Always draggable, even alone in its group: the tree takes a dropped
+      // card into any other group, so a lone card still has somewhere to go.
+      draggable: true,
     }));
   });
   for (const [, child] of node.groups) {
+    const folded = wfUi.collapsed.has(child.path);
+    const foldable = child.groups.size > 0 || child.workflows.length > 0;
     const head = document.createElement('li');
-    head.className = 'wf-group-head';
+    head.className = 'wf-group-head wf-collapsible';
     head.style.setProperty('--depth', depth);
-    head.innerHTML = `${icon('folder')}<span class="wf-group-name"></span><span class="wf-group-count"></span>`;
+    head.innerHTML = `<button type="button" class="wf-twist" aria-expanded="${!folded}">${icon(folded ? 'chevronRight' : 'chevronDown')}</button>${icon('folder')}<span class="wf-group-name"></span><span class="wf-group-count"></span>`;
+    head.querySelector('.wf-twist').title = tr('wf.group.toggle');
     head.querySelector('.wf-group-name').textContent = child.name;
     head.querySelector('.wf-group-count').textContent = countWorkflows(child);
+    if (foldable) head.addEventListener('click', () => toggleWfCollapsed(child.path));
     list.appendChild(head);
-    renderWorkflowNode(list, child, depth + 1);
+    if (!folded) renderWorkflowNode(list, child, depth + 1);
   }
 }
 
@@ -2470,16 +3222,26 @@ function renderWorkflows() {
   const q = $('#wf-search').value.trim().toLowerCase();
   const list = $('#wf-list');
   list.innerHTML = '';
-  if (!state.workflows.length) {
+  closeWfTreeMenu();
+  const root = buildWorkflowTree(state.workflows);
+  resolveWfSelection(root);
+  // With nothing registered there are no groups to browse: drop the tree and
+  // let the empty state take the whole panel.
+  const any = state.workflows.length > 0;
+  $('#wf-tree').hidden = !any;
+  $('#wf-layout').classList.toggle('no-tree', !any);
+  if (!any) {
     list.appendChild(emptyState('zap', tr('wf.emptyTitle'),
       tr('wf.emptyHint'),
       { label: tr('wf.emptyCta'), onClick: () => editWorkflow(null) }));
     return;
   }
+  renderWorkflowTree(root);
   // Searching flattens across groups (reordering makes no sense in a filtered
-  // view) and shows each match's group as a badge.
+  // view) and shows each match's group as a badge. It stays inside the node
+  // picked in the tree; "All" searches everything.
   if (q) {
-    const items = state.workflows.filter((w) =>
+    const items = state.workflows.filter((w) => inWfSelection(w) &&
       [w.name, w.description, w.command, w.group, (w.tags || []).join(' ')]
         .join(' ').toLowerCase().includes(q));
     if (!items.length) {
@@ -2490,8 +3252,22 @@ function renderWorkflows() {
     for (const w of items) list.appendChild(workflowCard(w, { showGroup: true }));
     return;
   }
-  // Unfiltered: grouped, hierarchical view with per-group reordering.
-  renderWorkflowNode(list, buildWorkflowTree(state.workflows), 0);
+  // Unfiltered: the selected subtree, with per-group reordering.
+  const sel = wfUi.selected;
+  if (sel === WF_ALL) {
+    renderWorkflowNode(list, root, 0);
+    return;
+  }
+  const scope = document.createElement('li');
+  scope.className = 'wf-scope-head';
+  const node = sel === WF_NONE ? null : findGroupNode(root, sel.slice(2));
+  scope.innerHTML = `${icon('folder')}<span class="wf-scope-name"></span><span class="wf-group-count"></span>`;
+  scope.querySelector('.wf-scope-name').textContent =
+    node ? node.path.split('/').join(' / ') : tr('wf.tree.ungrouped');
+  scope.querySelector('.wf-group-count').textContent = node ? countWorkflows(node) : root.workflows.length;
+  list.appendChild(scope);
+  // "Ungrouped" is the root's own workflows without its subgroups.
+  renderWorkflowNode(list, node || { workflows: root.workflows, groups: new Map() }, 0);
 }
 
 /** Opens the workflow editor prefilled with a command that was run — from the
@@ -3351,6 +4127,13 @@ async function refreshProfiles() {
   renderProfileSettingOptions();
 }
 
+/** Mirrors the backend's `Store::resolve_profile`: the requested id if it
+ * exists, else the default profile, else the first one, else undefined. */
+function resolveProfile(id) {
+  const find = (x) => x && state.profiles.find((p) => p.id === x);
+  return find(id) || find(state.settings.default_profile_id) || state.profiles[0];
+}
+
 function isDefaultProfile(p) {
   const def = state.settings.default_profile_id;
   // A default id that no longer matches any profile (deleted) falls back to
@@ -3802,6 +4585,8 @@ async function loadSettings() {
   f.restore_session.checked = state.settings.restore_session !== false;
   f.gpu_rendering.checked = state.settings.gpu_rendering !== false;
   f.shell_integration.checked = state.settings.shell_integration !== false;
+  f.right_click.value = ['copy_paste', 'menu'].includes(state.settings.right_click)
+    ? state.settings.right_click : '';
   f.notify_long_commands.checked = state.settings.notify_long_commands !== false;
   f.notify_threshold_secs.value = Number.isFinite(Number(state.settings.notify_threshold_secs))
     ? state.settings.notify_threshold_secs : 10;
@@ -3822,6 +4607,8 @@ async function loadSettings() {
   // logs actually go rather than nothing.
   invoke('session_log_dir').then((d) => { f.session_log_dir.placeholder = d; }).catch(() => {});
   applyTheme();
+  // Covers boot, settings import and "reload settings file" in one place.
+  applyPaletteKeys();
   applyLanguage();
 }
 
@@ -3993,6 +4780,7 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     restore_session: f.elements.restore_session.checked,
     gpu_rendering: f.elements.gpu_rendering.checked,
     shell_integration: f.elements.shell_integration.checked,
+    right_click: f.elements.right_click.value,
     notify_long_commands: f.elements.notify_long_commands.checked,
     notify_threshold_secs: Math.max(0, parseInt(f.elements.notify_threshold_secs.value, 10) || 0),
     // Blank = leave the stored key alone. The field never held it, so
@@ -4707,6 +5495,29 @@ const palette = {
   selected: 0,
 };
 
+/** Re-reads settings.json (hand edits, e.g. `palette_keys`) into the running
+ * app; `loadSettings` refills the form and re-applies theme, language and keys. */
+async function reloadSettingsFile() {
+  await loadSettings();
+  toast(tr('palette.settingsReloaded'));
+}
+
+/** Reveals settings.json in the file manager. The file only exists after the
+ * first save, so write the current settings out first when it is missing. */
+async function showSettingsFile() {
+  try {
+    const path = await invoke('settings_file_path');
+    try {
+      await invoke('reveal_path', { path });
+    } catch {
+      await invoke('save_settings', { settings: state.settings });
+      await invoke('reveal_path', { path });
+    }
+  } catch (e) {
+    toast(tr('palette.settingsFileFailed', { e }), true);
+  }
+}
+
 function paletteEntries() {
   const entries = [
     { kind: 'action', label: tr('palette.newLocalThread'), detail: 'Ctrl+Shift+T', run: () => newLocalThread() },
@@ -4736,6 +5547,8 @@ function paletteEntries() {
     { kind: 'action', label: tr('palette.registerHost'), detail: '', run: () => editHost(null) },
     { kind: 'action', label: tr('palette.registerSet'), detail: '', run: () => editLaunchSet(null) },
     { kind: 'action', label: tr('palette.shortcutsList'), detail: 'Ctrl+Shift+/', run: openShortcuts },
+    { kind: 'action', label: tr('palette.reloadSettings'), detail: 'settings.json', run: reloadSettingsFile },
+    { kind: 'action', label: tr('palette.showSettingsFile'), detail: 'settings.json', run: showSettingsFile },
   ];
   // Transfers ride the focused thread's SSH connection, so they are only
   // offered when there is one to ride.
@@ -4959,21 +5772,25 @@ function renderPalette() {
 
 $('#palette-input').addEventListener('input', updatePalette);
 $('#palette-input').addEventListener('keydown', (ev) => {
-  if (ev.key === 'Escape') return closePalette();
-  if (ev.key === 'ArrowDown' || (ev.key === 'n' && ev.ctrlKey)) {
+  if (paletteKeyIs('close', ev)) return closePalette();
+  if (paletteKeyIs('next', ev)) {
     palette.selected = Math.min(palette.selected + 1, palette.items.length - 1);
     renderPalette();
     ev.preventDefault();
-  } else if (ev.key === 'ArrowUp' || (ev.key === 'p' && ev.ctrlKey)) {
+  } else if (paletteKeyIs('prev', ev)) {
     palette.selected = Math.max(palette.selected - 1, 0);
     renderPalette();
     ev.preventDefault();
-  } else if (ev.key === 'Enter') {
+  } else {
+    const save = paletteKeyIs('save', ev);
+    const insert = paletteKeyIs('insert', ev);
+    if (!save && !insert && !paletteKeyIs('run', ev)) return;
     const item = palette.items[palette.selected];
     if (item) {
       closePalette();
-      if ((ev.ctrlKey || ev.metaKey) && item.save) item.save();
-      else if (ev.shiftKey && item.insert) item.insert();
+      // A save/insert key on an entry without that action just runs it.
+      if (save && item.save) item.save();
+      else if (insert && item.insert) item.insert();
       else item.run();
     }
     ev.preventDefault();
@@ -5319,7 +6136,7 @@ function toast(message, isError = false) {
 /* ---------------- sidebars & shortcuts ---------------- */
 
 /** Header views. "シェル" shows the terminal workspace (thread list + panes);
- * each other tab (Workflows / SSH / 端末 / 設定) takes over the whole main
+ * each other tab (Workflows / SSH / プロファイル / 設定) takes over the whole main
  * content area with its panel, instead of a narrow right sidebar. Exactly one
  * view is shown at a time. */
 let currentView = 'shell';
@@ -5464,7 +6281,27 @@ function serverFormValues() {
     openBrowser: $('#srv-open').checked,
   };
 }
-$('#wf-add').addEventListener('click', () => editWorkflow(null));
+// "Register" while a group is selected starts the new workflow in that group.
+$('#wf-add').addEventListener('click', () => {
+  const sel = wfUi.selected;
+  editWorkflow(sel.startsWith('g:') ? newWorkflowIn(sel.slice(2)) : null);
+});
+$('#wf-tree-new').addEventListener('click', () => promptNewGroup(''));
+$('#wf-tree-expand').addEventListener('click', () => {
+  wfUi.collapsed.clear();
+  saveWfUi();
+  renderWorkflows();
+});
+$('#wf-tree-collapse').addEventListener('click', () => {
+  wfUi.collapsed = new Set(foldableGroupPaths(buildWorkflowTree(state.workflows)));
+  saveWfUi();
+  renderWorkflows();
+});
+// Narrow windows stack the tree above the list; its title then folds it away.
+$('#wf-tree-toggle').addEventListener('click', () => {
+  const closed = $('#wf-tree').classList.toggle('closed');
+  $('#wf-tree-toggle').setAttribute('aria-expanded', String(!closed));
+});
 $('#wf-export').addEventListener('click', exportWorkflows);
 $('#wf-import').addEventListener('click', importWorkflows);
 $('#settings-export').addEventListener('click', exportSettings);
@@ -5620,7 +6457,39 @@ function openTermContextMenu(x, y, path, remote, blockCommand = '') {
     menu.prepend(sep);
     menu.prepend(pathSection(path, remote));
   }
+  // Copy / paste on top of everything, so paste is one click away even when
+  // right-click is set to open this menu.
+  if (focused) {
+    const sep = document.createElement('div');
+    sep.className = 'popup-sep';
+    menu.prepend(sep);
+    menu.prepend(clipboardSection(focused));
+  }
   showRootMenu(menu, x, y);
+}
+
+/** The "copy" / "paste" rows at the top of the terminal's right-click menu.
+ * Copy is disabled (not hidden, so the rows don't shift) without a selection. */
+function clipboardSection(thread) {
+  const frag = document.createDocumentFragment();
+  const add = (text, iconName, enabled, onClick) => {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'popup-item';
+    item.setAttribute('role', 'menuitem');
+    item.disabled = !enabled;
+    item.innerHTML = `<span class="pi-line">${icon(iconName)}<span class="pi-name"></span></span>`;
+    item.querySelector('.pi-name').textContent = text;
+    item.addEventListener('mouseenter', () => closeSubmenusFrom(1));
+    item.addEventListener('click', () => {
+      closeTermContextMenu();
+      onClick();
+    });
+    frag.appendChild(item);
+  };
+  add(tr('ctx.copy'), 'copy', thread.term.hasSelection(), () => copyFocusedSelection());
+  add(tr('ctx.paste'), 'contentPaste', true, () => pasteIntoFocused());
+  return frag;
 }
 
 /** The "save as workflow" row of the right-click menu, naming the command
@@ -6339,7 +7208,7 @@ function showRootMenu(menu, x, y) {
   menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - menu.offsetWidth - 8))}px`;
   menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - menu.offsetHeight - 8))}px`;
   // Focus the first row so ↑/↓/→/←/Enter/Escape work immediately.
-  menu.querySelector('button.popup-item')?.focus();
+  menu.querySelector('button.popup-item:not(:disabled)')?.focus();
   setTimeout(() => window.addEventListener('mousedown', termCtxOutsideClick), 0);
 }
 
@@ -6477,6 +7346,14 @@ function termCtxOutsideClick(ev) {
   closeTermContextMenu();
 }
 
+/** Effective right-click action: the `right_click` setting, with empty or
+ * unknown values following the platform (menu on macOS, copy/paste elsewhere). */
+function rightClickMode() {
+  const v = state.settings.right_click;
+  if (v === 'copy_paste' || v === 'menu') return v;
+  return IS_MAC ? 'menu' : 'copy_paste';
+}
+
 $('#terminals').addEventListener('contextmenu', (ev) => {
   const body = ev.target.closest('.pane-body');
   if (!body) return; // no action here — the global suppressor below handles it
@@ -6488,6 +7365,13 @@ $('#terminals').addEventListener('contextmenu', (ev) => {
   // path and then right-clicking it is a deliberate aim, and it also covers the
   // paths the link detector does not recognize.
   const thread = idx >= 0 ? threadById(state.panes[idx].threadId) : null;
+  // Windows Terminal style: copy the selection (clearing it), else paste.
+  // Shift+right-click always opens the menu so it stays reachable.
+  if (thread && !ev.shiftKey && rightClickMode() === 'copy_paste') {
+    if (thread.term.hasSelection()) copyFocusedSelection({ clear: true });
+    else pasteIntoFocused();
+    return;
+  }
   const path = thread
     ? pathFromSelection(thread.term) || pathAtPoint(thread, ev.clientX, ev.clientY)
     : '';
@@ -6513,7 +7397,7 @@ document.addEventListener('contextmenu', (ev) => {
  * Escape closes everything. Enter/Space activate the focused row natively. */
 function termMenuKeydown(ev) {
   const menu = ev.currentTarget;
-  const items = [...menu.querySelectorAll('button.popup-item')];
+  const items = [...menu.querySelectorAll('button.popup-item:not(:disabled)')];
   const idx = items.indexOf(document.activeElement);
   const cur = items[idx];
   const level = ctxMenuStack.indexOf(menu);
@@ -6638,9 +7522,7 @@ const IS_MAC = /Mac/i.test(navigator.userAgent);
   const ua = navigator.userAgent;
   const os = IS_MAC ? 'macos' : /Win/i.test(ua) ? 'windows' : 'linux';
   document.body.classList.add(`platform-${os}`);
-  // The topbar's palette chip is static markup, so relabel it for macOS.
-  const chip = document.querySelector('#palette-btn kbd');
-  if (chip) chip.textContent = IS_MAC ? '⌘⇧P' : 'Ctrl⇧P';
+  // The topbar's palette chip is filled in by `renderPaletteKeyUi`.
 })();
 
 /* The app-level modifier is ⌘ on macOS and Ctrl everywhere else.
@@ -6654,13 +7536,34 @@ function appMod(ev) {
   return IS_MAC ? ev.metaKey && !ev.ctrlKey : ev.ctrlKey && !ev.metaKey;
 }
 
+/** The Windows Terminal default clipboard keys, on Windows/Linux only:
+ * Ctrl+V and Shift+Insert paste; Ctrl+Insert copies; Ctrl+C copies *only when
+ * `term` has a selection* — with nothing selected it stays SIGINT for the
+ * shell. (Ctrl+Shift+C/V are the app shortcuts handled separately.) Returns
+ * 'copy', 'paste' or null. Pure on the event + the selection state, so the
+ * terminal's key handler and the window handler agree on what is claimed. */
+function winClipboardAction(ev, term) {
+  if (IS_MAC || ev.altKey || ev.metaKey) return null;
+  const key = ev.key.toLowerCase();
+  if (ev.ctrlKey && !ev.shiftKey) {
+    if (key === 'v') return 'paste';
+    if (key === 'insert') return 'copy';
+    if (key === 'c') return term && term.hasSelection() ? 'copy' : null;
+  } else if (ev.shiftKey && !ev.ctrlKey && key === 'insert') {
+    return 'paste';
+  }
+  return null;
+}
+
 window.addEventListener('keydown', (ev) => {
   const mod = appMod(ev) && ev.shiftKey;
   // macOS convention: plain ⌘C/⌘V are copy/paste (no Shift, unlike Ctrl+Shift+C
   // on Windows/Linux where plain Ctrl+C has to stay SIGINT).
   const plainMod = appMod(ev) && !ev.shiftKey && !ev.altKey;
   const key = ev.key.toLowerCase();
-  if (mod && key === 'p') {
+  if (paletteKeyIs('open', ev)) {
+    // Wins over every branch below: a custom open key that is also another
+    // app shortcut (say Ctrl+Shift+T) opens the palette, not the other thing.
     ev.preventDefault();
     palette.open ? closePalette() : openPalette();
   } else if (IS_MAC && plainMod && key === 'c' && !isAppTextEntry(ev.target)) {
@@ -6673,12 +7576,24 @@ window.addEventListener('keydown', (ev) => {
   } else if (IS_MAC && plainMod && key === 'v' && !isAppTextEntry(ev.target)) {
     ev.preventDefault();
     pasteIntoFocused();
+  } else if (!IS_MAC && !palette.open && !modalCtx && !shortcutsOverlay.open
+             && !isAppTextEntry(ev.target) && ev.target?.closest?.('.term-host')
+             && !workflowForShortcut(ev)
+             && winClipboardAction(ev, focusedThread()?.term)) {
+    // Windows Terminal clipboard keys. A registered workflow shortcut keeps
+    // precedence (checked above, same as in the terminal's key handler).
+    // preventDefault stops the native paste event from pasting a second time.
+    ev.preventDefault();
+    if (winClipboardAction(ev, focusedThread()?.term) === 'copy') copyFocusedSelection({ clear: true });
+    else pasteIntoFocused();
   } else if (plainMod && key === 'p'
              && !ev.defaultPrevented && !ev.target?.closest?.('.term-host')) {
     // Plain Ctrl+P (⌘P on macOS) outside a terminal would trigger the
     // webview's print dialog — meaningless for a terminal app, and it
     // swallowed the key the user expected to open the palette. Always
-    // suppress it here, and open the palette when nothing modal is in the way.
+    // suppress it here, and open the palette when nothing modal is in the way
+    // — unless `palette_keys.open` is customized, in which case that setting
+    // is the only way in and this branch only eats the print dialog.
     //
     // Inside a terminal this branch must NOT fire: Ctrl+P is readline's
     // "previous command", and xterm consumes it (sending \x10) and calls
@@ -6687,7 +7602,7 @@ window.addEventListener('keydown', (ev) => {
     // likewise handles Ctrl+P (move selection up) and preventDefaults, so
     // navigating the open palette never toggles it shut.
     ev.preventDefault();
-    if (!modalCtx) palette.open ? closePalette() : openPalette();
+    if (!modalCtx && !paletteKeys.custom.open) palette.open ? closePalette() : openPalette();
   } else if (mod && key === 't') {
     ev.preventDefault();
     newLocalThread();
@@ -6728,7 +7643,7 @@ window.addEventListener('keydown', (ev) => {
   } else if (mod && key === 'arrowdown') {
     ev.preventDefault();
     focusPane(state.panes.length - 1);
-  } else if (ev.key === 'Escape' && palette.open) {
+  } else if (palette.open && paletteKeyIs('close', ev)) {
     closePalette();
   } else if (ev.key === 'Escape' && termSearch.open) {
     closeTermSearch();
@@ -6744,10 +7659,13 @@ window.addEventListener('keydown', (ev) => {
 
 /* ---------------- copy & paste ---------------- */
 
-async function copyFocusedSelection() {
+async function copyFocusedSelection({ clear = false } = {}) {
   const thread = focusedThread();
   const sel = thread?.term.getSelection();
   if (!sel) return;
+  // Windows Terminal clears the selection once it is copied (Ctrl+C and
+  // right-click), which is also the cue that the copy happened.
+  if (clear) thread.term.clearSelection();
   try {
     await navigator.clipboard.writeText(sel);
     toast(tr('toast.copied'));
@@ -7068,7 +7986,9 @@ function blockJump(dir) {
 function shortcutGroups() {
   return [
     { group: tr('sc.group.general'), items: [
-      ['Mod+Shift+P', tr('sc.item.palette', { mod: IS_MAC ? '⌘' : 'Ctrl' })],
+      paletteKeys.custom.open
+        ? [prettyShortcut(displayCombo(paletteKeyFirst('open'))), tr('sc.item.palette.custom')]
+        : ['Mod+Shift+P', tr('sc.item.palette', { mod: IS_MAC ? '⌘' : 'Ctrl' })],
       ['Mod+Shift+T', tr('sc.item.newThread')],
       ['Mod+Shift+W', tr('sc.item.closeThread')],
       ['Mod+Shift+/', tr('sc.item.shortcuts')],
@@ -7083,15 +8003,26 @@ function shortcutGroups() {
     { group: tr('sc.group.terminal'), items: [
       // macOS uses the plain ⌘ forms it expects; Ctrl+Shift there would be
       // taken from the shell.
-      [IS_MAC ? 'Mod+C' : 'Mod+Shift+C', tr('sc.item.copy')],
-      [IS_MAC ? 'Mod+V' : 'Mod+Shift+V', tr('sc.item.paste')],
+      // Windows/Linux follow Windows Terminal: plain Ctrl+V pastes and Ctrl+C
+      // copies when something is selected (else it stays SIGINT).
+      ...(IS_MAC ? [
+        ['Mod+C', tr('sc.item.copy')],
+        ['Mod+V', tr('sc.item.paste')],
+      ] : [
+        ['Ctrl+C', tr('sc.item.copyWin')],
+        ['Ctrl+Shift+C', tr('sc.item.copy')],
+        ['Ctrl+Insert', tr('sc.item.copyAlt')],
+        ['Ctrl+V', tr('sc.item.paste')],
+        ['Ctrl+Shift+V', tr('sc.item.pasteAlt')],
+        ['Shift+Insert', tr('sc.item.pasteAlt')],
+      ]),
       ['Mod+Shift+F', tr('sc.item.find')],
       ['Ctrl+Alt+↑', tr('sc.item.prevBlock')],
       ['Ctrl+Alt+↓', tr('sc.item.nextBlock')],
     ] },
     { group: tr('sc.group.workflows'), items: [
       [tr('sc.key.anyKey'), tr('sc.item.wfShortcut')],
-      [tr('sc.key.rightClick'), tr('sc.item.rightClick')],
+      [tr('sc.key.rightClick'), rightClickMode() === 'copy_paste' ? tr('sc.item.rightClickCopyPaste') : tr('sc.item.rightClick')],
     ] },
   ];
 }
