@@ -9,9 +9,9 @@
 //!   on the directory (the task panel reading `package.json` next to you) has
 //!   no other source for it.
 //!
-//! Detected purely by executable basename — bash/zsh/fish are recognized;
-//! every other shell (cmd.exe, PowerShell, a custom REPL, …) is left
-//! untouched. Each shell gets a different mechanism, chosen to avoid
+//! Detected purely by executable basename — bash/zsh/fish and PowerShell
+//! (`pwsh` / `powershell`) are recognized; every other shell (cmd.exe, a
+//! custom REPL, …) is left untouched. Each shell gets a different mechanism, chosen to avoid
 //! fighting the user's own configuration:
 //!
 //! - **bash**: `--rcfile <generated>` that sources the real `~/.bashrc`
@@ -25,6 +25,11 @@
 //!   Safe regardless of the profile's args (env-var based, not a flag).
 //! - **fish**: `-C '<commands>'`, fish's built-in "run this after config
 //!   loads" flag — no generated files needed at all.
+//! - **PowerShell** (`pwsh` 7 and Windows PowerShell 5.1): suffix args
+//!   `-NoExit -EncodedCommand <base64>` that wrap the `prompt` function (and
+//!   `PSConsoleHostReadLine` when PSReadLine provides it). `$PROFILE` is never
+//!   edited and still loads first. Skipped when the profile's args already
+//!   decide what the shell runs (see `build_pwsh`).
 //!
 //! Building an `Integration` is best-effort: any I/O failure (temp dir
 //! unwritable, disk full, …) just returns `None`, so a shell always launches
@@ -90,6 +95,64 @@ function __senju_blocks_preexec --on-event fish_preexec
 end
 "#;
 
+// PowerShell has no hook point like PROMPT_COMMAND, so the one way to run code
+// at every prompt is to *be* the `prompt` function: save whatever the user's
+// profile (oh-my-posh, starship, posh-git, ...) defined, and replace it with a
+// wrapper that emits the markers around a call to the saved one.
+//
+// Order inside the wrapper matters. `$?` and `$LASTEXITCODE` describe the
+// command that just ran and are clobbered by the very next statement, so they
+// are captured first. `$LASTEXITCODE` is then written back before returning,
+// otherwise merely drawing the prompt would reset it and a user's
+// `$LASTEXITCODE` check on the next line would see our value, not theirs.
+//
+// Must stay valid on Windows PowerShell 5.1, which is what ships with Windows:
+// no `` `e `` / `` `a `` escapes (7+ only) so ESC and BEL are built with
+// [char]; no `??`, no ternary. No `#` anywhere either, so the raw string
+// delimiter can never be closed early.
+//
+// The 133;C marker needs the moment *after* Enter, which `prompt` cannot see.
+// PSReadLine exposes that as `PSConsoleHostReadLine` (the host calls it to
+// read a line), so it is wrapped only if it exists; without PSReadLine you get
+// A/B/D and the frontend simply builds no command blocks, while OSC 7 (the
+// part the task pane needs) still works.
+const PWSH_SNIPPET: &str = r#"if (-not $global:__senjuInstalled) {
+  $global:__senjuInstalled = $true
+  $global:__senjuOrigPrompt = $function:prompt
+  function global:prompt {
+    $__senjuOk = $?
+    $__senjuLast = $global:LASTEXITCODE
+    $__senjuEsc = [string][char]27
+    $__senjuBel = [string][char]7
+    $__senjuCode = 0
+    if (-not $__senjuOk) {
+      if (($null -ne $__senjuLast) -and ($__senjuLast -ne 0)) { $__senjuCode = $__senjuLast } else { $__senjuCode = 1 }
+    }
+    $__senjuOut = $__senjuEsc + ']133;D;' + $__senjuCode + $__senjuBel
+    $__senjuLoc = $executionContext.SessionState.Path.CurrentLocation
+    if ($__senjuLoc.Provider.Name -eq 'FileSystem') {
+      $__senjuPath = $__senjuLoc.ProviderPath.Replace('%', '%25').Replace('\', '/').Replace(' ', '%20')
+      if (-not $__senjuPath.StartsWith('/')) { $__senjuPath = '/' + $__senjuPath }
+      $__senjuOut += $__senjuEsc + ']7;file://' + [System.Net.Dns]::GetHostName() + $__senjuPath + $__senjuBel
+    }
+    $__senjuOut += $__senjuEsc + ']133;A' + $__senjuBel
+    [Console]::Write($__senjuOut)
+    $global:LASTEXITCODE = $__senjuLast
+    $__senjuText = & $global:__senjuOrigPrompt
+    $global:LASTEXITCODE = $__senjuLast
+    return ([string]$__senjuText + $__senjuEsc + ']133;B' + $__senjuBel)
+  }
+  if (Test-Path function:PSConsoleHostReadLine) {
+    $global:__senjuOrigReadLine = $function:PSConsoleHostReadLine
+    function global:PSConsoleHostReadLine {
+      $__senjuLine = & $global:__senjuOrigReadLine
+      [Console]::Write(([string][char]27) + ']133;C' + ([string][char]7))
+      $__senjuLine
+    }
+  }
+}
+"#;
+
 /// Builds the integration for `shell` (a path or bare executable name), or
 /// `None` if it isn't a recognized shell or the files couldn't be written.
 pub fn build(shell: &str, existing_args: &[String]) -> Option<Integration> {
@@ -101,6 +164,7 @@ pub fn build(shell: &str, existing_args: &[String]) -> Option<Integration> {
         "bash" => build_bash(existing_args),
         "zsh" => build_zsh(),
         "fish" => build_fish(),
+        "pwsh" | "powershell" => build_pwsh(existing_args),
         _ => None,
     }
 }
@@ -194,13 +258,68 @@ fn build_fish() -> Option<Integration> {
     })
 }
 
+/// Standard-alphabet base64 with `=` padding. `-EncodedCommand` wants exactly
+/// that, and a dozen lines here beat a crate dependency for one call site.
+fn base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b = [chunk[0], *chunk.get(1).unwrap_or(&0), *chunk.get(2).unwrap_or(&0)];
+        let n = (u32::from(b[0]) << 16) | (u32::from(b[1]) << 8) | u32::from(b[2]);
+        out.push(ALPHABET[(n >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(n >> 12) as usize & 63] as char);
+        out.push(if chunk.len() > 1 { ALPHABET[(n >> 6) as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 2 { ALPHABET[n as usize & 63] as char } else { '=' });
+    }
+    out
+}
+
+fn build_pwsh(existing_args: &[String]) -> Option<Integration> {
+    // Only inject when the profile's args don't already decide what the shell
+    // runs. A command/file/encoded-command argument, `-NoExit` (the user has
+    // chosen how the session behaves) or any positional argument (an implicit
+    // `-File`/`-Command`) would collide with ours: PowerShell takes only one
+    // command source, so we would either replace theirs or be ignored. The
+    // rule is deliberately crude — anything not starting with `-` is treated
+    // as positional, which also skips `-ExecutionPolicy Bypass` (its value has
+    // no dash); losing integration there is cheaper than guessing wrong. Plain
+    // switches such as `-NoLogo` / `-NoProfile` are harmless and still inject.
+    const DECIDES: [&str; 9] =
+        ["-command", "-c", "-file", "-f", "-encodedcommand", "-e", "-ec", "-enc", "-noexit"];
+    for arg in existing_args {
+        let lower = arg.to_ascii_lowercase();
+        if !arg.starts_with('-') || DECIDES.contains(&lower.as_str()) {
+            return None;
+        }
+    }
+    // Why `-NoExit -EncodedCommand`, and not the alternatives:
+    // - unlike `-NoProfile`, the user's profile still loads first, so the
+    //   prompt we wrap is their prompt (oh-my-posh, starship, ...);
+    // - `-EncodedCommand` takes base64 of UTF-16LE, so the script contains no
+    //   quote characters for Windows command-line handling to mangle
+    //   (powershell.exe strips `"` when it re-joins its arguments);
+    // - it is not subject to the execution policy the way `-File` on a
+    //   generated .ps1 would be (a Restricted policy refuses such a file);
+    // - it works identically on Windows PowerShell 5.1 and pwsh 7;
+    // - nothing is written to disk, so there is no temp dir and no guard.
+    // `-NoExit` keeps the shell interactive after the script has run.
+    let utf16le: Vec<u8> = PWSH_SNIPPET.encode_utf16().flat_map(u16::to_le_bytes).collect();
+    Some(Integration {
+        prefix_args: vec![],
+        suffix_args: vec!["-NoExit".into(), "-EncodedCommand".into(), base64_encode(&utf16le)],
+        env: vec![],
+        guard: None,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn unrecognized_shell_is_untouched() {
-        assert!(build("pwsh.exe", &[]).is_none());
+        assert!(build("cmd.exe", &[]).is_none());
         assert!(build("/bin/dash", &[]).is_none());
     }
 
@@ -286,5 +405,108 @@ mod tests {
         assert!(integ.guard.is_none());
         assert_eq!(integ.suffix_args[0], "-C");
         assert!(integ.suffix_args[1].contains("fish_prompt"));
+    }
+
+    /// Test-only inverse of `base64_encode`, so the injected script can be
+    /// read back out of the launch args.
+    fn base64_decode(s: &str) -> Vec<u8> {
+        let val = |c: u8| match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => panic!("bad base64 byte {c}"),
+        };
+        let mut out = Vec::new();
+        for chunk in s.as_bytes().chunks(4) {
+            let pad = chunk.iter().filter(|&&c| c == b'=').count();
+            let mut n = 0u32;
+            for &c in chunk {
+                n = (n << 6) | if c == b'=' { 0 } else { u32::from(val(c)) };
+            }
+            let bytes = [(n >> 16) as u8, (n >> 8) as u8, n as u8];
+            out.extend_from_slice(&bytes[..3 - pad]);
+        }
+        out
+    }
+
+    fn decoded_pwsh_script(integ: &Integration) -> String {
+        let bytes = base64_decode(&integ.suffix_args[2]);
+        let units: Vec<u16> =
+            bytes.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        String::from_utf16(&units).unwrap()
+    }
+
+    #[test]
+    fn base64_matches_known_vectors() {
+        // RFC 4648 section 10.
+        for (plain, enc) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64_encode(plain.as_bytes()), enc);
+            assert_eq!(base64_decode(enc), plain.as_bytes());
+        }
+        // Bytes outside ASCII exercise the high alphabet entries (`+`, `/`).
+        assert_eq!(base64_encode(&[0xfb, 0xff, 0xbf]), "+/+/");
+    }
+
+    #[test]
+    fn pwsh_and_powershell_are_recognized() {
+        for shell in ["pwsh", "pwsh.exe", "/usr/bin/pwsh", "PowerShell.exe", "powershell"] {
+            assert!(build(shell, &[]).is_some(), "{shell} should be recognized");
+        }
+    }
+
+    #[test]
+    fn pwsh_uses_noexit_encodedcommand_suffix_args() {
+        let integ = build("pwsh", &[]).unwrap();
+        assert!(integ.prefix_args.is_empty());
+        assert!(integ.env.is_empty());
+        assert!(integ.guard.is_none());
+        assert_eq!(integ.suffix_args[0], "-NoExit");
+        assert_eq!(integ.suffix_args[1], "-EncodedCommand");
+        assert_eq!(integ.suffix_args.len(), 3);
+
+        let script = decoded_pwsh_script(&integ);
+        assert_eq!(script, PWSH_SNIPPET);
+        assert!(script.contains("]7;file://"));
+        assert!(script.contains("]133;D;"));
+        assert!(script.contains("PSConsoleHostReadLine"));
+        assert!(script.contains("__senjuInstalled"));
+        // 5.1 compatibility: no 7+-only escapes or operators.
+        assert!(!script.contains("`e") && !script.contains("`a") && !script.contains("??"));
+    }
+
+    #[test]
+    fn pwsh_is_skipped_when_args_decide_what_runs() {
+        for args in [
+            vec!["-Command", "ls"],
+            vec!["-c", "ls"],
+            vec!["-File", "x.ps1"],
+            vec!["-f", "x.ps1"],
+            vec!["-EncodedCommand", "AAAA"],
+            vec!["-ENC", "AAAA"],
+            vec!["-e", "AAAA"],
+            vec!["-ec", "AAAA"],
+            vec!["-NoExit"],
+            vec!["script.ps1"],
+            vec!["-ExecutionPolicy", "Bypass"],
+        ] {
+            let args: Vec<String> = args.into_iter().map(String::from).collect();
+            assert!(build("pwsh", &args).is_none(), "{args:?} should skip injection");
+        }
+    }
+
+    #[test]
+    fn pwsh_is_injected_alongside_plain_switches() {
+        let args = vec!["-NoLogo".to_string(), "-NoProfile".to_string()];
+        assert!(build("powershell.exe", &args).is_some());
     }
 }

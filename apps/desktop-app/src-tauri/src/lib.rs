@@ -784,6 +784,112 @@ fn reveal_path(path: String) -> CmdResult<()> {
     reveal_in_file_manager(&real).map_err(|e| e.to_string())
 }
 
+/// Opens a terminal emulator outside the app, in `path` (or, for a file, its
+/// parent directory).
+///
+/// Which terminal is the `external_terminal` setting; empty means the OS
+/// default. Same path rules as `reveal_path`: absolute (after `~` expansion)
+/// and existing. No shell is involved, and the child is never waited on.
+#[tauri::command]
+fn open_external_terminal(state: State<'_, AppState>, path: String) -> CmdResult<()> {
+    let expanded = expand_home(&path);
+    let p = Path::new(&expanded);
+    if !p.is_absolute() {
+        return Err("絶対パスのみ開けます".into());
+    }
+    let real = std::fs::canonicalize(p).map_err(|_| format!("パスが見つかりません: {path}"))?;
+    let dir = if real.is_dir() {
+        real
+    } else {
+        real.parent().map(Path::to_path_buf).unwrap_or(real)
+    };
+    let dir = strip_verbatim_prefix(&dir);
+
+    let setting = state.stores.settings().external_terminal;
+    let mut words = senju_core::extterm::split_command_line(setting.trim());
+    if words.is_empty() {
+        return open_default_terminal(&dir).map_err(|e| format!("外部ターミナルを起動できません: {e}"));
+    }
+    let dir_str = dir.display().to_string();
+    for w in &mut words {
+        *w = w.replace("{dir}", &dir_str);
+    }
+    let prog = words.remove(0);
+    let mut cmd = std::process::Command::new(&prog);
+    cmd.args(&words).current_dir(&dir);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        // CREATE_NEW_CONSOLE: console programs (cmd.exe, pwsh.exe) get their own window.
+        cmd.creation_flags(0x0000_0010);
+    }
+    cmd.spawn()
+        .map(|_| ())
+        .map_err(|e| format!("外部ターミナルを起動できません ({prog}): {e}"))
+}
+
+/// Drops the `\\?\` prefix `canonicalize` adds on Windows, which most
+/// programs (Explorer, terminals) do not understand. A no-op elsewhere.
+/// A network share comes back as `\\?\UNC\server\share`, which has to turn
+/// into `\\server\share` rather than lose its leading slashes.
+fn strip_verbatim_prefix(path: &Path) -> std::path::PathBuf {
+    let display = path.display().to_string();
+    if let Some(rest) = display.strip_prefix(r#"\\?\UNC\"#) {
+        return std::path::PathBuf::from(format!(r"\\{rest}"));
+    }
+    match display.strip_prefix(r#"\\?\"#) {
+        Some(clean) => std::path::PathBuf::from(clean),
+        None => path.to_path_buf(),
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn open_default_terminal(dir: &Path) -> std::io::Result<()> {
+    use std::os::windows::process::CommandExt;
+    // Windows has no "launch the default terminal" API. What it has is the
+    // default terminal application setting (Windows 11): a console program
+    // started with a new console is handed to whichever terminal the user
+    // chose there, Windows Terminal or conhost. So start the command
+    // interpreter with CREATE_NEW_CONSOLE and let Windows route it.
+    let comspec = std::env::var("ComSpec").unwrap_or_else(|_| "cmd.exe".into());
+    std::process::Command::new(comspec)
+        .current_dir(dir)
+        .creation_flags(0x0000_0010)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "macos")]
+fn open_default_terminal(dir: &Path) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg("-a")
+        .arg("Terminal")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn open_default_terminal(dir: &Path) -> std::io::Result<()> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Ok(t) = std::env::var("TERMINAL") {
+        if !t.trim().is_empty() {
+            candidates.push(t);
+        }
+    }
+    candidates.extend(
+        ["x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal", "xterm"]
+            .map(String::from),
+    );
+    for c in candidates {
+        // Only the spawn matters; the terminal runs on its own.
+        if std::process::Command::new(&c).current_dir(dir).spawn().is_ok() {
+            return Ok(());
+        }
+    }
+    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no terminal emulator found"))
+}
+
 /// Lists the runnable tasks declared in `dir` (`package.json` scripts, make
 /// targets, and the rest — see `senju_core::tasks`).
 ///
@@ -1589,6 +1695,7 @@ pub fn run() {
             test_ssh_connection,
             open_external,
             reveal_path,
+            open_external_terminal,
             session_log_dir,
             list_known_hosts,
             get_workflow_inputs,

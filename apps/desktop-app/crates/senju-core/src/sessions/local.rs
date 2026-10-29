@@ -87,7 +87,7 @@ impl LocalSession {
             })
             .map_err(|e| SessionError::Pty(e.to_string()))?;
 
-        // Best-effort: a recognized shell (bash/zsh/fish) gets OSC 133 hooks
+        // Best-effort: a recognized shell (bash/zsh/fish/PowerShell) gets OSC 133 hooks
         // spliced into its launch, so the frontend's command-block UI works
         // without the user editing any rc file themselves.
         let integration = shell_integration_enabled
@@ -191,10 +191,25 @@ impl LocalSession {
 
 fn default_shell() -> String {
     if cfg!(windows) {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "powershell.exe".into())
+        windows_default_shell(std::env::var_os("PATH"))
     } else {
         std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".into())
     }
+}
+
+/// PowerShell 7 (`pwsh.exe`) when it is on `PATH`, else the Windows
+/// PowerShell 5.1 that ships with every Windows.
+///
+/// Deliberately not `%COMSPEC%`: that is cmd.exe on practically every machine,
+/// and cmd.exe has no prompt hook to inject shell integration into — so the
+/// default thread got no command blocks and the task pane could never learn
+/// the working directory. Windows Terminal made the same call and opens
+/// PowerShell by default. cmd.exe is still one click away as its own profile.
+fn windows_default_shell(path: Option<std::ffi::OsString>) -> String {
+    let has_pwsh = path.is_some_and(|paths| {
+        std::env::split_paths(&paths).any(|dir| dir.join("pwsh.exe").is_file())
+    });
+    if has_pwsh { "pwsh.exe" } else { "powershell.exe" }.into()
 }
 
 /// Expands a leading `~` to the home directory. Returns `None` for an empty
@@ -210,4 +225,20 @@ fn expand_home(path: &str) -> Option<std::path::PathBuf> {
         }
     }
     Some(std::path::PathBuf::from(path))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn windows_default_prefers_pwsh_on_path() {
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(windows_default_shell(Some(dir.path().into())), "powershell.exe");
+        assert_eq!(windows_default_shell(None), "powershell.exe");
+
+        std::fs::write(dir.path().join("pwsh.exe"), b"").unwrap();
+        let path = std::env::join_paths([std::path::Path::new("/nonexistent"), dir.path()]).unwrap();
+        assert_eq!(windows_default_shell(Some(path)), "pwsh.exe");
+    }
 }

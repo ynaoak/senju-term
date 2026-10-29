@@ -277,6 +277,10 @@
                 </select>
               </label>
               <p class="field-hint" data-i18n="settings.rightClick.hint">コピー / 貼り付けは、選択範囲があればコピー(選択は解除)、無ければ貼り付けます。Shift+右クリックでは、この設定にかかわらず常にワークフローのメニューを開きます。自動は Windows / Linux ではコピー / 貼り付け、macOS ではメニューです。</p>
+              <label><span data-i18n="settings.externalTerminal">外部ターミナル (空欄 = OS 既定)</span>
+                <input name="external_terminal" type="text" autocomplete="off" spellcheck="false" placeholder="wt.exe -d {dir}" />
+              </label>
+              <p class="field-hint" data-i18n="settings.externalTerminal.hint">「外部ターミナルで開く」で起動するコマンド。{dir} は開くフォルダに置き換わります(例: wt.exe -d {dir} / pwsh.exe / "C:\Program Files\Alacritty\alacritty.exe" --working-directory {dir})。空欄の場合、Windows では既定のターミナルアプリ、macOS ではターミナル.app、Linux では x-terminal-emulator などを使います。</p>
               <label class="checkbox-row">
                 <input name="gpu_rendering" type="checkbox" />
                 <span data-i18n="settings.gpuRendering">GPU レンダリング(WebGL)</span>

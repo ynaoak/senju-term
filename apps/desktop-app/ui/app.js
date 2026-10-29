@@ -41,7 +41,7 @@ const state = {
   // sockets), `presets` is the saved-settings store, `log` is a capped ring of
   // recent requests — it exists only to be looked at, so it is never persisted.
   servers: { running: [], presets: [], log: [] },
-  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', term_theme: '', term_colors: {}, restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10, right_click: '', palette_keys: {} },
+  settings: { font_size: 14, shell: '', default_profile_id: '', font_family: '', scrollback: 10000, theme: 'dark', language: 'ja', term_theme: '', term_colors: {}, restore_session: true, gpu_rendering: true, shell_integration: true, notify_long_commands: true, notify_threshold_secs: 10, right_click: '', external_terminal: '', palette_keys: {} },
   renaming: null,      // thread id currently being renamed inline in the sidebar
   dist: null,          // { channel, installer, inAppUpdates, hasExternalManager }
 };
@@ -187,7 +187,7 @@ const STRINGS = {
   'tasks.empty.none.title': { ja: 'タスクはありません', en: 'No tasks here' },
   'tasks.empty.noThread': { ja: 'シェルを開くと、その作業ディレクトリのタスクがここに並びます。', en: 'Open a shell and the tasks in its working directory will appear here.' },
   'tasks.empty.ssh': { ja: 'SSH スレッドは未対応です。作業ディレクトリを知るにはリモート側のシェル統合が必要で、まだ入れていません。', en: 'SSH threads are not supported yet: knowing the working directory needs shell integration on the remote side, which is not in place.' },
-  'tasks.empty.noCwd': { ja: '作業ディレクトリをまだ受け取っていません。シェルでコマンドを 1 回実行すると分かります (設定のシェル統合が必要です)。', en: 'No working directory reported yet. Run one command in the shell and it will arrive — shell integration must be enabled in Settings.' },
+  'tasks.empty.noCwd': { ja: '作業ディレクトリをまだ受け取っていません。シェルでコマンドを 1 回実行すると分かります。シェルが bash / zsh / fish / PowerShell で、設定のシェル統合が有効である必要があります (cmd.exe は非対応です)。', en: 'No working directory reported yet. Run one command in the shell and it will arrive. The shell must be bash / zsh / fish / PowerShell with shell integration enabled in Settings (cmd.exe is not supported).' },
   'tasks.empty.none': { ja: 'このディレクトリには、読み取れるタスク定義がありませんでした。', en: 'No task definitions were found in this directory.' },
   'palette.task': { ja: 'タスク: {name}', en: 'Task: {name}' },
   'palette.tasksOpen': { ja: 'タスク一覧を開く', en: 'Open the task list' },
@@ -508,6 +508,8 @@ const STRINGS = {
   'path.copy': { ja: 'パスをコピー', en: 'Copy path' },
   'path.copied': { ja: 'パスをコピーしました', en: 'Path copied' },
   'path.reveal': { ja: 'フォルダーで表示', en: 'Show in file manager' },
+  'path.openTerminal': { ja: '外部ターミナルで開く', en: 'Open in external terminal' },
+  'ctx.openTerminalCwd': { ja: '作業ディレクトリを外部ターミナルで開く', en: 'Open working directory in external terminal' },
   'path.remoteNote': { ja: 'リモートのパスです — この PC では開けません', en: 'Remote path — cannot be opened on this machine' },
   'menu.workflowsEmpty': { ja: 'ワークフローが未登録です', en: 'No workflows registered' },
   'menu.manageWorkflows': { ja: '⚙ ワークフローを管理…', en: '⚙ Manage workflows…' },
@@ -664,12 +666,14 @@ const STRINGS = {
   'settings.rightClick.auto': { ja: '自動 (OS 標準)', en: 'Auto (OS default)' },
   'settings.rightClick.copyPaste': { ja: 'コピー / 貼り付け (Windows Terminal 方式)', en: 'Copy & paste (Windows Terminal style)' },
   'settings.rightClick.menu': { ja: 'メニューを表示', en: 'Show menu' },
+  'settings.externalTerminal': { ja: '外部ターミナル (空欄 = OS 既定)', en: 'External terminal (empty = OS default)' },
+  'settings.externalTerminal.hint': { ja: '「外部ターミナルで開く」で起動するコマンド。{dir} は開くフォルダに置き換わります(例: wt.exe -d {dir} / pwsh.exe / "C:\\Program Files\\Alacritty\\alacritty.exe" --working-directory {dir})。空欄の場合、Windows では既定のターミナルアプリ、macOS ではターミナル.app、Linux では x-terminal-emulator などを使います。', en: 'Command launched by "Open in external terminal". {dir} is replaced by the folder to open (e.g. wt.exe -d {dir} / pwsh.exe / "C:\\Program Files\\Alacritty\\alacritty.exe" --working-directory {dir}). When empty, Windows uses its default terminal app, macOS uses Terminal.app, and Linux tries x-terminal-emulator and friends.' },
   'settings.rightClick.hint': { ja: 'コピー / 貼り付けは、選択範囲があればコピー(選択は解除)、無ければ貼り付けます。Shift+右クリックでは、この設定にかかわらず常にワークフローのメニューを開きます。自動は Windows / Linux ではコピー / 貼り付け、macOS ではメニューです。', en: 'Copy & paste copies the selection (and clears it) or, with nothing selected, pastes. Shift+right-click always opens the workflow menu regardless of this setting. Auto means copy & paste on Windows / Linux and the menu on macOS.' },
   'ctx.copy': { ja: 'コピー', en: 'Copy' },
   'ctx.paste': { ja: '貼り付け', en: 'Paste' },
   'settings.gpuRendering.hint': { ja: '描画を GPU で高速化します。表示が乱れる環境ではオフにしてください(変更は開いているスレッドにも即時適用)。', en: 'Accelerates rendering with the GPU. Turn it off if the display glitches on your machine (applies immediately to open threads).' },
   'settings.shellIntegration': { ja: 'シェル統合を自動で有効化(コマンドブロック用)', en: 'Auto-enable shell integration (for command blocks)' },
-  'settings.shellIntegration.hint': { ja: 'bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。', en: 'Injects OSC 133 prompt hooks into bash / zsh / fish at launch. Your rc files are not modified.' },
+  'settings.shellIntegration.hint': { ja: 'bash / zsh / fish / PowerShell (pwsh・Windows PowerShell) の起動時に OSC 133 のプロンプト連携と OSC 7 の作業ディレクトリ通知を自動で組み込みます。rc ファイルや $PROFILE は変更されません。', en: 'Injects OSC 133 prompt hooks and OSC 7 working-directory reports into bash / zsh / fish / PowerShell (pwsh and Windows PowerShell) at launch. Your rc files and $PROFILE are not modified.' },
   'settings.notifyLong': { ja: '長時間コマンドの完了をデスクトップ通知', en: 'Desktop notification when a long command finishes' },
   'settings.notifyLong.hint': { ja: '非表示のスレッド、またはウィンドウが非アクティブな時にコマンドが終わると OS の通知を出します(要シェル統合)。表示中のスレッドを見ている時は通知しません。', en: 'Sends an OS notification when a command finishes in a hidden thread or while the window is unfocused (needs shell integration). Watching the thread in the foreground never notifies.' },
   'settings.notifyThreshold': { ja: '通知する最短実行時間(秒)', en: 'Minimum duration to notify (seconds)' },
@@ -4587,6 +4591,7 @@ async function loadSettings() {
   f.shell_integration.checked = state.settings.shell_integration !== false;
   f.right_click.value = ['copy_paste', 'menu'].includes(state.settings.right_click)
     ? state.settings.right_click : '';
+  f.external_terminal.value = state.settings.external_terminal || '';
   f.notify_long_commands.checked = state.settings.notify_long_commands !== false;
   f.notify_threshold_secs.value = Number.isFinite(Number(state.settings.notify_threshold_secs))
     ? state.settings.notify_threshold_secs : 10;
@@ -4781,6 +4786,7 @@ $('#settings-form').addEventListener('submit', async (ev) => {
     gpu_rendering: f.elements.gpu_rendering.checked,
     shell_integration: f.elements.shell_integration.checked,
     right_click: f.elements.right_click.value,
+    external_terminal: f.elements.external_terminal.value.trim(),
     notify_long_commands: f.elements.notify_long_commands.checked,
     notify_threshold_secs: Math.max(0, parseInt(f.elements.notify_threshold_secs.value, 10) || 0),
     // Blank = leave the stored key alone. The field never held it, so
@@ -6457,6 +6463,30 @@ function openTermContextMenu(x, y, path, remote, blockCommand = '') {
     menu.prepend(sep);
     menu.prepend(pathSection(path, remote));
   }
+  // No path under the cursor: still offer the focused local thread's working
+  // directory, so "open in external terminal" is reachable from anywhere.
+  if (!path && focused && focused.kind !== 'ssh' && focused.cwd) {
+    const cwd = focused.cwd;
+    const row = document.createElement('button');
+    row.type = 'button';
+    row.className = 'popup-item';
+    row.setAttribute('role', 'menuitem');
+    row.innerHTML = `<span class="pi-line">${icon('terminal')}<span class="pi-name"></span></span>`;
+    row.querySelector('.pi-name').textContent = tr('ctx.openTerminalCwd');
+    row.addEventListener('mouseenter', () => closeSubmenusFrom(1));
+    row.addEventListener('click', async () => {
+      closeTermContextMenu();
+      try {
+        await invoke('open_external_terminal', { path: cwd });
+      } catch (e) {
+        toast(String(e), true);
+      }
+    });
+    const sep = document.createElement('div');
+    sep.className = 'popup-sep';
+    menu.prepend(sep);
+    menu.prepend(row);
+  }
   // Copy / paste on top of everything, so paste is one click away even when
   // right-click is set to open this menu.
   if (focused) {
@@ -7106,6 +7136,13 @@ function pathSection(path, remote) {
     add(tr('path.reveal'), 'folder', async () => {
       try {
         await invoke('reveal_path', { path });
+      } catch (e) {
+        toast(String(e), true);
+      }
+    });
+    add(tr('path.openTerminal'), 'terminal', async () => {
+      try {
+        await invoke('open_external_terminal', { path });
       } catch (e) {
         toast(String(e), true);
       }

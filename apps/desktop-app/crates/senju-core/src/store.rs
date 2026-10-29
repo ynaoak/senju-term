@@ -863,6 +863,7 @@ mod tests {
             session_log_plain: false,
             session_log_local: true,
             right_click: "menu".into(),
+            external_terminal: "wt.exe -d {dir}".into(),
             palette_keys: [("open".to_string(), vec!["ctrl+k".to_string()])].into(),
         };
         s.save_settings(&new).unwrap();
@@ -883,6 +884,21 @@ mod tests {
         assert_eq!(loaded.palette_keys["open"], ["ctrl+k"]);
         s.save_settings(&loaded).unwrap();
         assert_eq!(s.settings().palette_keys, loaded.palette_keys);
+    }
+
+    /// `external_terminal` is optional: a file from before the field existed
+    /// loads as empty (= OS default), and a set value survives a save/load.
+    #[test]
+    fn external_terminal_default_empty_and_roundtrip() {
+        let (d, s) = stores();
+        std::fs::write(d.path().join("settings.json"), r#"{"font_size":15}"#).unwrap();
+        assert_eq!(s.settings().external_terminal, "");
+
+        std::fs::write(d.path().join("settings.json"), r#"{"external_terminal":"wt.exe -d {dir}"}"#).unwrap();
+        let loaded = s.settings();
+        assert_eq!(loaded.external_terminal, "wt.exe -d {dir}");
+        s.save_settings(&loaded).unwrap();
+        assert_eq!(s.settings().external_terminal, "wt.exe -d {dir}");
     }
 
     /// The whole point of moving the key: whatever the OS credential store

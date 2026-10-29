@@ -82,6 +82,7 @@ const STUB = () => {
           case 'save_ssh_host': case 'delete_ssh_host': return null;
           case 'save_profile': case 'delete_profile': return null;
           case 'open_external': return null;
+          case 'open_external_terminal': return null;
           default: return null;
         }
       },
