@@ -582,6 +582,50 @@ mod tests {
         );
     }
 
+    /// End-to-end for PowerShell: the injected `-NoExit -EncodedCommand`
+    /// script must really run in `pwsh` and report the directory via OSC 7
+    /// after a `cd`. The unit tests only decode the script; this proves pwsh
+    /// accepts it. Skipped where `pwsh` is not installed (CI images and most
+    /// dev machines), the same way the zsh test skips a missing zsh.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn shell_integration_makes_pwsh_report_the_working_directory() {
+        let has_pwsh = std::env::var_os("PATH").is_some_and(|paths| {
+            std::env::split_paths(&paths)
+                .any(|d| d.join("pwsh").exists() || d.join("pwsh.exe").exists())
+        });
+        if !has_pwsh {
+            eprintln!("skipping: pwsh is not on PATH");
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir(root.join("proj")).unwrap();
+
+        let sink = Arc::new(Capture::default());
+        let mgr = SessionManager::new(sink.clone());
+        let spec = LocalSpec {
+            command: "pwsh".into(),
+            args: vec!["-NoLogo".into(), "-NoProfile".into()],
+            cwd: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let info = mgr.create_local(&spec, 80, 24, true).unwrap();
+
+        let want = "\x1b]7;file://";
+        let moved = format!("{}/proj\x07", root.display());
+        mgr.write(&info.id, b"cd proj\r").await.unwrap();
+        let ok = wait_until(Duration::from_secs(20), || {
+            let out = String::from_utf8_lossy(&sink.data.lock().unwrap()).into_owned();
+            out.contains(want) && out.contains(&moved)
+        });
+        let out = sink.data.lock().unwrap();
+        assert!(
+            ok,
+            "expected an OSC 7 report of {moved:?}, got: {}",
+            String::from_utf8_lossy(&out).escape_debug()
+        );
+    }
+
     /// Q5: a shell that exits the instant it starts must still end up removed
     /// from the session map. The reader performs that removal, so starting it
     /// before the insert (as the code used to) let the removal run against a

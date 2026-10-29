@@ -176,7 +176,8 @@ pub struct Profile {
     pub id: String,
     pub name: String,
     /// Executable to launch. Empty means the OS default shell
-    /// (`$SHELL` on Unix, `%COMSPEC%`/PowerShell on Windows).
+    /// (`$SHELL` on Unix; on Windows `pwsh.exe` if installed, else
+    /// `powershell.exe` — never cmd.exe, which can't take shell integration).
     #[serde(default)]
     pub command: String,
     /// Arguments passed to the executable.
@@ -394,6 +395,13 @@ pub struct Settings {
     /// string so more actions can be added without a schema change.
     #[serde(default)]
     pub right_click: String,
+    /// Command line used by "open in external terminal". Empty means the OS
+    /// default terminal. `{dir}` in it is replaced by the target directory;
+    /// the process is always started with that directory as its working
+    /// directory too. No shell is involved: it is split into program and
+    /// arguments, with double quotes grouping words that contain spaces.
+    #[serde(default)]
+    pub external_terminal: String,
     /// Command-palette key bindings, edited by hand in settings.json: action id
     /// ("open", "next", "prev", "run", "insert", "save", "close") → key combos
     /// such as "ctrl+shift+p". An action left out (or given an empty list) keeps
@@ -471,6 +479,7 @@ impl Default for Settings {
             session_log_plain: default_session_log_plain(),
             session_log_local: false,
             right_click: String::new(),
+            external_terminal: String::new(),
             palette_keys: Default::default(),
         }
     }

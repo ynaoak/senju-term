@@ -1,6 +1,7 @@
 pub mod ai;
 pub mod devserver;
 pub mod distribution;
+pub mod extterm;
 pub mod keygen;
 pub mod known_hosts;
 pub mod models;

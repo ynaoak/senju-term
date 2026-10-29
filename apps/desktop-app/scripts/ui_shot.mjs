@@ -195,6 +195,7 @@ const STUB = () => {
             { id: '', name: 'git 同期', description: 'fetch & rebase', command: 'git fetch && git rebase origin/main', tags: ['git'], group: '', shortcut: '', show_button: false },
           ];
           case 'open_external': return null;
+          case 'open_external_terminal': return null;
           default: return null;
         }
       },
