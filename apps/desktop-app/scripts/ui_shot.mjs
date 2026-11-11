@@ -32,6 +32,10 @@ const STUB = () => {
       { id: uid(), name: 'DB 復元', description: '', command: 'psql {{db}} < backup.sql', tags: ['ops'], group: 'DB', shortcut: '', show_button: false },
       { id: uid(), name: 'git 同期', description: 'fetch & rebase', command: 'git fetch && git rebase origin/main', tags: ['git'], group: '', shortcut: 'alt+g', show_button: false },
     ],
+    workflowVars: [
+      { name: 'REGISTRY', value: 'ghcr.io/senju' },
+      { name: 'REGION', value: '' },
+    ],
     hosts: [
       { id: 'host-prod', name: 'prod-web-01', host: '10.0.1.11', port: 22, username: 'deploy', auth_method: 'key', key_path: '~/.ssh/id_ed25519', save_credentials: true, forwards: ['8080:localhost:80', '5433:db.internal:5432'], jump_hosts: ['host-bastion'] },
       { id: 'host-bastion', name: 'bastion', host: 'bastion.example.com', port: 2222, username: 'admin', auth_method: 'keypassword', key_path: '~/.ssh/id_rsa', jump_hosts: [] },
@@ -126,6 +130,8 @@ const STUB = () => {
             return { path: p, parent, entries };
           }
           case 'list_workflows': return window.__EMPTY__ ? [] : store.workflows;
+          case 'list_workflow_vars': return store.workflowVars;
+          case 'save_workflow_vars': store.workflowVars = args.vars; return null;
           case 'list_ssh_hosts': return store.hosts;
           case 'list_profiles': return store.profiles;
           case 'list_launch_sets': return store.launchSets;
@@ -136,6 +142,7 @@ const STUB = () => {
           case 'dist_info':
             return window.__DIST__ || { channel: 'direct-nsis', installer: 'nsis', inAppUpdates: true, hasExternalManager: false };
           case 'workflow_placeholders': return [];
+          case 'workflow_builtins': return [];
           case 'fill_workflow': return args.command;
           case 'create_local_session': {
             const id = 'sess-' + (++sess);
@@ -350,6 +357,12 @@ await page.waitForTimeout(200);
 await page.evaluate(() => window.editWorkflow && window.editWorkflow(null));
 await page.waitForTimeout(200);
 await page.screenshot({ path: path.join(outDir, 'modal-workflow.png') });
+await page.keyboard.press('Escape');
+
+// Shared-variable editor (opened from the Workflows panel header)
+await page.evaluate(() => window.openWorkflowVars && window.openWorkflowVars());
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(outDir, 'modal-wf-vars.png') });
 await page.keyboard.press('Escape');
 
 // Command palette

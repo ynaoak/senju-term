@@ -60,6 +60,13 @@ jobs:
         working-directory: apps/desktop-app
         run: node scripts/check-release-config.mjs
 
+      # The vendored ConPTY binaries (src-tauri/conpty/) are generated; this
+      # catches a hand-swapped or half-committed file offline, before it ships
+      # in the Windows installers.
+      - name: Bundled ConPTY
+        working-directory: apps/desktop-app
+        run: node scripts/fetch-conpty.mjs --check
+
       # The icon generator hand-rolls PNG / ICO / ICNS encoding, and it is only
       # run when the artwork changes — so its codec is checked on every push
       # rather than the next time someone regenerates the icons.

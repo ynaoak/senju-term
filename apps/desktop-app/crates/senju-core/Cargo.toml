@@ -35,3 +35,14 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # OS randomness for generating SSH key pairs (`keygen`). 0.8, because the
 # ssh-key crate russh re-exports takes a rand_core 0.6 `CryptoRngCore`.
 rand = "0.8"
+
+# Reads a child shell's current directory out of its PEB (sessions::proc_cwd),
+# the only cwd source cmd.exe has. Pure-Rust bindings, no import libs needed.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Wdk_System_Threading",
+    "Win32_Foundation",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Threading",
+] }

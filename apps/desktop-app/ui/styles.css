@@ -947,9 +947,43 @@ body.col-resizing .pane-body { pointer-events: none; user-select: none; }
   border-radius: 5px;
   padding: 5px 7px;
   margin-bottom: 8px;
-  overflow-x: auto;
+  /* `scroll`, not `auto`: with `auto` a long command grows a 9px horizontal
+     scrollbar (see `::-webkit-scrollbar`) and its box ends up taller than the
+     box of a short one, so cards in a row stop lining up. `scroll` reserves
+     that height always; the track is transparent, so nothing shows until the
+     text actually overflows. */
+  overflow-x: scroll;
   white-space: nowrap;
   user-select: text;
+}
+
+/* Workflow card's command box: the copy button floats at the top-right inside
+   it. The code gets right padding so text never hides under the button. */
+.wf-cmd { position: relative; }
+.wf-cmd code { padding-right: 34px; }
+.wf-copy {
+  position: absolute;
+  top: 2px;
+  right: 3px;
+  padding: 3px 5px;
+  background: var(--bg);
+  border-color: transparent;
+  color: var(--text-dim);
+  opacity: 0.55;
+  transition: opacity var(--dur-1) var(--ease), color var(--dur-1) var(--ease),
+    background var(--dur-1) var(--ease), border-color var(--dur-1) var(--ease);
+}
+.wf-copy .ico { width: 15px; height: 15px; }
+.card:hover .wf-copy, .wf-copy:focus-visible { opacity: 1; }
+.wf-copy:hover { color: var(--accent); }
+
+/* Shared-variable editor rows: name | value | delete. */
+.vl-row { display: flex; align-items: center; gap: 8px; }
+.vl-row .vl-name { flex: 0 0 34%; min-width: 0; }
+.vl-row .vl-value { flex: 1 1 0; min-width: 0; }
+.vl-row .vl-name, .vl-row .vl-value {
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 0.85rem;
 }
 
 .card .meta { color: var(--text-dim); font-size: 0.8rem; margin-bottom: 8px; }

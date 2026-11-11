@@ -4347,7 +4347,7 @@ dependencies = [
 
 [[package]]
 name = "senju-core"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -4363,11 +4363,12 @@ dependencies = [
  "tokio",
  "toml 1.1.6+spec-1.1.0",
  "uuid",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
 name = "senju-term"
-version = "0.2.2"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "dirs",

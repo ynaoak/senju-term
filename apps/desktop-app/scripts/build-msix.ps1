@@ -51,6 +51,7 @@ $repoRoot = Split-Path -Parent $PSScriptRoot
 $msstoreDir = Join-Path $repoRoot 'src-tauri/msstore'
 $templatePath = Join-Path $msstoreDir 'AppxManifest.xml'
 $assetsDir = Join-Path $msstoreDir 'assets'
+$conptyDir = Join-Path $repoRoot 'src-tauri/conpty'
 
 if (-not (Test-Path -LiteralPath $Exe)) {
   throw "Executable not found: $Exe (build it first with `cargo tauri build`)"
@@ -82,6 +83,16 @@ New-Item -ItemType Directory -Path $layout -Force | Out-Null
 # regardless of what the caller passed in.
 Copy-Item -LiteralPath $Exe -Destination (Join-Path $layout 'senju-term.exe') -Force
 Copy-Item -LiteralPath $assetsDir -Destination (Join-Path $layout 'assets') -Recurse -Force
+
+# Microsoft's side-by-side ConPTY must sit next to the exe (portable-pty loads
+# conpty.dll from there; conpty.dll launches OpenConsole.exe from its own
+# directory). Without them the inbox ConPTY drops OSC 7/133. The same pair
+# the NSIS/MSI bundle gets via tauri.windows.conf.json.
+foreach ($f in 'conpty.dll', 'OpenConsole.exe') {
+  Copy-Item -LiteralPath (Join-Path $conptyDir "x64/$f") -Destination (Join-Path $layout $f) -Force
+}
+New-Item -ItemType Directory -Path (Join-Path $layout 'licenses') -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $conptyDir 'LICENSE') -Destination (Join-Path $layout 'licenses\conpty-LICENSE.txt') -Force
 
 $manifest = Get-Content -LiteralPath $templatePath -Raw
 $manifest = $manifest.

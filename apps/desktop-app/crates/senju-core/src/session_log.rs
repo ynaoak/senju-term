@@ -183,6 +183,10 @@ impl<S: EventSink> EventSink for LoggingSink<S> {
         self.logger.stop(id);
         self.inner.exit(id, code);
     }
+
+    fn cwd(&self, id: &str, cwd: &str) {
+        self.inner.cwd(id, cwd);
+    }
 }
 
 /// Removes terminal control sequences from a byte stream, keeping only what

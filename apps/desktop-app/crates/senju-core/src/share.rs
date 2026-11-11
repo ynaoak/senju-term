@@ -6,7 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::models::{DevServerPreset, LaunchSet, Profile, Settings, SshHost, Workflow};
+use crate::models::{DevServerPreset, LaunchSet, Profile, Settings, SshHost, Workflow, WorkflowVar};
 
 /// Current envelope version. Bump only for incompatible changes; unknown
 /// FIELDS are already tolerated (serde defaults), so additive changes don't
@@ -145,6 +145,9 @@ pub struct ConfigExport {
     pub launch_sets: Vec<LaunchSet>,
     #[serde(default)]
     pub dev_servers: Vec<DevServerPreset>,
+    /// Absent in backups written before shared variables existed.
+    #[serde(default)]
+    pub workflow_vars: Vec<WorkflowVar>,
 }
 
 /// Builds the export envelope with every secret removed.
@@ -160,6 +163,7 @@ pub fn to_config_json(
     profiles: &[Profile],
     launch_sets: &[LaunchSet],
     dev_servers: &[DevServerPreset],
+    workflow_vars: &[WorkflowVar],
 ) -> String {
     let mut settings = settings.clone();
     settings.ai_api_key = String::new();
@@ -183,6 +187,7 @@ pub fn to_config_json(
         profiles: profiles.to_vec(),
         launch_sets: launch_sets.to_vec(),
         dev_servers: dev_servers.to_vec(),
+        workflow_vars: workflow_vars.to_vec(),
     };
     serde_json::to_string_pretty(&export).expect("config export serialization")
 }
@@ -244,7 +249,7 @@ mod config_tests {
     /// export keeps them while stripping the credentials beside them.
     #[test]
     fn export_keeps_group_tags_and_color() {
-        let json = to_config_json(&Settings::default(), &[], &[host_with_secrets()], &[], &[], &[]);
+        let json = to_config_json(&Settings::default(), &[], &[host_with_secrets()], &[], &[], &[], &[]);
         let export = from_config_json(&json).unwrap();
         let h = &export.ssh_hosts[0];
         assert_eq!(h.group, "Prod/Web");
@@ -259,7 +264,7 @@ mod config_tests {
     #[test]
     fn the_export_carries_no_secrets() {
         let settings = Settings { ai_api_key: "sk-ant-secret".into(), ..Settings::default() };
-        let json = to_config_json(&settings, &[], &[host_with_secrets()], &[], &[], &[]);
+        let json = to_config_json(&settings, &[], &[host_with_secrets()], &[], &[], &[], &[]);
 
         assert!(!json.contains("sk-ant-secret"), "the API key is in the export");
         assert!(!json.contains("hunter2"), "an SSH password is in the export");
@@ -322,9 +327,19 @@ mod config_tests {
                 ..Default::default()
             }],
         };
-        let json = to_config_json(&Settings::default(), &[], &[], &[profile], &[set], &[]);
+        let json = to_config_json(&Settings::default(), &[], &[], &[profile], &[set], &[], &[]);
         let export = from_config_json(&json).unwrap();
         assert_eq!(export.profiles[0].id, "p1");
         assert_eq!(export.launch_sets[0].items[0].profile_id, "p1");
+    }
+
+    #[test]
+    fn workflow_vars_roundtrip_and_old_backups_still_import() {
+        let vars = vec![WorkflowVar { name: "HOST".into(), value: "db".into() }];
+        let json = to_config_json(&Settings::default(), &[], &[], &[], &[], &[], &vars);
+        assert_eq!(from_config_json(&json).unwrap().workflow_vars, vars);
+        // A backup written before shared variables existed has no such key.
+        let old = r#"{"version":1,"workflows":[]}"#;
+        assert!(from_config_json(old).unwrap().workflow_vars.is_empty());
     }
 }

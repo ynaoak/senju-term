@@ -16,7 +16,7 @@ use senju_core::known_hosts::KnownHostEntry;
 use senju_core::sessions::{resolve_jump_chain, SessionInfo, SshSecrets, SshTestReport};
 use senju_core::template;
 use senju_core::devserver::{AccessLog, DevServerInfo, DevServerSink, DevServerSpec};
-use senju_core::models::{DevServerPreset, HistoryEntry, HistoryMeta, SessionSnapshot};
+use senju_core::models::{DevServerPreset, HistoryEntry, HistoryMeta, SessionSnapshot, WorkflowVar};
 use senju_core::{
     DevServerManager, LaunchSet, LocalSpec, Profile, SessionManager, Settings, SshHost, Stores,
     Workflow,
@@ -105,6 +105,12 @@ struct DataEvent<'a> {
 struct ExitEvent<'a> {
     id: &'a str,
     code: i32,
+}
+
+#[derive(Clone, Serialize)]
+struct CwdEvent<'a> {
+    id: &'a str,
+    cwd: &'a str,
 }
 
 impl TauriSink {
@@ -201,6 +207,12 @@ impl senju_core::EventSink for TauriSink {
             .app
             .emit_to("main", "session:exit", ExitEvent { id, code });
     }
+
+    fn cwd(&self, id: &str, cwd: &str) {
+        let _ = self
+            .app
+            .emit_to("main", "session:cwd", CwdEvent { id, cwd });
+    }
 }
 
 type CmdResult<T> = Result<T, String>;
@@ -222,6 +234,7 @@ fn create_local_session(
     profile_id: Option<String>,
     cols: u16,
     rows: u16,
+    cwd: Option<String>,
 ) -> CmdResult<SessionStarted> {
     // Resolve the requested profile (or the configured default). Fall back to
     // the legacy `settings.shell` override when no profiles exist at all.
@@ -237,6 +250,15 @@ fn create_local_session(
             ..Default::default()
         },
     };
+    // A restored thread's last directory wins over the profile's own cwd (it
+    // is where the user left off). A directory that no longer exists is
+    // ignored silently — the profile default applies.
+    let mut spec = spec;
+    if let Some(dir) = cwd.as_deref().filter(|d| !d.is_empty()) {
+        if std::path::Path::new(dir).is_dir() {
+            spec.cwd = dir.to_string();
+        }
+    }
     let settings = state.stores.settings();
     let info = state
         .sessions
@@ -784,6 +806,27 @@ fn reveal_path(path: String) -> CmdResult<()> {
     reveal_in_file_manager(&real).map_err(|e| e.to_string())
 }
 
+/// Picks, from nested candidate paths, the longest one that exists on disk.
+///
+/// The frontend cannot tell where an unquoted path with spaces ends
+/// (`PS C:\Users\Foo Bar\proj>`): the terminal printed no delimiter. It
+/// sends the progressively longer spellings (`C:\Users\Foo`,
+/// `C:\Users\Foo Bar`, ...) and this answers with the index of the last one
+/// that is real, or `None`. Only `metadata` is read: nothing is opened,
+/// listed or executed, so a line a remote host printed cannot make this do
+/// anything beyond a stat. It runs on hover, hence the cap of 16 candidates
+/// and the same rules as `reveal_path` (`~` expanded here, absolute only).
+#[tauri::command]
+fn longest_existing_path(candidates: Vec<String>) -> Option<usize> {
+    // Longest first, so the scan stops at the first hit.
+    let n = candidates.len().min(16);
+    candidates[..n].iter().rposition(|c| {
+        let expanded = expand_home(c);
+        let p = Path::new(&expanded);
+        p.is_absolute() && std::fs::metadata(p).is_ok()
+    })
+}
+
 /// Opens a terminal emulator outside the app, in `path` (or, for a file, its
 /// parent directory).
 ///
@@ -1208,9 +1251,28 @@ fn workflow_builtins(command: String) -> Vec<String> {
     template::builtin_names(&command)
 }
 
+/// Fills a template. Shared variables (`{{@NAME}}`) come from the store, so
+/// the UI never has to know them; an explicit value in `values` still wins,
+/// and an empty stored value is skipped so the template's own default
+/// (`{{@NAME:default}}`) applies. Values go in literally, never re-expanded.
 #[tauri::command]
-fn fill_workflow(command: String, values: HashMap<String, String>) -> String {
+fn fill_workflow(state: State<AppState>, command: String, mut values: HashMap<String, String>) -> String {
+    for v in state.stores.list_workflow_vars() {
+        if !v.value.is_empty() {
+            values.entry(format!("@{}", v.name)).or_insert(v.value);
+        }
+    }
     template::fill_placeholders(&command, &values)
+}
+
+#[tauri::command]
+fn list_workflow_vars(state: State<AppState>) -> Vec<WorkflowVar> {
+    state.stores.list_workflow_vars()
+}
+
+#[tauri::command]
+fn save_workflow_vars(state: State<AppState>, vars: Vec<WorkflowVar>) -> CmdResult<()> {
+    state.stores.save_workflow_vars(vars).map_err(|e| e.to_string())
 }
 
 // -- SSH hosts --------------------------------------------------------------------
@@ -1416,6 +1478,7 @@ fn export_settings(state: State<AppState>, path: String) -> CmdResult<()> {
         &state.stores.list_profiles(),
         &state.stores.list_launch_sets(),
         &state.stores.list_dev_servers(),
+        &state.stores.list_workflow_vars(),
     );
     std::fs::write(&path, json).map_err(|e| e.to_string())
 }
@@ -1432,6 +1495,7 @@ struct ImportPreview {
     profiles: usize,
     launch_sets: usize,
     dev_servers: usize,
+    workflow_vars: usize,
 }
 
 #[tauri::command]
@@ -1445,6 +1509,7 @@ fn read_settings_file(path: String) -> CmdResult<ImportPreview> {
         profiles: export.profiles.len(),
         launch_sets: export.launch_sets.len(),
         dev_servers: export.dev_servers.len(),
+        workflow_vars: export.workflow_vars.len(),
     })
 }
 
@@ -1469,6 +1534,7 @@ fn import_settings(state: State<AppState>, path: String) -> CmdResult<ImportPrev
         profiles: export.profiles.len(),
         launch_sets: export.launch_sets.len(),
         dev_servers: export.dev_servers.len(),
+        workflow_vars: export.workflow_vars.len(),
     };
     if let Some(mut settings) = export.settings {
         // Blank means "leave the stored key alone" in `save_settings`, and the
@@ -1491,6 +1557,9 @@ fn import_settings(state: State<AppState>, path: String) -> CmdResult<ImportPrev
     for preset in export.dev_servers {
         state.stores.save_dev_server(preset).map_err(|e| e.to_string())?;
     }
+    // Upserted by name: an existing variable takes the file's value, new ones
+    // are appended after the ones already here.
+    state.stores.merge_workflow_vars(export.workflow_vars).map_err(|e| e.to_string())?;
     Ok(preview)
 }
 
@@ -1695,6 +1764,7 @@ pub fn run() {
             test_ssh_connection,
             open_external,
             reveal_path,
+            longest_existing_path,
             open_external_terminal,
             session_log_dir,
             list_known_hosts,
@@ -1731,6 +1801,8 @@ pub fn run() {
             read_workflows_file,
             workflow_placeholders,
             fill_workflow,
+            list_workflow_vars,
+            save_workflow_vars,
             list_ssh_hosts,
             save_ssh_host,
             delete_ssh_host,
