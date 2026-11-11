@@ -10,8 +10,30 @@ use serde::{de::DeserializeOwned, Serialize};
 
 use crate::models::{
     DevServerPreset, HistoryEntry, HistoryMeta, LaunchSet, Profile, SessionSnapshot, Settings, SshHost,
-    Workflow,
+    Workflow, WorkflowVar,
 };
+
+/// Trims names and rejects invalid or duplicate ones, keeping the order.
+fn validate_workflow_vars(vars: Vec<WorkflowVar>) -> Result<Vec<WorkflowVar>, StoreError> {
+    let mut out: Vec<WorkflowVar> = Vec::with_capacity(vars.len());
+    for mut v in vars {
+        v.name = v.name.trim().to_string();
+        let mut chars = v.name.chars();
+        let valid = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !valid {
+            return Err(StoreError::Invalid(format!(
+                "変数名「{}」は使えません(英数字と _ のみ、先頭は英字か _)",
+                v.name
+            )));
+        }
+        if out.iter().any(|e| e.name == v.name) {
+            return Err(StoreError::Invalid(format!("変数名「{}」が重複しています", v.name)));
+        }
+        out.push(v);
+    }
+    Ok(out)
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -258,6 +280,36 @@ impl Stores {
         let mut items: Vec<DevServerPreset> = self.read("dev-servers", Vec::new);
         items.retain(|p| p.id != id);
         self.write("dev-servers", &items)
+    }
+
+    // -- Shared workflow variables ----------------------------------------------
+
+    pub fn list_workflow_vars(&self) -> Vec<WorkflowVar> {
+        self.read("workflow-vars", Vec::new)
+    }
+
+    /// Replaces the whole list. Names are trimmed and must look like an
+    /// identifier (`{{@name}}` is parsed out of free text, so anything with a
+    /// `:`, `|`, `}` or space could never be referenced) and be unique.
+    pub fn save_workflow_vars(&self, vars: Vec<WorkflowVar>) -> Result<(), StoreError> {
+        let vars = validate_workflow_vars(vars)?;
+        let _g = self.guard();
+        self.write("workflow-vars", &vars)
+    }
+
+    /// Adds or replaces variables by name, keeping the others and their
+    /// order. Used by the settings import.
+    pub fn merge_workflow_vars(&self, incoming: Vec<WorkflowVar>) -> Result<(), StoreError> {
+        let incoming = validate_workflow_vars(incoming)?;
+        let _g = self.guard();
+        let mut items: Vec<WorkflowVar> = self.read("workflow-vars", Vec::new);
+        for v in incoming {
+            match items.iter_mut().find(|e| e.name == v.name) {
+                Some(existing) => existing.value = v.value,
+                None => items.push(v),
+            }
+        }
+        self.write("workflow-vars", &items)
     }
 
     // -- Session snapshot -----------------------------------------------------
@@ -670,6 +722,42 @@ mod tests {
         assert!(!s.list_profiles().iter().any(|p| p.id == saved.id));
     }
 
+    fn var(name: &str, value: &str) -> WorkflowVar {
+        WorkflowVar { name: name.into(), value: value.into() }
+    }
+
+    #[test]
+    fn workflow_vars_roundtrip_in_order_and_trim_names() {
+        let (_d, s) = stores();
+        assert!(s.list_workflow_vars().is_empty());
+        s.save_workflow_vars(vec![var(" B ", "2"), var("a_1", ""), var("_c", "x y")]).unwrap();
+        assert_eq!(s.list_workflow_vars(), vec![var("B", "2"), var("a_1", ""), var("_c", "x y")]);
+        // Saving replaces the whole list.
+        s.save_workflow_vars(vec![var("only", "1")]).unwrap();
+        assert_eq!(s.list_workflow_vars(), vec![var("only", "1")]);
+    }
+
+    #[test]
+    fn workflow_vars_reject_bad_and_duplicate_names_without_writing() {
+        let (_d, s) = stores();
+        s.save_workflow_vars(vec![var("keep", "1")]).unwrap();
+        for bad in ["", "  ", "1abc", "a b", "a:b", "a|b", "a}", "@x", "変数"] {
+            let err = s.save_workflow_vars(vec![var(bad, "v")]).unwrap_err();
+            assert!(matches!(err, StoreError::Invalid(_)), "{bad:?}");
+        }
+        let err = s.save_workflow_vars(vec![var("x", "1"), var(" x", "2")]).unwrap_err();
+        assert!(matches!(err, StoreError::Invalid(_)));
+        assert_eq!(s.list_workflow_vars(), vec![var("keep", "1")], "failed saves leave the list alone");
+    }
+
+    #[test]
+    fn merge_workflow_vars_upserts_by_name() {
+        let (_d, s) = stores();
+        s.save_workflow_vars(vec![var("a", "1"), var("b", "2")]).unwrap();
+        s.merge_workflow_vars(vec![var("b", "new"), var("c", "3")]).unwrap();
+        assert_eq!(s.list_workflow_vars(), vec![var("a", "1"), var("b", "new"), var("c", "3")]);
+    }
+
     #[test]
     fn launch_set_crud_roundtrip() {
         let (_d, s) = stores();
@@ -776,8 +864,14 @@ mod tests {
         assert_eq!(s.session_snapshot(), SessionSnapshot::default());
         let snap = SessionSnapshot {
             threads: vec![
-                SnapshotThread { profile_id: "builtin:bash".into(), ssh_host_id: String::new() },
-                SnapshotThread { profile_id: String::new(), ssh_host_id: "h1".into() },
+                SnapshotThread {
+                    profile_id: "builtin:bash".into(),
+                    title: "build".into(),
+                    cwd: "/tmp/proj".into(),
+                    pinned: true,
+                    ..Default::default()
+                },
+                SnapshotThread { ssh_host_id: "h1".into(), ..Default::default() },
             ],
         };
         s.save_session_snapshot(&snap).unwrap();
@@ -785,6 +879,17 @@ mod tests {
         // Overwrite with an empty layout (all threads closed before quit).
         s.save_session_snapshot(&SessionSnapshot::default()).unwrap();
         assert_eq!(s.session_snapshot(), SessionSnapshot::default());
+    }
+
+    #[test]
+    fn session_snapshot_loads_old_files_without_new_fields() {
+        // Written before title/cwd/pinned existed.
+        let old = r#"{"threads":[{"profile_id":"builtin:bash","ssh_host_id":""}]}"#;
+        let snap: SessionSnapshot = serde_json::from_str(old).unwrap();
+        assert_eq!(snap.threads.len(), 1);
+        let t = &snap.threads[0];
+        assert_eq!(t.profile_id, "builtin:bash");
+        assert!(t.title.is_empty() && t.cwd.is_empty() && !t.pinned);
     }
 
     #[test]

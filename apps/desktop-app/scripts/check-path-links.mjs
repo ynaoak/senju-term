@@ -33,7 +33,9 @@ if (from < 0 || to < 0 || to <= from) {
   );
   process.exit(1);
 }
-const findPathsInLine = new Function(`${appJs.slice(from, to)}; return findPathsInLine;`)();
+const { findPathsInLine, pathExtensionCandidates } = new Function(
+  `${appJs.slice(from, to)}; return { findPathsInLine, pathExtensionCandidates };`
+)();
 
 // `pathFromSelection` decides what the right-click menu acts on, and it sits
 // below the lifted span, so it is pulled out on its own.
@@ -73,6 +75,16 @@ const CASES = [
   // would resolve against the wrong directory.
   ['relative src/lib.rs is not linked', []],
   ['./configure --prefix=/usr/local', ['/usr/local']],
+  // Quoted paths may hold spaces; the hit is the contents, not the quotes.
+  ['cd "C:\\Program Files\\App" now', ['C:\\Program Files\\App']],
+  ["open '/Users/me/My Docs/f.txt' ok", ['/Users/me/My Docs/f.txt']],
+  ['cat "/Users/me/My Docs/f.txt:12:3"', ['/Users/me/My Docs/f.txt']],
+  // Shell-escaped spaces in POSIX paths are one hit, unescaped in `text`.
+  ['/home/me/My\\ Docs/a.txt', ['/home/me/My Docs/a.txt']],
+  ['ls /home/me/My\\ Docs/a.txt b', ['/home/me/My Docs/a.txt']],
+  // Unquoted plain spaces: the sync matcher alone stops at the space (the disk
+  // check in extendPathHits does the rest).
+  ['PS C:\\Users\\Foo Bar>', ['C:\\Users\\Foo']],
   // Nothing worth linking.
   ['bare / and ~ are skipped', []],
   ['no paths here at all', []],
@@ -92,7 +104,9 @@ for (const [line, want] of CASES) {
 // the wrong columns puts the link on the neighbouring words.
 for (const [line] of CASES) {
   for (const hit of findPathsInLine(line)) {
-    const slice = line.slice(hit.start, hit.end);
+    // `text` may differ from the raw slice only by `\ ` -> ` ` in POSIX paths.
+    const raw = line.slice(hit.start, hit.end);
+    const slice = /^[~/]/.test(raw) ? raw.replace(/\\ /g, ' ') : raw;
     if (slice !== hit.text) {
       failed++;
       console.error(
@@ -126,6 +140,31 @@ for (const [line, col, want] of COLUMN_CASES) {
   }
 }
 
+// The PowerShell-prompt case: the candidates are what the backend is asked to
+// stat, so they must include the full directory and carry the right end column.
+{
+  const line = 'PS C:\\Users\\Foo Bar> ';
+  const [hit] = findPathsInLine(line);
+  const cands = pathExtensionCandidates(line, hit);
+  const want = { text: 'C:\\Users\\Foo Bar', end: 'PS C:\\Users\\Foo Bar'.length };
+  if (!cands.some((c) => c.text === want.text && c.end === want.end)) {
+    failed++;
+    console.error(`  FAIL candidates for ${JSON.stringify(line)}\n       got  ${JSON.stringify(cands)}\n       want ${JSON.stringify(want)}`);
+  }
+  const posix = '/Users/me/My Docs/x';
+  const [ph] = findPathsInLine(posix);
+  const pc = pathExtensionCandidates(posix, ph);
+  if (!pc.some((c) => c.text === '/Users/me/My Docs/x' && c.end === posix.length)) {
+    failed++;
+    console.error(`  FAIL candidates for ${JSON.stringify(posix)}: ${JSON.stringify(pc)}`);
+  }
+  const none = 'ls /tmp/a  b';
+  if (pathExtensionCandidates(none, findPathsInLine(none)[0]).length) {
+    failed++;
+    console.error('  FAIL double space must not extend');
+  }
+}
+
 // A selection only counts when it is entirely one path: acting on a path found
 // inside a selected sentence would reveal something never pointed at.
 const SELECTION_CASES = [
@@ -139,6 +178,12 @@ const SELECTION_CASES = [
   // No whitespace, so these reach the "is the selection *exactly* one path"
   // test rather than being rejected before it.
   ['(/tmp/a.txt)', ''],
+  // Spaces: allowed for a single line that starts like an absolute path.
+  ['C:\\Users\\Foo Bar\\a.txt', 'C:\\Users\\Foo Bar\\a.txt'],
+  ['"/Users/me/My Docs"', '/Users/me/My Docs'],
+  ['/Users/me/My\\ Docs', '/Users/me/My Docs'],
+  ['/Users/me/My Docs\n/tmp/x', ''],
+  ['/Users/me/My Docs.', ''],
   ['x/home/user/a.txt', ''],
 ];
 for (const [selection, want] of SELECTION_CASES) {

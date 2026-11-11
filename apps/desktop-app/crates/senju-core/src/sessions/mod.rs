@@ -3,10 +3,12 @@
 //! shells (via russh, pure Rust) are exposed behind one id-based interface so
 //! the UI layer only deals with a single data/exit event stream.
 
+mod conpty_sideload;
 mod forward;
 pub mod sftp;
 mod jump;
 mod local;
+mod proc_cwd;
 mod shell_integration;
 mod ssh;
 
@@ -27,6 +29,11 @@ use crate::models::SshHost;
 pub trait EventSink: Send + Sync + 'static {
     fn data(&self, id: &str, data: &[u8]);
     fn exit(&self, id: &str, code: i32);
+    /// The shell's working directory changed (or became known). Reported out
+    /// of band — a file the shell writes, or a process query — because the
+    /// OSC 7 in the byte stream does not survive Windows' ConPTY. Default
+    /// no-op: sinks that only care about output need not implement it.
+    fn cwd(&self, _id: &str, _cwd: &str) {}
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -418,6 +425,7 @@ mod tests {
     struct Capture {
         data: StdMutex<Vec<u8>>,
         exited: StdMutex<Option<i32>>,
+        cwds: StdMutex<Vec<String>>,
     }
 
     impl EventSink for Capture {
@@ -426,6 +434,9 @@ mod tests {
         }
         fn exit(&self, _id: &str, code: i32) {
             *self.exited.lock().unwrap() = Some(code);
+        }
+        fn cwd(&self, _id: &str, cwd: &str) {
+            self.cwds.lock().unwrap().push(cwd.to_string());
         }
     }
 
@@ -582,6 +593,53 @@ mod tests {
         );
     }
 
+    /// The side channel, end to end: a real bash writes its directory to the
+    /// cwd file at each prompt and the poller turns that into `sink.cwd` — the
+    /// path the task pane takes on Windows, where OSC 7 never arrives. Also
+    /// pins that the first prompt reports the start directory and that no
+    /// event follows the exit.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn cwd_poller_emits_the_directory_through_the_sink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(tmp.path()).unwrap();
+        std::fs::create_dir(root.join("proj")).unwrap();
+
+        let sink = Arc::new(Capture::default());
+        let mgr = SessionManager::new(sink.clone());
+        let spec = LocalSpec {
+            command: "bash".into(),
+            cwd: root.to_string_lossy().into_owned(),
+            ..Default::default()
+        };
+        let info = mgr.create_local(&spec, 80, 24, true).unwrap();
+
+        let start = root.to_string_lossy().into_owned();
+        let moved = format!("{}/proj", root.display());
+        assert!(
+            wait_until(Duration::from_secs(10), || sink.cwds.lock().unwrap().contains(&start)),
+            "start directory not reported: {:?}",
+            sink.cwds.lock().unwrap()
+        );
+        mgr.write(&info.id, b"cd proj\n").await.unwrap();
+        assert!(
+            wait_until(Duration::from_secs(10), || sink.cwds.lock().unwrap().contains(&moved)),
+            "cd not reported: {:?}",
+            sink.cwds.lock().unwrap()
+        );
+        assert_eq!(
+            sink.cwds.lock().unwrap().iter().filter(|c| **c == moved).count(),
+            1,
+            "an unchanged directory must not be re-emitted"
+        );
+
+        mgr.write(&info.id, b"exit\n").await.unwrap();
+        assert!(wait_until(Duration::from_secs(10), || sink.exited.lock().unwrap().is_some()));
+        std::thread::sleep(Duration::from_millis(700));
+        let seen = sink.cwds.lock().unwrap().len();
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(sink.cwds.lock().unwrap().len(), seen, "no cwd events after exit");
+    }
+
     /// End-to-end for PowerShell: the injected `-NoExit -EncodedCommand`
     /// script must really run in `pwsh` and report the directory via OSC 7
     /// after a `cd`. The unit tests only decode the script; this proves pwsh
@@ -611,13 +669,35 @@ mod tests {
         };
         let info = mgr.create_local(&spec, 80, 24, true).unwrap();
 
+        // PSReadLine asks the terminal where the cursor is (DSR, `ESC[6n`) and
+        // blocks until it hears back. A real terminal (xterm.js in the app)
+        // answers; this capture sink does not, so the test plays terminal and
+        // answers each query. Without that, pwsh stalls at its first prompt
+        // and the `cd` is never read. The `cd` itself waits for that prompt
+        // (OSC 133;B) so it is not typed into a shell still starting up.
         let want = "\x1b]7;file://";
         let moved = format!("{}/proj\x07", root.display());
-        mgr.write(&info.id, b"cd proj\r").await.unwrap();
-        let ok = wait_until(Duration::from_secs(20), || {
+        let start = Instant::now();
+        let mut answered = 0;
+        let mut sent_cd = false;
+        let mut ok = false;
+        while start.elapsed() < Duration::from_secs(30) {
             let out = String::from_utf8_lossy(&sink.data.lock().unwrap()).into_owned();
-            out.contains(want) && out.contains(&moved)
-        });
+            if sent_cd && out.contains(want) && out.contains(&moved) {
+                ok = true;
+                break;
+            }
+            let queries = out.matches("\x1b[6n").count();
+            while answered < queries {
+                mgr.write(&info.id, b"\x1b[1;1R").await.unwrap();
+                answered += 1;
+            }
+            if !sent_cd && out.contains("\x1b]133;B\x07") {
+                mgr.write(&info.id, b"cd proj\r").await.unwrap();
+                sent_cd = true;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
         let out = sink.data.lock().unwrap();
         assert!(
             ok,

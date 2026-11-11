@@ -140,6 +140,7 @@
             <div class="wf-main">
               <div class="panel-head">
                 <input id="wf-search" type="search" data-i18n-ph="panel.workflows.search.ph" />
+                <button id="wf-vars" class="ghost-btn" data-i18n-title="wf.vars.title"><span data-icon="dataObject"></span><span data-i18n="wf.vars">共通変数</span></button>
                 <button id="wf-export" class="ghost-btn" data-i18n-title="wf.export"><span data-icon="upload"></span><span data-i18n="wf.export">書き出し</span></button>
                 <button id="wf-import" class="ghost-btn" data-i18n-title="wf.import"><span data-icon="download"></span><span data-i18n="wf.import">取り込み</span></button>
                 <button id="wf-add" class="accent-btn"><span data-icon="plus"></span><span data-i18n="common.register">登録</span></button>
@@ -290,7 +291,7 @@
                 <input name="shell_integration" type="checkbox" />
                 <span data-i18n="settings.shellIntegration">シェル統合を自動で有効化(コマンドブロック用)</span>
               </label>
-              <p class="field-hint" data-i18n="settings.shellIntegration.hint">bash / zsh / fish の起動時に OSC 133 のプロンプト連携を自動で組み込みます。rc ファイルは変更されません。</p>
+              <p class="field-hint" data-i18n="settings.shellIntegration.hint">bash / zsh / fish / PowerShell (pwsh・Windows PowerShell) / cmd / nushell / WSL の起動時に、OSC 133 のプロンプト連携と作業ディレクトリ通知を自動で組み込みます。Windows の ConPTY は OSC 7 を捨てるため、作業ディレクトリはセッションごとの小さな一時ファイル (cmd はプロセス自身) からも取得します。rc ファイルや $PROFILE は変更されません。</p>
               <label class="checkbox-row">
                 <input name="notify_long_commands" type="checkbox" />
                 <span data-i18n="settings.notifyLong">長時間コマンドの完了をデスクトップ通知</span>

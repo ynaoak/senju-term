@@ -160,6 +160,17 @@ pub struct DevServerPreset {
     pub open_browser: bool,
 }
 
+/// A shared workflow variable: `{{@name}}` in any workflow template expands to
+/// `value`. Kept as an ordered list (not a map) so the editor shows them in
+/// the order the user arranged. Values are inserted literally — a value that
+/// itself contains `{{...}}` is not expanded again.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct WorkflowVar {
+    pub name: String,
+    #[serde(default)]
+    pub value: String,
+}
+
 fn default_hot_reload() -> bool {
     true
 }
@@ -227,12 +238,23 @@ pub struct LaunchSet {
 
 /// One thread in the saved session layout: which profile (local) or SSH
 /// host it was running. Exactly one side is set, mirroring LaunchSetItem.
+/// `title` / `cwd` / `pinned` are the per-thread state restored on top of the
+/// profile; all `serde(default)` so snapshots written by older builds load.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct SnapshotThread {
     #[serde(default)]
     pub profile_id: String,
     #[serde(default)]
     pub ssh_host_id: String,
+    /// The user's custom thread name only — empty when the thread was using
+    /// its automatic title.
+    #[serde(default)]
+    pub title: String,
+    /// Last directory reported over OSC 7; empty means unknown.
+    #[serde(default)]
+    pub cwd: String,
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// The thread layout at last shutdown, used to restore the workspace on the

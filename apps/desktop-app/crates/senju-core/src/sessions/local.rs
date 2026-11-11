@@ -2,11 +2,14 @@
 //! on Unix — the same crate WezTerm uses).
 
 use std::io::{Read, Write};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, SystemTime};
 
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 
-use super::shell_integration;
+use super::shell_integration::{self, resolve_reported_cwd, CwdSource};
+use super::proc_cwd;
 use super::{EventSink, LocalSpec, SessionError, SessionMap};
 
 /// Shared PTY writer handle. Cloned out of the session map so the (blocking)
@@ -27,6 +30,56 @@ pub(crate) type LocalWriter = Arc<Mutex<Box<dyn Write + Send>>>;
 pub(crate) struct LocalReader {
     reader: Box<dyn Read + Send>,
     child: Box<dyn Child + Send + Sync>,
+    /// Where the shell's cwd can be read from when OSC 7 can't be trusted to
+    /// arrive (Windows ConPTY), and the child's pid for the process source.
+    cwd_source: Option<CwdSource>,
+    pid: Option<u32>,
+}
+
+/// How often the cwd source is checked. A prompt-to-prompt change is human
+/// speed; this keeps the task pane feeling live without busy-polling.
+const CWD_POLL_INTERVAL: Duration = Duration::from_millis(300);
+
+/// Turns a [`CwdSource`] into "the cwd, if it changed since last asked".
+struct CwdPoller {
+    source: CwdSource,
+    pid: Option<u32>,
+    /// `(len, mtime)` of the cwd file at the last read — the file is only
+    /// re-read when this moves.
+    stamp: Option<(u64, SystemTime)>,
+    last_emitted: Option<String>,
+}
+
+impl CwdPoller {
+    fn new(source: CwdSource, pid: Option<u32>) -> Self {
+        Self { source, pid, stamp: None, last_emitted: None }
+    }
+
+    /// The resolved cwd when it differs from the last one returned; `None` for
+    /// "nothing new", including an empty or unreadable source.
+    fn poll(&mut self) -> Option<String> {
+        let raw = match &self.source {
+            CwdSource::File(path) => {
+                let meta = std::fs::metadata(path).ok()?;
+                let stamp = (meta.len(), meta.modified().ok()?);
+                if self.stamp == Some(stamp) {
+                    return None;
+                }
+                // Only remember the stamp once the read worked, so a
+                // transient failure is retried on the next tick.
+                let raw = std::fs::read_to_string(path).ok()?;
+                self.stamp = Some(stamp);
+                raw
+            }
+            CwdSource::Process => proc_cwd::process_cwd(self.pid?)?,
+        };
+        let cwd = resolve_reported_cwd(&raw, cfg!(windows))?;
+        if self.last_emitted.as_deref() == Some(cwd.as_str()) {
+            return None;
+        }
+        self.last_emitted = Some(cwd.clone());
+        Some(cwd)
+    }
 }
 
 impl LocalReader {
@@ -34,7 +87,27 @@ impl LocalReader {
     /// session from the map and announces the exit. Call only after the
     /// session has been inserted into `sessions`.
     pub fn start(self, id: String, sink: Arc<dyn EventSink>, sessions: SessionMap) {
-        let LocalReader { mut reader, mut child } = self;
+        let LocalReader { mut reader, mut child, cwd_source, pid } = self;
+        // Set by the reader thread before it announces the exit, so the poller
+        // can never emit a `cwd` for a session the frontend already dropped.
+        let ended = Arc::new(AtomicBool::new(false));
+        if let Some(source) = cwd_source {
+            let ended = ended.clone();
+            let sink = sink.clone();
+            let id = id.clone();
+            std::thread::spawn(move || {
+                let mut poller = CwdPoller::new(source, pid);
+                while !ended.load(Ordering::Acquire) {
+                    if let Some(cwd) = poller.poll() {
+                        if ended.load(Ordering::Acquire) {
+                            break;
+                        }
+                        sink.cwd(&id, &cwd);
+                    }
+                    std::thread::sleep(CWD_POLL_INTERVAL);
+                }
+            });
+        }
         std::thread::spawn(move || {
             let mut buf = [0u8; 8192];
             loop {
@@ -45,6 +118,7 @@ impl LocalReader {
             }
             let code = child.wait().map(|s| s.exit_code() as i32).unwrap_or(-1);
             sessions.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            ended.store(true, Ordering::Release);
             sink.exit(&id, code);
         });
     }
@@ -54,8 +128,8 @@ pub(crate) struct LocalSession {
     master: Mutex<Box<dyn MasterPty + Send>>,
     writer: LocalWriter,
     killer: Mutex<Box<dyn ChildKiller + Send + Sync>>,
-    // Keeps the generated shell-integration rcfile/ZDOTDIR alive for the
-    // session's lifetime — the shell only reads it at startup, but holding it
+    // Keeps the generated shell-integration rcfile/ZDOTDIR and the cwd file
+    // alive for the session's lifetime — the shell only reads it at startup, but holding it
     // for the whole session (rather than deleting right after spawn) avoids
     // any race with a slow-starting shell.
     _integration_guard: Option<tempfile::TempDir>,
@@ -71,6 +145,9 @@ impl LocalSession {
         rows: u16,
         shell_integration_enabled: bool,
     ) -> Result<(Self, String, LocalReader), SessionError> {
+        // Before portable-pty's first ConPTY lookup (it loads `conpty.dll` by
+        // name); a no-op off Windows and after the first call.
+        super::conpty_sideload::ensure_loaded();
         let shell = if spec.command.is_empty() {
             default_shell()
         } else {
@@ -87,9 +164,10 @@ impl LocalSession {
             })
             .map_err(|e| SessionError::Pty(e.to_string()))?;
 
-        // Best-effort: a recognized shell (bash/zsh/fish/PowerShell) gets OSC 133 hooks
-        // spliced into its launch, so the frontend's command-block UI works
-        // without the user editing any rc file themselves.
+        // Best-effort: a recognized shell (bash/zsh/fish/nu/PowerShell/cmd/wsl)
+        // gets OSC 133 hooks and a cwd side channel spliced into its launch, so
+        // the frontend's command-block UI and task pane work without the user
+        // editing any rc file themselves.
         let integration = shell_integration_enabled
             .then(|| shell_integration::build(&shell, &spec.args))
             .flatten();
@@ -100,7 +178,13 @@ impl LocalSession {
                 cmd.arg(arg);
             }
         }
-        for arg in &spec.args {
+        // An integration may replace the profile's args (bash drops its
+        // login flags and emulates them in the rcfile instead).
+        let profile_args = integration
+            .as_ref()
+            .and_then(|i| i.replace_args.as_ref())
+            .unwrap_or(&spec.args);
+        for arg in profile_args {
             cmd.arg(arg);
         }
         if let Some(integ) = &integration {
@@ -124,6 +208,7 @@ impl LocalSession {
             .map_err(|e| SessionError::Pty(e.to_string()))?;
         drop(pair.slave);
 
+        let pid = child.process_id();
         let killer = child.clone_killer();
         let reader = pair
             .master
@@ -139,6 +224,7 @@ impl LocalSession {
         } else {
             spec.title.clone()
         };
+        let cwd_source = integration.as_ref().and_then(|i| i.cwd_source.clone());
         Ok((
             Self {
                 master: Mutex::new(pair.master),
@@ -147,7 +233,7 @@ impl LocalSession {
                 _integration_guard: integration.and_then(|i| i.guard),
             },
             title,
-            LocalReader { reader, child },
+            LocalReader { reader, child, cwd_source, pid },
         ))
     }
 
@@ -230,6 +316,28 @@ fn expand_home(path: &str) -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poller_reads_the_file_only_when_it_changes_and_dedups() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("cwd");
+        let mut p = CwdPoller::new(CwdSource::File(file.clone()), None);
+        assert_eq!(p.poll(), None, "missing file emits nothing");
+
+        std::fs::write(&file, "").unwrap();
+        assert_eq!(p.poll(), None, "empty file emits nothing");
+
+        std::fs::write(&file, "/home/me/proj\n\n").unwrap();
+        assert_eq!(p.poll().as_deref(), Some("/home/me/proj"));
+        assert_eq!(p.poll(), None, "unchanged stamp is not re-read");
+
+        // Same resolved value in a differently sized file: still no emit.
+        std::fs::write(&file, "/home/me/proj\nextra-line-changes-len\n").unwrap();
+        assert_eq!(p.poll(), None, "same cwd is not emitted twice");
+
+        std::fs::write(&file, "/tmp\n").unwrap();
+        assert_eq!(p.poll().as_deref(), Some("/tmp"));
+    }
 
     #[test]
     fn windows_default_prefers_pwsh_on_path() {

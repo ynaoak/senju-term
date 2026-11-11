@@ -15,6 +15,12 @@
 //! supplies it in the values map at run time. This module only has to keep
 //! them out of the prompt list and say which ones a template uses, so the
 //! UI reads the clipboard, say, only when a template actually asks for it.
+//!
+//! Names starting with `@` are *shared variables* — `{{@NAME}}`, or
+//! `{{@NAME:default}}` for a fallback when the variable is undefined or
+//! empty. The user defines them once (`Stores::save_workflow_vars`) and any
+//! template may use them. Like built-ins they are never prompted for; the
+//! app puts them in the values map under their `@`-prefixed key.
 
 use std::collections::HashMap;
 
@@ -46,6 +52,12 @@ pub fn is_builtin(name: &str) -> bool {
     name.starts_with('$')
 }
 
+/// An `@`-prefixed name: a user-defined shared variable, never asked of the
+/// user at run time.
+pub fn is_shared(name: &str) -> bool {
+    name.starts_with('@')
+}
+
 /// The built-in names a template references, each once, in order.
 pub fn builtin_names(command: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
@@ -58,13 +70,13 @@ pub fn builtin_names(command: &str) -> Vec<String> {
 }
 
 /// Extracts the placeholders to prompt for, in order of first appearance.
-/// Built-ins are left out. Duplicate names are reported once; the first
+/// Built-ins and shared variables are left out. Duplicate names are reported once; the first
 /// occurrence that carries a default wins, and the first occurrence that
 /// carries options wins.
 pub fn extract_placeholders(command: &str) -> Vec<Placeholder> {
     let mut out: Vec<Placeholder> = Vec::new();
     for p in scan(command) {
-        if is_builtin(&p.name) {
+        if is_builtin(&p.name) || is_shared(&p.name) {
             continue;
         }
         match out.iter_mut().find(|e| e.name == p.name) {
@@ -278,5 +290,27 @@ mod tests {
         // built-in into a prompt either.
         assert!(extract_placeholders("{{$host|a,b}}").is_empty());
         assert_eq!(builtin_names("{{$host|a,b}}"), vec!["$host"]);
+    }
+
+    #[test]
+    fn shared_variables_are_not_prompted_but_are_filled() {
+        let t = "echo {{@TOKEN}} {{name}} {{@x:fallback}}";
+        let prompts: Vec<_> = extract_placeholders(t).into_iter().map(|p| p.name).collect();
+        assert_eq!(prompts, vec!["name".to_string()]);
+        assert!(is_shared("@TOKEN") && !is_shared("TOKEN") && !is_shared("$cwd"));
+        let v = values(&[("@TOKEN", "abc"), ("name", "n")]);
+        assert_eq!(fill_placeholders(t, &v), "echo abc n fallback");
+    }
+
+    #[test]
+    fn shared_variable_falls_back_to_its_default_when_undefined() {
+        assert_eq!(fill_placeholders("{{@host:localhost}}:80", &HashMap::new()), "localhost:80");
+        assert_eq!(fill_placeholders("{{@host:localhost}}:80", &values(&[("@host", "db")])), "db:80");
+        assert_eq!(fill_placeholders("a{{@nope}}b", &HashMap::new()), "ab");
+    }
+
+    #[test]
+    fn shared_variables_with_options_are_still_not_prompts() {
+        assert!(extract_placeholders("{{@x|a,b}}").is_empty());
     }
 }

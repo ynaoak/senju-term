@@ -21,6 +21,7 @@ const state = {
   splitDir: 'v',       // 'v' = top/bottom stack, 'h' = left/right columns
   broadcast: false,    // when split: keystrokes fan out to every visible pane
   workflows: [],
+  workflowVars: [],    // shared {{@NAME}} variables: [{ name, value }], in the user's order
   hosts: [],
   profiles: [],
   launchSets: [],      // { id, name, items: [{ profile_id, ssh_host_id, workflow_id }] }
@@ -187,7 +188,7 @@ const STRINGS = {
   'tasks.empty.none.title': { ja: 'タスクはありません', en: 'No tasks here' },
   'tasks.empty.noThread': { ja: 'シェルを開くと、その作業ディレクトリのタスクがここに並びます。', en: 'Open a shell and the tasks in its working directory will appear here.' },
   'tasks.empty.ssh': { ja: 'SSH スレッドは未対応です。作業ディレクトリを知るにはリモート側のシェル統合が必要で、まだ入れていません。', en: 'SSH threads are not supported yet: knowing the working directory needs shell integration on the remote side, which is not in place.' },
-  'tasks.empty.noCwd': { ja: '作業ディレクトリをまだ受け取っていません。シェルでコマンドを 1 回実行すると分かります。シェルが bash / zsh / fish / PowerShell で、設定のシェル統合が有効である必要があります (cmd.exe は非対応です)。', en: 'No working directory reported yet. Run one command in the shell and it will arrive. The shell must be bash / zsh / fish / PowerShell with shell integration enabled in Settings (cmd.exe is not supported).' },
+  'tasks.empty.noCwd': { ja: '作業ディレクトリをまだ受け取っていません。シェルでコマンドを 1 回実行すると分かります。シェルが bash / zsh / fish / PowerShell / cmd / nushell / WSL (wsl.exe) のいずれかで、設定のシェル統合が有効である必要があります。有効にした後は、新しいシェルを開いてください。', en: 'No working directory reported yet. Run one command in the shell and it will arrive. The shell must be bash / zsh / fish / PowerShell / cmd / nushell / WSL (wsl.exe) with shell integration enabled in Settings. After enabling it, open a new shell.' },
   'tasks.empty.none': { ja: 'このディレクトリには、読み取れるタスク定義がありませんでした。', en: 'No task definitions were found in this directory.' },
   'palette.task': { ja: 'タスク: {name}', en: 'Task: {name}' },
   'palette.tasksOpen': { ja: 'タスク一覧を開く', en: 'Open the task list' },
@@ -226,6 +227,18 @@ const STRINGS = {
   'wf.emptyTitle': { ja: 'ワークフローがまだありません', en: 'No workflows yet' },
   'wf.emptyHint': { ja: 'よく使うコマンドをテンプレート化すると、ワンキーや検索から実行できます。', en: 'Templatize frequently used commands to run them with one key or from search.' },
   'wf.emptyCta': { ja: 'ワークフローを登録', en: 'Add workflow' },
+  'wf.vars': { ja: '共通変数', en: 'Shared variables' },
+  'wf.vars.title': { ja: '全ワークフローで使える共通変数を編集', en: 'Edit variables shared by every workflow' },
+  'wf.vars.note': { ja: '{{@名前}} でどのワークフローからも参照できます。{{@名前:既定値}} で未定義時の値を指定できます。', en: 'Use {{@name}} in any workflow. {{@name:default}} sets the value used when the variable is undefined or empty.' },
+  'wf.vars.name.ph': { ja: '名前', en: 'Name' },
+  'wf.vars.value.ph': { ja: '値', en: 'Value' },
+  'wf.vars.add': { ja: '変数を追加', en: 'Add variable' },
+  'wf.vars.remove': { ja: 'この変数を削除', en: 'Remove this variable' },
+  'wf.vars.saved': { ja: '共通変数を保存しました', en: 'Shared variables saved' },
+  'wf.vars.loadFailed': { ja: '共通変数の読み込みに失敗: {e}', en: 'Failed to load shared variables: {e}' },
+  'wf.vars.hint': { ja: '共通変数 (入力なしで自動展開): {names}', en: 'Shared variables (filled without prompting): {names}' },
+  'wf.vars.hint.none': { ja: '共通変数 {{@名前}} は未定義です。ワークフロー画面の「共通変数」から追加できます。', en: 'No shared variables ({{@name}}) yet. Add some from "Shared variables" in the Workflows panel.' },
+  'wf.copy': { ja: 'コマンドをコピー', en: 'Copy command' },
   'wf.export': { ja: '書き出し', en: 'Export' },
   'wf.import': { ja: '取り込み', en: 'Import' },
   'wf.export.done': { ja: '{count} 件のワークフローを書き出しました', en: 'Exported {count} workflows' },
@@ -247,7 +260,7 @@ const STRINGS = {
   'wf.group.ph': { ja: '未入力 = 未分類', en: 'Blank = uncategorized' },
   'wf.field.tags': { ja: 'タグ (カンマ区切り)', en: 'Tags (comma-separated)' },
   'wf.section.command': { ja: 'コマンド', en: 'Command' },
-  'wf.field.template': { ja: 'テンプレート ( {{名前}} / {{名前:既定値}} / {{名前|選択肢1,選択肢2}} でプレースホルダ )', en: 'Template ( use {{name}} / {{name:default}} / {{name|choice1,choice2}} for placeholders )' },
+  'wf.field.template': { ja: 'テンプレート ( {{名前}} / {{名前:既定値}} / {{名前|選択肢1,選択肢2}} でプレースホルダ、{{@名前}} で共通変数 )', en: 'Template ( use {{name}} / {{name:default}} / {{name|choice1,choice2}} for placeholders; {{@name}} for a shared variable )' },
   'wf.builtins.hint': { ja: '組み込み変数 (入力なしで自動展開): {{$cwd}} 作業ディレクトリ · {{$host}} {{$user}} {{$port}} 接続先 (SSH) · {{$thread}} スレッド名 · {{$date}} {{$time}} {{$datetime}} {{$timestamp}} 日時 · {{$selection}} 選択テキスト · {{$clipboard}} クリップボード (参照時のみ読み取り)', en: 'Built-in variables (filled without prompting): {{$cwd}} working directory · {{$host}} {{$user}} {{$port}} SSH destination · {{$thread}} thread name · {{$date}} {{$time}} {{$datetime}} {{$timestamp}} · {{$selection}} selected text · {{$clipboard}} clipboard (read only when referenced)' },
   'wf.section.launch': { ja: '起動方法', en: 'How to run' },
   'wf.field.shortcut': { ja: 'ショートカット (任意・Ctrl / Alt / Meta 必須)', en: 'Shortcut (optional; requires Ctrl / Alt / Meta)' },
@@ -587,12 +600,12 @@ const STRINGS = {
   'settings.group.backup': { ja: '設定の書き出し / 取り込み', en: 'Export / import settings' },
   'settings.export': { ja: '書き出し', en: 'Export' },
   'settings.import': { ja: '取り込み', en: 'Import' },
-  'settings.backup.hint': { ja: '設定・ワークフロー・SSH ホスト・端末プロファイル・起動セット・サーバー設定を 1 つの JSON にまとめます。別のマシンへ移すとき用です。取り込みは id 単位の上書きなので、同じファイルを 2 回取り込んでも増えません。', en: 'Bundles settings, workflows, SSH hosts, terminal profiles, launch sets and server presets into one JSON file, for moving to another machine. Import upserts by id, so importing the same file twice adds nothing.' },
+  'settings.backup.hint': { ja: '設定・ワークフロー・SSH ホスト・端末プロファイル・起動セット・サーバー設定・共通変数を 1 つの JSON にまとめます。別のマシンへ移すとき用です。取り込みは id 単位の上書きなので、同じファイルを 2 回取り込んでも増えません。', en: 'Bundles settings, workflows, SSH hosts, terminal profiles, launch sets, server presets and shared variables into one JSON file, for moving to another machine. Import upserts by id, so importing the same file twice adds nothing.' },
   'settings.backup.secrets': { ja: 'API キーと SSH の保存済みパスワード / パスフレーズは書き出しに含まれません。移行先では入力し直しになりますが、そのぶん書き出したファイルを共有・バックアップしても資格情報は漏れません。', en: 'The API key and any saved SSH passwords / passphrases are left out. You re-enter them on the other machine — and in exchange the exported file can be shared or backed up without carrying credentials.' },
   'settings.export.done': { ja: '設定を書き出しました', en: 'Settings exported' },
   'settings.export.failed': { ja: '設定を書き出せませんでした: {e}', en: 'Could not export settings: {e}' },
   'settings.import.confirm': { ja: 'このファイルを取り込みますか?', en: 'Import this file?' },
-  'settings.import.summary': { ja: 'ワークフロー {workflows} / SSH ホスト {sshHosts} / プロファイル {profiles} / 起動セット {launchSets} / サーバー設定 {devServers}', en: 'Workflows {workflows} · SSH hosts {sshHosts} · profiles {profiles} · launch sets {launchSets} · server presets {devServers}' },
+  'settings.import.summary': { ja: 'ワークフロー {workflows} / SSH ホスト {sshHosts} / プロファイル {profiles} / 起動セット {launchSets} / サーバー設定 {devServers} / 共通変数 {workflowVars}', en: 'Workflows {workflows} · SSH hosts {sshHosts} · profiles {profiles} · launch sets {launchSets} · server presets {devServers} · shared variables {workflowVars}' },
   'settings.import.settingsToo': { ja: 'アプリ設定(外観・ターミナルなど)も上書きされます。', en: 'App settings (appearance, terminal, …) will be overwritten too.' },
   'settings.import.done': { ja: '設定を取り込みました', en: 'Settings imported' },
   'settings.import.failed': { ja: '設定を取り込めませんでした: {e}', en: 'Could not import settings: {e}' },
@@ -659,7 +672,7 @@ const STRINGS = {
   'settings.group.terminal': { ja: 'ターミナル', en: 'Terminal' },
   'settings.scrollback': { ja: 'スクロールバック行数', en: 'Scrollback lines' },
   'settings.restoreSession': { ja: '前回のスレッド構成を復元', en: 'Restore previous threads on startup' },
-  'settings.restoreSession.hint': { ja: '起動時に、前回開いていたローカルスレッド(プロファイル構成と順序)を再作成します。SSH 接続は認証が必要なため自動再接続せず、SSH パネルや新規メニューから接続します。', en: 'Recreates the local threads (profiles and order) you had open last time. SSH connections are never auto-reconnected (they need credentials) — connect from the SSH panel or the new-thread menu.' },
+  'settings.restoreSession.hint': { ja: '起動時に、前回開いていたローカルスレッド(プロファイル構成と順序)を再作成します。スレッド名・ピン留め・作業ディレクトリも復元されます(ディレクトリは今も存在する場合のみ)。SSH 接続は認証が必要なため自動再接続せず、SSH パネルや新規メニューから接続します。', en: 'Recreates the local threads (profiles and order) you had open last time, including their names, pinned state and working directories (directories only if they still exist). SSH connections are never auto-reconnected (they need credentials) — connect from the SSH panel or the new-thread menu.' },
   'restore.sshSkipped': { ja: 'SSH スレッド {count} 件は認証が必要なため復元されませんでした(SSH パネルから接続してください)', en: 'Skipped restoring {count} SSH threads — they need authentication (connect from the SSH panel)' },
   'settings.gpuRendering': { ja: 'GPU レンダリング(WebGL)', en: 'GPU rendering (WebGL)' },
   'settings.rightClick': { ja: '右クリックの動作', en: 'Right-click action' },
@@ -673,7 +686,7 @@ const STRINGS = {
   'ctx.paste': { ja: '貼り付け', en: 'Paste' },
   'settings.gpuRendering.hint': { ja: '描画を GPU で高速化します。表示が乱れる環境ではオフにしてください(変更は開いているスレッドにも即時適用)。', en: 'Accelerates rendering with the GPU. Turn it off if the display glitches on your machine (applies immediately to open threads).' },
   'settings.shellIntegration': { ja: 'シェル統合を自動で有効化(コマンドブロック用)', en: 'Auto-enable shell integration (for command blocks)' },
-  'settings.shellIntegration.hint': { ja: 'bash / zsh / fish / PowerShell (pwsh・Windows PowerShell) の起動時に OSC 133 のプロンプト連携と OSC 7 の作業ディレクトリ通知を自動で組み込みます。rc ファイルや $PROFILE は変更されません。', en: 'Injects OSC 133 prompt hooks and OSC 7 working-directory reports into bash / zsh / fish / PowerShell (pwsh and Windows PowerShell) at launch. Your rc files and $PROFILE are not modified.' },
+  'settings.shellIntegration.hint': { ja: 'bash / zsh / fish / PowerShell (pwsh・Windows PowerShell) / cmd / nushell / WSL の起動時に、OSC 133 のプロンプト連携と作業ディレクトリ通知を自動で組み込みます。Windows の ConPTY は OSC 7 を捨てるため、作業ディレクトリはセッションごとの小さな一時ファイル (cmd はプロセス自身) からも取得します。rc ファイルや $PROFILE は変更されません。', en: 'Injects OSC 133 prompt hooks and working-directory reports into bash / zsh / fish / PowerShell (pwsh and Windows PowerShell) / cmd / nushell / WSL at launch. Because Windows ConPTY drops OSC 7, the directory is also read from a small per-session temp file (from the process itself for cmd). Your rc files and $PROFILE are not modified.' },
   'settings.notifyLong': { ja: '長時間コマンドの完了をデスクトップ通知', en: 'Desktop notification when a long command finishes' },
   'settings.notifyLong.hint': { ja: '非表示のスレッド、またはウィンドウが非アクティブな時にコマンドが終わると OS の通知を出します(要シェル統合)。表示中のスレッドを見ている時は通知しません。', en: 'Sends an OS notification when a command finishes in a hidden thread or while the window is unfocused (needs shell integration). Watching the thread in the foreground never notifies.' },
   'settings.notifyThreshold': { ja: '通知する最短実行時間(秒)', en: 'Minimum duration to notify (seconds)' },
@@ -975,6 +988,9 @@ function threadById(id) {
  *
  * Bounded: a session whose `createThread` never happens must not accumulate
  * output forever. */
+// Latest `session:cwd` value per session, for events that beat the thread
+// object (see createThread). Dropped when the thread takes it or the session exits.
+const earlyCwd = new Map(); // session id -> absolute path
 const preCreate = new Map(); // session id -> { chunks: Uint8Array[], size, exit: number|null }
 const PRE_CREATE_LIMIT = 256 * 1024;
 
@@ -1010,21 +1026,27 @@ function measureCells() {
   return { cols: Math.max(20, Math.floor(w / (px * 0.62))), rows: Math.max(5, Math.floor(h / (px * 1.4))) };
 }
 
-async function newLocalThread({ paneIdx = state.focusedPane, profileId = null } = {}) {
+async function newLocalThread({ paneIdx = state.focusedPane, profileId = null, cwd = '', title = '', pinned = false } = {}) {
   const { cols, rows } = measureCells();
   // Capture the pane object, not just its index: panes can be added/removed
   // while the backend is starting the shell, which would shift the index.
   const pane = state.panes[paneIdx];
   try {
-    const info = await invoke('create_local_session', { profileId, cols, rows });
+    // `cwd` (a restored thread's last directory) is only a request: the
+    // backend ignores it when the directory no longer exists. The thread's own
+    // `cwd` stays empty until the shell reports one (OSC 7 or `session:cwd`) — never guessed.
+    const info = await invoke('create_local_session', { profileId, cols, rows, cwd: cwd || null });
     const idx = pane ? state.panes.indexOf(pane) : -1;
     // The profile's name becomes the thread name (see createThread's
     // `origin.title`); the backend already echoes it as `info.title`, but
     // only an explicit title survives the shell's first OSC title.
     const p = resolveProfile(profileId);
-    const name = p && typeof p.name === 'string' ? p.name.trim() : '';
+    const profileName = p && typeof p.name === 'string' ? p.name.trim() : '';
+    // A restored custom name beats the profile name; either one pins the title.
+    const name = (typeof title === 'string' && title.trim()) || profileName;
     createThread(info, idx >= 0 ? idx : state.focusedPane,
-      name ? { profileId: profileId || '', title: name } : { profileId: profileId || '' });
+      name ? { profileId: profileId || '', title: name, pinned, restoredCwd: cwd || '' }
+        : { profileId: profileId || '', pinned, restoredCwd: cwd || '' });
   } catch (e) {
     toast(tr('toast.shellStartFailed', { e }), true);
   }
@@ -1321,16 +1343,15 @@ function createThread(info, paneIdx, origin = {}) {
   // object is built below, *after* drainPreCreate() — a replayed prompt would
   // otherwise hit the temporal dead zone. The final value is folded into the
   // literal, and later reports go through threadById().
+  //
+  // The backend's `session:cwd` event (see applyThreadCwd) reports the same
+  // thing for shells whose OSC 7 never reaches us (Windows ConPTY drops it).
   let cwd = '';
   term.parser.registerOscHandler(7, (payload) => {
     const dir = parseOsc7(payload);
     if (dir && dir !== cwd) {
       cwd = dir;
-      const t = threadById(sessionId);
-      if (t) {
-        t.cwd = dir;
-        scheduleTaskRefresh();
-      }
+      applyThreadCwd(threadById(sessionId), dir);
     }
     return true;
   });
@@ -1339,6 +1360,10 @@ function createThread(info, paneIdx, origin = {}) {
   // after the OSC 133 handler above is registered, so an early prompt still
   // opens its command block.
   const { exited } = drainPreCreate(info.id, term);
+  // A `session:cwd` that arrived before this thread existed. An OSC 7 report
+  // replayed just above wins: it is from the shell's own prompt, same source.
+  if (!cwd) cwd = earlyCwd.get(info.id) || '';
+  earlyCwd.delete(info.id);
 
   // Broadcast fans keystrokes out to every thread currently shown in a pane.
   // It only applies to input typed in a *visible* pane — background threads
@@ -1366,17 +1391,21 @@ function createThread(info, paneIdx, origin = {}) {
     invoke('session_resize', { id: sessionId, cols, rows }).catch(() => {}));
 
   const thread = {
-    id: info.id, title: origin.title || info.title, kind: info.kind, pinned: false,
+    id: info.id, title: origin.title || info.title, kind: info.kind, pinned: !!origin.pinned,
     // A launch title (the profile name) is pinned like a user rename: shells
     // emit OSC 0/2 titles ("user@host: ~", the exe path on cmd.exe) right
     // away, which would otherwise overwrite the profile name.
     term, fit, hostEl, search, customTitle: !!origin.title, activity: false, blocks,
     gl: null, // WebGL addon handle when GPU rendering is active
-    // Last directory reported over OSC 7 (local shells with integration on).
+    // Last directory reported over OSC 7 or `session:cwd` (local shells with integration on).
     // Empty means "unknown" — the task panel says so rather than guessing.
     cwd,
     // What this thread was launched from, for the session snapshot.
     profileId: origin.profileId || '', sshHostId: origin.sshHostId || '',
+    // The directory a restored thread was asked to start in. Only a fallback
+    // for the snapshot: a shell that never reports a cwd (integration off)
+    // would otherwise save '' and lose the location on the next restart.
+    restoredCwd: origin.restoredCwd || '',
     logPath: info.log_path || '',
     // Points this terminal at a new backend session (see sessionId above).
     rebind(newId) { sessionId = newId; this.id = newId; },
@@ -1439,20 +1468,46 @@ async function closeThread(id, { kill = true } = {}) {
 // the snapshot — otherwise a crash mid-restore would truncate the layout.
 let restoringSession = false;
 let snapshotTimer = null;
+// Set once the final snapshot has been flushed on quit: from then on nothing
+// may write a layout, so threads dying while the window is destroyed (their
+// `session:exit` -> closeThread) cannot truncate what was just saved.
+let snapshotFrozen = false;
+
+/** The layout as stored: per thread, the profile it was launched from or the
+ * SSH host it was connected to, plus the state restored on top of it — the
+ * custom name only (empty = automatic title), the last OSC 7 directory, and
+ * the pinned flag. */
+function buildSessionSnapshot() {
+  const threads = state.threads.map((t) => ({
+    profile_id: t.kind === 'ssh' ? '' : (t.profileId || ''),
+    ssh_host_id: t.kind === 'ssh' ? (t.sshHostId || '') : '',
+    title: t.customTitle ? t.title : '',
+    cwd: t.cwd || t.restoredCwd || '',
+    pinned: !!t.pinned,
+  }));
+  return { threads };
+}
 
 /** Persists the current thread layout (debounced) so the next launch can
- * restore it. Stored per thread: the profile it was launched from, or the
- * SSH host it was connected to. */
+ * restore it. */
 function persistSessionSnapshot() {
-  if (restoringSession) return;
+  if (restoringSession || snapshotFrozen) return;
   clearTimeout(snapshotTimer);
   snapshotTimer = setTimeout(() => {
-    const threads = state.threads.map((t) => ({
-      profile_id: t.kind === 'ssh' ? '' : (t.profileId || ''),
-      ssh_host_id: t.kind === 'ssh' ? (t.sshHostId || '') : '',
-    }));
-    invoke('save_session_snapshot', { snapshot: { threads } }).catch(() => {});
+    invoke('save_session_snapshot', { snapshot: buildSessionSnapshot() }).catch(() => {});
   }, 300);
+}
+
+/** Writes the layout right now, skipping the debounce — used on quit, where a
+ * pending timer would die with the window. Freezes further writes after. */
+async function flushSessionSnapshot() {
+  clearTimeout(snapshotTimer);
+  if (restoringSession || snapshotFrozen) return;
+  try {
+    await invoke('save_session_snapshot', { snapshot: buildSessionSnapshot() });
+  } finally {
+    snapshotFrozen = true;
+  }
 }
 
 /** Enables GPU-accelerated rendering (xterm WebGL addon) on a thread.
@@ -1874,9 +1929,13 @@ const ICONS = {
   unfoldLess: '<path d="M7.41 18.59 8.83 20 12 16.83 15.17 20l1.41-1.41L12 14l-4.59 4.59zm9.18-13.18L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59z"/>',
   createNewFolder: '<path d="M20 6h-8l-2-2H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/>',
   contentPaste: '<path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/>',
+  dataObject: '<path d="M4 7v2c0 .55-.45 1-1 1H2v2h1c.55 0 1 .45 1 1v2c0 1.65 1.35 3 3 3h3v-2H7c-.55 0-1-.45-1-1v-2c0-1.3-.84-2.42-2-2.83v-.34C5.16 11.42 6 10.3 6 9V7c0-.55.45-1 1-1h3V4H7C5.35 4 4 5.35 4 7zm17 3c-.55 0-1-.45-1-1V7c0-1.65-1.35-3-3-3h-3v2h3c.55 0 1 .45 1 1v2c0 1.3.84 2.42 2 2.83v.34c-1.16.41-2 1.52-2 2.83v2c0 .55-.45 1-1 1h-3v2h3c1.65 0 3-1.35 3-3v-2c0-.55.45-1 1-1h1v-2h-1z"/>',
+  contentCopy: '<path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/>',
+  check: '<path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/>',
+  libraryAdd: '<path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-1 9h-4v4h-2v-4H9V9h4V5h2v4h4v2z"/>',
   list: '<path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/>',
 };
-const FILLED_ICONS = new Set(['play', 'star', 'grip', 'moreVert', 'unfoldMore', 'unfoldLess', 'createNewFolder', 'list', 'contentPaste']);
+const FILLED_ICONS = new Set(['play', 'star', 'grip', 'moreVert', 'unfoldMore', 'unfoldLess', 'createNewFolder', 'list', 'contentPaste', 'dataObject', 'contentCopy', 'check', 'libraryAdd']);
 
 /** Returns inline SVG markup for a named icon. Stroke icons inherit
  * currentColor; the few filled marks (play/star) fill with it instead. */
@@ -1929,6 +1988,7 @@ function togglePin(id) {
   if (t) {
     t.pinned = !t.pinned;
     renderThreads();
+    persistSessionSnapshot();
   }
 }
 
@@ -1979,6 +2039,7 @@ function startRename(t, li) {
       } else {
         t.customTitle = false;
       }
+      persistSessionSnapshot();
     }
     renderThreads();
   };
@@ -2130,6 +2191,14 @@ function sendToThread(thread, text, run) {
 }
 
 /* ---------------- workflows ---------------- */
+
+async function refreshWorkflowVars() {
+  try {
+    state.workflowVars = (await invoke('list_workflow_vars')) || [];
+  } catch (e) {
+    toast(tr('wf.vars.loadFailed', { e }), true);
+  }
+}
 
 async function refreshWorkflows() {
   try {
@@ -2558,16 +2627,22 @@ function workflowCard(w, opts = {}) {
   const li = document.createElement('li');
   li.className = 'card';
   li.innerHTML = `
-    <h4></h4><div class="desc"></div><code></code>
+    <h4></h4><div class="desc"></div>
+    <div class="wf-cmd"><code></code><button type="button" class="icon-btn wf-copy"></button></div>
     <div class="wf-badges"></div>
     <div class="row">
-      <button class="accent-btn dup">${icon('copy')}${tr('common.duplicate')}</button>
+      <button class="accent-btn dup">${icon('libraryAdd')}${tr('common.duplicate')}</button>
       <button class="ghost-btn edit">${icon('edit')}${tr('common.edit')}</button>
       <button class="danger-btn del">${icon('trash')}${tr('common.delete')}</button>
     </div>`;
   li.querySelector('h4').textContent = w.name;
   li.querySelector('.desc').textContent = w.description || '';
   li.querySelector('code').textContent = w.command;
+  const copyBtn = li.querySelector('.wf-copy');
+  copyBtn.title = tr('wf.copy');
+  copyBtn.setAttribute('aria-label', tr('wf.copy'));
+  copyBtn.innerHTML = icon('contentCopy');
+  copyBtn.addEventListener('click', () => copyWorkflowCommand(w, copyBtn));
   const badges = li.querySelector('.wf-badges');
   if (opts.showGroup && groupParts(w).length) {
     const g = document.createElement('span');
@@ -3287,14 +3362,15 @@ function saveAsWorkflow(command) {
   editWorkflow({ id: '', name, description: '', command: cmd, tags: [], group: '', shortcut: '', show_button: false });
 }
 
-/** Fills placeholders (prompting the user when the template has any) and
- * sends the command to the focused pane's thread. */
-async function runWorkflow(w, run) {
+/** Fills placeholders (prompting the user when the template has any), then the
+ * built-ins and shared variables. Resolves to the finished command, or null
+ * when the user cancelled the prompt. */
+async function resolveWorkflowCommand(w) {
   const placeholders = await invoke('workflow_placeholders', { command: w.command });
   let values = {};
   if (placeholders.length) {
     values = await promptPlaceholders(w, placeholders);
-    if (values === null) return; // cancelled
+    if (values === null) return null; // cancelled
   }
   // Built-ins are resolved here, not in the backend: the answers live in the
   // UI (the focused thread, its host, the clock, the clipboard). Only the
@@ -3302,8 +3378,33 @@ async function runWorkflow(w, run) {
   // {{$clipboard}} never reads the clipboard.
   const builtins = await invoke('workflow_builtins', { command: w.command });
   if (builtins.length) values = { ...(await builtinValues(builtins)), ...values };
-  const filled = await invoke('fill_workflow', { command: w.command, values });
+  // `{{@NAME}}` shared variables are added by the backend from the store.
+  return invoke('fill_workflow', { command: w.command, values });
+}
+
+/** Sends the filled command to the focused pane's thread. */
+async function runWorkflow(w, run) {
+  const filled = await resolveWorkflowCommand(w);
+  if (filled === null) return; // cancelled
   sendToActive(filled, run);
+}
+
+/** Copies the *expanded* command (placeholders asked for, variables filled),
+ * the same text running the workflow would send. The button flips to a check
+ * mark for a moment as confirmation. */
+async function copyWorkflowCommand(w, btn) {
+  try {
+    const filled = await resolveWorkflowCommand(w);
+    if (filled === null) return; // cancelled
+    await navigator.clipboard.writeText(filled);
+  } catch (e) {
+    toast(tr('toast.copyFailed', { e }), true);
+    return;
+  }
+  toast(tr('toast.copied'));
+  btn.innerHTML = icon('check');
+  clearTimeout(btn._copyTimer);
+  btn._copyTimer = setTimeout(() => { btn.innerHTML = icon('contentCopy'); }, 1200);
 }
 
 /** Values for the `$`-variables in `names`, from the focused thread and the
@@ -3360,6 +3461,9 @@ function editWorkflow(w) {
       fieldSection(tr('wf.section.command')),
       fieldTextarea(tr('wf.field.template'), 'command', w?.command || '', { required: true }),
       fieldNote(tr('wf.builtins.hint')),
+      fieldNote(state.workflowVars.length
+        ? tr('wf.vars.hint', { names: state.workflowVars.map((v) => `{{@${v.name}}}`).join(' ') })
+        : tr('wf.vars.hint.none')),
       fieldSection(tr('wf.section.launch')),
       fieldShortcut(tr('wf.field.shortcut'), 'shortcut', w?.shortcut || '', { excludeId: w?.id || '' }),
       fieldCheckbox(tr('wf.field.showButton'), 'show_button', !!w?.show_button),
@@ -3380,6 +3484,76 @@ function editWorkflow(w) {
       refreshWorkflows();
     },
   });
+}
+
+/** Modal editor for the shared `{{@NAME}}` variables: one [name][value][delete]
+ * row each, saved as a whole list. Rows with both fields blank are dropped;
+ * the backend rejects bad or duplicate names, and a throw from `onOk` keeps
+ * the modal open with the message shown. */
+function openWorkflowVars() {
+  openModal({
+    title: tr('wf.vars'),
+    okLabel: tr('common.save'),
+    body: [
+      fieldNote(tr('wf.vars.note')),
+      { tag: 'varlist', items: state.workflowVars },
+    ],
+    onOk: async () => {
+      const vars = readVarListRows($('#modal-body [data-varlist]'));
+      await invoke('save_workflow_vars', { vars });
+      await refreshWorkflowVars();
+      toast(tr('wf.vars.saved'));
+    },
+  });
+}
+
+function buildVarListEditor(items) {
+  const wrap = document.createElement('div');
+  wrap.className = 'li-editor';
+  wrap.dataset.varlist = '1';
+  const rows = document.createElement('ul');
+  rows.className = 'li-rows';
+  const addRow = (v) => {
+    const li = document.createElement('li');
+    li.className = 'vl-row';
+    const name = document.createElement('input');
+    name.type = 'text';
+    name.className = 'vl-name';
+    name.placeholder = tr('wf.vars.name.ph');
+    name.value = v?.name || '';
+    name.spellcheck = false;
+    const value = document.createElement('input');
+    value.type = 'text';
+    value.className = 'vl-value';
+    value.placeholder = tr('wf.vars.value.ph');
+    value.value = v?.value || '';
+    value.spellcheck = false;
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'icon-btn';
+    del.title = tr('wf.vars.remove');
+    del.setAttribute('aria-label', tr('wf.vars.remove'));
+    del.innerHTML = icon('trash');
+    del.addEventListener('click', () => li.remove());
+    li.append(name, value, del);
+    rows.appendChild(li);
+    return name;
+  };
+  for (const v of items) addRow(v);
+  wrap.appendChild(rows);
+  const addBtn = document.createElement('button');
+  addBtn.type = 'button';
+  addBtn.className = 'ghost-btn li-add';
+  addBtn.innerHTML = `${icon('plus')}<span>${tr('wf.vars.add')}</span>`;
+  addBtn.addEventListener('click', () => addRow(null).focus());
+  wrap.appendChild(addBtn);
+  return wrap;
+}
+
+function readVarListRows(list) {
+  return [...list.querySelectorAll('.vl-row')]
+    .map((li) => ({ name: li.querySelector('.vl-name').value.trim(), value: li.querySelector('.vl-value').value }))
+    .filter((v) => v.name || v.value);
 }
 
 /** Exports every workflow to a user-chosen JSON file (shareable envelope,
@@ -3454,7 +3628,7 @@ async function importSettings() {
       // Everything the import touched is cached in `state`, so re-read rather
       // than patching each list by hand.
       await Promise.all([
-        loadSettings(), refreshWorkflows(), refreshHosts(),
+        loadSettings(), refreshWorkflows(), refreshWorkflowVars(), refreshHosts(),
         refreshProfiles(), refreshLaunchSets(), refreshServers(),
       ]);
       applyTheme();
@@ -5291,7 +5465,7 @@ listen('devserver:watch-limited', (ev) => {
  *
  * The payload is normally `file://<host>/<path>`, percent-encoded. The host is
  * whatever the shell thinks its hostname is; it is dropped rather than checked,
- * because OSC 7 only reaches us from local shells today (SSH sessions get no
+ * because cwd reports only reach us from local shells today (SSH sessions get no
  * shell integration) and a mismatched hostname is not evidence of anything.
  * Returns '' for anything that doesn't look like an absolute path — a garbled
  * report should leave the panel saying "unknown", not scan the wrong tree. */
@@ -5315,12 +5489,22 @@ function parseOsc7(payload) {
   return path;
 }
 
-// OSC 7 arrives at every prompt, so a `cd` in a loop would otherwise fire a
+// OSC 7 (and `session:cwd`) arrives at every prompt, so a `cd` in a loop would otherwise fire a
 // scan per iteration. Coalesce into one scan shortly after things settle.
 let taskRefreshTimer = 0;
 // Scans are async and the directory can change while one is in flight; only
 // the newest scan is allowed to write its result.
 let taskScanToken = 0;
+
+/** Records a newly reported working directory on `t` and refreshes whatever
+ * depends on it. Shared by OSC 7 and the backend's `session:cwd` event, which
+ * can both report the same directory — only a real change does any work. */
+function applyThreadCwd(t, dir) {
+  if (!t || !dir || t.cwd === dir) return;
+  t.cwd = dir;
+  scheduleTaskRefresh();
+  persistSessionSnapshot();
+}
 
 function scheduleTaskRefresh() {
   clearTimeout(taskRefreshTimer);
@@ -5847,7 +6031,7 @@ function fieldNote(label) {
 function collectModalValues() {
   const values = {};
   for (const el of $('#modal-body').querySelectorAll('input, textarea, select')) {
-    if (el.closest('[data-itemlist]') || el.closest('[data-jumplist]')) continue;
+    if (el.closest('[data-itemlist]') || el.closest('[data-jumplist]') || el.closest('[data-varlist]')) continue;
     if (el.type === 'checkbox') values[el.name] = el.checked;
     else if ('shortcut' in el.dataset) values[el.name] = el.dataset.shortcut;
     else values[el.name] = el.value;
@@ -5915,6 +6099,10 @@ function openModal({ title, okLabel, body, onOk, onCancel, extraActions, hideCan
       });
       wrap.querySelector('.rb-upload').addEventListener('click', browserUploadHere);
       box.appendChild(wrap);
+      continue;
+    }
+    if (f.tag === 'varlist') {
+      box.appendChild(buildVarListEditor(f.items));
       continue;
     }
     if (f.tag === 'progress') {
@@ -6252,7 +6440,7 @@ $('#srv-browse').addEventListener('click', async () => {
   const dir = await window.__TAURI__.dialog.open({ directory: true, multiple: false });
   if (dir) $('#srv-root').value = dir;
 });
-// The shell already knows where it is (OSC 7), so the common case — "serve the
+// The shell already knows where it is (OSC 7 / `session:cwd`), so the common case — "serve the
 // directory I am standing in" — needs no typing and no file dialog.
 $('#srv-use-cwd').addEventListener('click', () => {
   const cwd = focusedThread()?.cwd;
@@ -6308,6 +6496,7 @@ $('#wf-tree-toggle').addEventListener('click', () => {
   const closed = $('#wf-tree').classList.toggle('closed');
   $('#wf-tree-toggle').setAttribute('aria-expanded', String(!closed));
 });
+$('#wf-vars').addEventListener('click', openWorkflowVars);
 $('#wf-export').addEventListener('click', exportWorkflows);
 $('#wf-import').addEventListener('click', importWorkflows);
 $('#settings-export').addEventListener('click', exportSettings);
@@ -6698,7 +6887,7 @@ async function pickAndUpload(thread, directory = false) {
   uploadPathsToThread(thread, Array.isArray(paths) ? paths : [paths]);
 }
 
-/** Confirms the remote destination (the shell's OSC 7 working directory when
+/** Confirms the remote destination (the shell's reported working directory when
  * known, else the SFTP login directory), then uploads each path one after
  * another through the existing progress modal. Sequential on purpose: one
  * SFTP pipeline saturates the link, and a failure stops the rest rather than
@@ -7032,19 +7221,38 @@ function promptText(title, label, value, hint) {
 /* ---------------- filesystem paths in terminal output ---------------- */
 
 /* Absolute paths only. A relative path (`src/lib.rs`) has to be resolved
- * against the shell's working directory. `thread.cwd` now carries that (OSC 7,
- * see createThread), but only for local shells with integration enabled — for
+ * against the shell's working directory. `thread.cwd` now carries that (OSC 7 or
+ * `session:cwd`, see createThread), but only for local shells with integration enabled — for
  * an SSH thread, or one whose shell reports nothing, it is empty, and
  * resolving against the app's own cwd would silently open a different file.
  * Widening this to relative paths therefore means handling the unknown-cwd
  * case first, which is why it still stops at absolute ones. */
 const PATH_PATTERNS = [
   // POSIX absolute, and `~` / `~/…` (expanded by the backend, which is the
-  // side that knows this machine's home).
-  /(?:^|[\s"'`([{<>=,])((?:~|\/)[^\s"'`)\]}<>|]*)/g,
+  // side that knows this machine's home). `\ ` is a shell-escaped space
+  // (completion, `ls`) and stays inside the path; only here, because on
+  // Windows `\` is a separator.
+  /(?:^|[\s"'`([{<>=,])((?:~|\/)(?:\\ |[^\s"'`)\]}<>|])*)/g,
   // Windows drive-absolute (C:\… and C:/…) and UNC (\\server\share).
   /(?:^|[\s"'`([{<>=,])([A-Za-z]:[\\/][^\s"'`)\]}<>|]*|\\\\[^\s"'`)\]}<>|]+)/g,
 ];
+
+/* A quoted absolute path: the quote must be followed at once by a path start,
+ * and the match runs to the same quote on the same line, so the contents may
+ * contain spaces (`"C:\Program Files\App"`). Group 2 is the contents. */
+const QUOTED_PATH = /(["'])((?:~(?=\/|\1)|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)[^\n]*?)\1/g;
+
+/* What an absolute path may start with, for text that is not scanned by the
+ * patterns above (a selection). `//` is a URL's slashes, not a path. */
+const PATH_START = /^(?:~(?:\/|$)|\/(?!\/)|[A-Za-z]:[\\/]|\\\\)/;
+
+/* A raw POSIX match can end in a dangling `\ `; that is not part of the path. */
+const PATH_TRAILING_ESCAPE = /(?:\\ )+$/;
+
+/** `My\ Docs` -> `My Docs`, for POSIX-looking paths only. */
+function unescapePosixSpaces(p) {
+  return /^[~/]/.test(p) ? p.replace(/\\ /g, ' ') : p;
+}
 
 /* Trailing characters that end a sentence rather than a path. Stripped from
  * the right, repeatedly, because build output produces things like
@@ -7069,7 +7277,9 @@ function cleanPathMatch(raw) {
 }
 
 /** Finds absolute paths in one line of terminal text, as `{ text, start, end }`
- * with 0-based, end-exclusive column offsets.
+ * with 0-based, end-exclusive column offsets. `start`/`end` cover the raw text
+ * on screen; `text` is the path itself, which differs from the slice only in
+ * that `\ ` is unescaped to a space.
  *
  * URLs are blanked out first: `https://host/a/b` contains `/a/b`, and linking
  * that as a path would put a second, wrong link on top of the one
@@ -7077,18 +7287,91 @@ function cleanPathMatch(raw) {
 function findPathsInLine(line) {
   const masked = line.replace(/[a-z][a-z0-9+.-]*:\/\/\S*/gi, (m) => ' '.repeat(m.length));
   const out = [];
+  // Quoted spans go first so that, under the "overlap keeps the first" rule
+  // below, `"C:\Program Files\App"` beats the `C:\Program` the unquoted
+  // pattern would cut at the space. The hit covers the contents, not the quotes.
+  QUOTED_PATH.lastIndex = 0;
+  let q;
+  while ((q = QUOTED_PATH.exec(masked)) !== null) {
+    const start = q.index + 1;
+    const text = cleanPathMatch(q[2]);
+    if (!text) continue;
+    out.push({ text, start, end: start + text.length });
+  }
   for (const re of PATH_PATTERNS) {
     re.lastIndex = 0;
     let m;
     while ((m = re.exec(masked)) !== null) {
       const start = m.index + m[0].length - m[1].length;
-      const text = cleanPathMatch(m[1]);
-      if (!text) continue;
+      const raw = cleanPathMatch(m[1].replace(PATH_TRAILING_ESCAPE, ''));
+      if (!raw) continue;
+      const end = start + raw.length;
       // Overlapping hits (a Windows path also matching the POSIX pattern
       // after its drive letter) keep the first, longest one.
-      if (out.some((o) => start < o.end && start + text.length > o.start)) continue;
-      out.push({ text, start, end: start + text.length });
+      if (out.some((o) => start < o.end && end > o.start)) continue;
+      out.push({ text: unescapePosixSpaces(raw), start, end });
     }
+  }
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** Longer spellings of a hit that might be a path with plain spaces in it
+ * (`PS C:\Users\Foo Bar\proj>` matches only `C:\Users\Foo`).
+ *
+ * Applies when the hit's raw end is followed by a single space and more text.
+ * Each candidate adds one more space-separated word, up to 8, stopping at
+ * characters an unquoted path cannot hold (`"'`<>|` and tabs; the word is cut
+ * there, so `Bar>` still yields `... Bar`) and at the end of the line. Returns
+ * `{ text, end }`, `end` being the column in `line`. Pure and synchronous:
+ * whether a candidate is real needs the disk (see `extendPathHits`). */
+function pathExtensionCandidates(line, hit) {
+  const out = [];
+  const raw0 = line.slice(hit.start, hit.end);
+  if (line[hit.end] !== ' ' || !line[hit.end + 1] || /\s/.test(line[hit.end + 1])) return out;
+  let pos = hit.end;
+  for (let i = 0; i < 8 && line[pos] === ' '; i++) {
+    const wordStart = pos + 1;
+    let wordEnd = wordStart;
+    while (wordEnd < line.length && line[wordEnd] !== ' ' && !/["'`<>|\t]/.test(line[wordEnd])) wordEnd++;
+    if (wordEnd === wordStart) break;
+    const raw = cleanPathMatch(line.slice(hit.start, wordEnd));
+    if (raw && raw.length > raw0.length) {
+      const text = unescapePosixSpaces(raw);
+      if (!out.length || out[out.length - 1].text !== text) {
+        out.push({ text, end: hit.start + raw.length });
+      }
+    }
+    // Stopped on a forbidden character or the end of the line: no further word.
+    if (wordEnd < line.length && line[wordEnd] !== ' ') break;
+    pos = wordEnd;
+  }
+  return out;
+}
+
+/** Grows hits over plain spaces where the disk says the longer path exists.
+ *
+ * Local threads only: a remote thread's paths name files on the server, so a
+ * local stat would answer about the wrong machine. A failed lookup keeps the
+ * original hit. Later hits that the grown one now covers are dropped. */
+async function extendPathHits(line, hits, remote) {
+  if (remote || !hits.length) return hits;
+  const grown = await Promise.all(hits.map(async (h) => {
+    const cands = pathExtensionCandidates(line, h);
+    if (!cands.length) return h;
+    try {
+      const idx = await invoke('longest_existing_path', { candidates: cands.map((c) => c.text) });
+      if (idx == null || !cands[idx]) return h;
+      return { text: cands[idx].text, start: h.start, end: cands[idx].end };
+    } catch (_) {
+      return h;
+    }
+  }));
+  const out = [];
+  let lastEnd = 0;
+  for (const h of grown) {
+    if (h.start < lastEnd) continue;
+    out.push(h);
+    lastEnd = h.end;
   }
   return out;
 }
@@ -7176,7 +7459,7 @@ function openPathMenu(x, y, path, remote) {
  * Measuring the element rather than the font is what keeps this in step with
  * whatever the renderer actually laid out — zoom, fractional DPI, or a
  * fallback font being used for that row. */
-function pathAtPoint(thread, x, y) {
+async function pathAtPoint(thread, x, y) {
   const screen = thread.hostEl.querySelector('.xterm-screen');
   if (!screen) return '';
   const rect = screen.getBoundingClientRect();
@@ -7187,8 +7470,9 @@ function pathAtPoint(thread, x, y) {
   const row = Math.floor((y - rect.top) / (rect.height / thread.term.rows));
   const line = buffer.getLine(buffer.viewportY + row);
   if (!line) return '';
-  const hit = findPathsInLine(line.translateToString(true))
-    .find((h) => col >= h.start && col < h.end);
+  const text = line.translateToString(true);
+  const hits = await extendPathHits(text, findPathsInLine(text), thread.kind === 'ssh');
+  const hit = hits.find((h) => col >= h.start && col < h.end);
   return hit ? hit.text : '';
 }
 
@@ -7196,10 +7480,23 @@ function pathAtPoint(thread, x, y) {
  *
  * Only a selection that is *entirely* one path counts. Revealing something
  * found inside a selected sentence would act on a path the user never pointed
- * at, which is worse than offering nothing. */
+ * at, which is worse than offering nothing.
+ *
+ * A selection with spaces cannot be scanned (the matcher cuts at the space),
+ * so a single line that *starts* like an absolute path, after one pair of
+ * surrounding quotes and `\ ` escapes are removed, and has no trailing junk,
+ * is taken whole. `see /home/x now` fails the start test and stays ''. */
 function pathFromSelection(term) {
   const selected = (term.getSelection() || '').trim();
-  if (!selected || /\s/.test(selected)) return '';
+  if (!selected) return '';
+  if (/\s/.test(selected)) {
+    if (/[^\S ]/.test(selected)) return '';
+    let p = selected;
+    if (p.length >= 2 && (p[0] === '"' || p[0] === "'") && p[p.length - 1] === p[0]) p = p.slice(1, -1);
+    p = unescapePosixSpaces(p);
+    if (!PATH_START.test(p)) return '';
+    return cleanPathMatch(p).length === p.length ? p : '';
+  }
   const hits = findPathsInLine(selected);
   return hits.length === 1 && hits[0].text === selected ? selected : '';
 }
@@ -7217,9 +7514,10 @@ function registerPathLinks(term, remote) {
       // logical row, and a path split across a wrap is rare enough that
       // half-linking it is worse than not linking it.
       const text = line.translateToString(true);
-      const hits = findPathsInLine(text);
-      if (!hits.length) return callback(undefined);
-      callback(hits.map((h) => ({
+      const found = findPathsInLine(text);
+      if (!found.length) return callback(undefined);
+      // The disk check for spaced paths is async, so the callback fires later.
+      extendPathHits(text, found, remote).then((hits) => callback(hits.map((h) => ({
         // xterm ranges are 1-based and inclusive on both ends.
         range: {
           start: { x: h.start + 1, y: bufferLineNumber },
@@ -7230,7 +7528,7 @@ function registerPathLinks(term, remote) {
           ev.preventDefault();
           openPathMenu(ev.clientX, ev.clientY, h.text, remote);
         },
-      })));
+      }))));
     },
   });
 }
@@ -7391,7 +7689,7 @@ function rightClickMode() {
   return IS_MAC ? 'menu' : 'copy_paste';
 }
 
-$('#terminals').addEventListener('contextmenu', (ev) => {
+$('#terminals').addEventListener('contextmenu', async (ev) => {
   const body = ev.target.closest('.pane-body');
   if (!body) return; // no action here — the global suppressor below handles it
   ev.preventDefault();
@@ -7410,7 +7708,7 @@ $('#terminals').addEventListener('contextmenu', (ev) => {
     return;
   }
   const path = thread
-    ? pathFromSelection(thread.term) || pathAtPoint(thread, ev.clientX, ev.clientY)
+    ? pathFromSelection(thread.term) || (await pathAtPoint(thread, ev.clientX, ev.clientY))
     : '';
   const block = thread ? blockAtPoint(thread, ev.clientX, ev.clientY) : null;
   const blockCommand = block ? blockCommandText(thread.term, block) : '';
@@ -7536,6 +7834,12 @@ appWindow.onCloseRequested(async (event) => {
     quit = true; // a broken confirm is no reason to make the app unquittable
   }
   quitting = false;
+  if (quit) {
+    // Save the layout (names, directories) before the window goes away; a
+    // failure must never keep the user from quitting.
+    try { await flushSessionSnapshot(); } catch (_e) { /* quit anyway */ }
+    snapshotFrozen = true;
+  }
   // `destroy()` rather than `close()`: close() re-enters this same handler,
   // which only works while a flag says "already asked" — destroy ends it here.
   if (quit) await appWindow.destroy();
@@ -8147,6 +8451,7 @@ function onSessionData(id, bytes) {
 }
 
 function onSessionExit(id, code) {
+  earlyCwd.delete(id);
   const thread = threadById(id);
   if (!thread) {
     // The session died before its thread was built (a shell that fails to
@@ -8293,6 +8598,15 @@ async function attemptReconnect(thread) {
 }
 
 listen('session:exit', (ev) => onSessionExit(ev.payload.id, ev.payload.code));
+// Side channel for shells whose OSC 7 never arrives (Windows ConPTY). May race
+// ahead of createThread, so an unknown id is stashed rather than dropped.
+listen('session:cwd', (ev) => {
+  const { id, cwd } = ev.payload || {};
+  if (!id || typeof cwd !== 'string' || !cwd) return;
+  const t = threadById(id);
+  if (t) applyThreadCwd(t, cwd);
+  else earlyCwd.set(id, cwd);
+});
 
 (async function boot() {
   // Paint every static [data-icon] placeholder in the chrome first.
@@ -8305,7 +8619,7 @@ listen('session:exit', (ev) => onSessionExit(ev.payload.id, ev.payload.code));
   await loadDistInfo();
   applyAutoUpdateAvailability();
   // Profiles must load before the first thread so the default profile applies.
-  await Promise.all([refreshWorkflows(), refreshHosts(), refreshProfiles(), refreshLaunchSets(),
+  await Promise.all([refreshWorkflows(), refreshWorkflowVars(), refreshHosts(), refreshProfiles(), refreshLaunchSets(),
     refreshHistory(), refreshServers()]);
   const pane = createPane();
   $('#pane-area').appendChild(pane.root);
@@ -8326,7 +8640,10 @@ listen('session:exit', (ev) => onSessionExit(ev.payload.id, ev.payload.code));
         restoringSession = true;
         try {
           for (const item of locals) {
-            await newLocalThread({ profileId: item.profile_id || null });
+            await newLocalThread({
+              profileId: item.profile_id || null,
+              cwd: item.cwd || '', title: item.title || '', pinned: !!item.pinned,
+            });
           }
         } finally {
           restoringSession = false;

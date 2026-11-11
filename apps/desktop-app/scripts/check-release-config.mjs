@@ -16,6 +16,12 @@
  * - **MSIX template drift.** The packaging script substitutes fixed tokens and
  *   the manifest references fixed asset paths. Rename either and the Store
  *   package fails to build (or builds with placeholder identity).
+ * - **ConPTY packaging drift.** The Windows installers get `conpty.dll` and
+ *   `OpenConsole.exe` from `tauri.windows.conf.json`, and the Store package
+ *   from a hand-written copy list in `build-msix.ps1`. Drop either and that
+ *   package still builds and runs — on the inbox ConPTY, which silently
+ *   swallows OSC 7/133, so command blocks and the cwd break only in that
+ *   channel, found by users.
  *
  * Usage: node scripts/check-release-config.mjs
  */
@@ -72,6 +78,29 @@ for (const asset of manifest.match(/assets\\[A-Za-z0-9.]+/g) ?? []) {
 const exeName = manifest.match(/Executable="([^"]+)"/)?.[1];
 if (exeName && !script.includes(exeName)) {
   fail(`AppxManifest.xml declares Executable="${exeName}" but build-msix.ps1 does not write that name`);
+}
+
+/* 4. Both Windows packages must ship the bundled ConPTY. */
+const CONPTY_FILES = ['conpty.dll', 'OpenConsole.exe'];
+const winConf = readJson('src-tauri/tauri.windows.conf.json');
+const resources = winConf.bundle?.resources;
+const resourceMap = resources && !Array.isArray(resources) ? resources : {};
+for (const file of CONPTY_FILES) {
+  // The resource's destination is the file next to the exe; the source has to
+  // exist or tauri-build fails the Windows build (and only the Windows build).
+  const entry = Object.entries(resourceMap).find(([, dest]) => dest === file);
+  if (!entry) {
+    fail(`tauri.windows.conf.json bundle.resources does not place ${file} next to the executable`);
+  } else if (!existsSync(join(root, 'src-tauri', entry[0]))) {
+    fail(`tauri.windows.conf.json bundles ${entry[0]} but that file does not exist (run node scripts/fetch-conpty.mjs)`);
+  }
+  // The Store layout is assembled by hand, not from the Tauri bundle config.
+  if (!new RegExp(`['"]${file.replace('.', '\\.')}['"]`).test(script)) {
+    fail(`build-msix.ps1 does not copy ${file} into the MSIX layout`);
+  }
+}
+if (!script.includes('conpty-LICENSE.txt')) {
+  fail('build-msix.ps1 does not copy the ConPTY license into the MSIX layout');
 }
 
 if (problems.length) {

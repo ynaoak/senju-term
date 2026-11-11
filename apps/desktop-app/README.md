@@ -4,7 +4,7 @@
 
 - **実装言語**: Rust(バックエンド/コア)+ HTML/JS(描画は xterm.js)
 - **対応 OS**: Windows / macOS / Linux(Tauri 2)
-- ローカルシェルは [portable-pty](https://crates.io/crates/portable-pty)(Windows は ConPTY、Unix は openpty)
+- ローカルシェルは [portable-pty](https://crates.io/crates/portable-pty)(Windows は ConPTY、Unix は openpty。Windows では OSC 7/133 を通すため、Microsoft 製の最新 ConPTY(`conpty.dll` + `OpenConsole.exe`)を実行ファイルと同梱)
 - SSH は [russh](https://crates.io/crates/russh)(Pure Rust。OpenSSL / libssh2 への依存なし)
 
 ## 主な機能
